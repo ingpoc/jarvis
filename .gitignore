@@ -38,3 +38,7 @@ env/
 
 # Logs
 *.log
+
+# Swift build
+JarvisApp/.build/
+JarvisApp/
