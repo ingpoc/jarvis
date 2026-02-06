@@ -1,0 +1,81 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "JarvisApp-arm64-apple-macosx16.0-debug.exe": ["<JarvisApp-arm64-apple-macosx16.0-debug.exe>"]
+  "JarvisApp-arm64-apple-macosx16.0-debug.module": ["<JarvisApp-arm64-apple-macosx16.0-debug.module>"]
+  "PackageStructure": ["<PackageStructure>"]
+  "main": ["<JarvisApp-arm64-apple-macosx16.0-debug.exe>","<JarvisApp-arm64-apple-macosx16.0-debug.module>"]
+  "test": ["<JarvisApp-arm64-apple-macosx16.0-debug.exe>","<JarvisApp-arm64-apple-macosx16.0-debug.module>"]
+default: "main"
+nodes:
+  "/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp":
+    is-mutated: true
+commands:
+  "/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp-entitlement.plist":
+    tool: write-auxiliary-file
+    inputs: ["<entitlement-plist>","<com.apple.security.get-task-allow>"]
+    outputs: ["/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp-entitlement.plist"]
+    description: "Write auxiliary file /Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp-entitlement.plist"
+
+  "/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/JarvisApp.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/Models/JarvisStatus.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/Models/TimelineEvent.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/Views/ApprovalView.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/Views/JarvisMenuView.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/Views/StatusBadge.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/Views/TimelineView.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/WebSocketClient.swift"]
+    outputs: ["/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/sources"]
+    description: "Write auxiliary file /Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/sources"
+
+  "/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/ApprovalView.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/JarvisApp.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/JarvisMenuView.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/JarvisStatus.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/StatusBadge.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/TimelineEvent.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/TimelineView.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/WebSocketClient.swift.o"]
+    outputs: ["/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.product/Objects.LinkFileList"
+
+  "/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"]
+    outputs: ["/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+
+  "<JarvisApp-arm64-apple-macosx16.0-debug.exe>":
+    tool: phony
+    inputs: ["<JarvisApp-arm64-apple-macosx16.0-debug.exe-CodeSigning>"]
+    outputs: ["<JarvisApp-arm64-apple-macosx16.0-debug.exe>"]
+
+  "<JarvisApp-arm64-apple-macosx16.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/JarvisApp.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/JarvisStatus.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/TimelineEvent.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/ApprovalView.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/JarvisMenuView.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/StatusBadge.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/TimelineView.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/WebSocketClient.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/Modules/JarvisApp.swiftmodule"]
+    outputs: ["<JarvisApp-arm64-apple-macosx16.0-debug.module>"]
+
+  "C.JarvisApp-arm64-apple-macosx16.0-debug.exe":
+    tool: shell
+    inputs: ["/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/ApprovalView.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/JarvisApp.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/JarvisMenuView.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/JarvisStatus.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/StatusBadge.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/TimelineEvent.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/TimelineView.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/WebSocketClient.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.product/Objects.LinkFileList"]
+    outputs: ["/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/JarvisApp"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-L","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug","-o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp","-module-name","JarvisApp","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-alias","-Xlinker","_JarvisApp_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.product/Objects.LinkFileList","-target","arm64-apple-macosx14.0","-Xlinker","-add_ast_path","-Xlinker","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/Modules/JarvisApp.swiftmodule","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g"]
+
+  "C.JarvisApp-arm64-apple-macosx16.0-debug.exe-entitlements":
+    tool: shell
+    inputs: ["/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp-entitlement.plist"]
+    outputs: ["<JarvisApp-arm64-apple-macosx16.0-debug.exe-CodeSigning>"]
+    description: "Applying debug entitlements to ./.build/arm64-apple-macosx/debug/JarvisApp"
+    args: ["codesign","--force","--sign","-","--entitlements","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp-entitlement.plist","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp"]
+
+  "C.JarvisApp-arm64-apple-macosx16.0-debug.module":
+    tool: shell
+    inputs: ["/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/JarvisApp.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/Models/JarvisStatus.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/Models/TimelineEvent.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/Views/ApprovalView.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/Views/JarvisMenuView.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/Views/StatusBadge.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/Views/TimelineView.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/WebSocketClient.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/sources"]
+    outputs: ["/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/JarvisApp.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/JarvisStatus.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/TimelineEvent.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/ApprovalView.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/JarvisMenuView.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/StatusBadge.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/TimelineView.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/WebSocketClient.swift.o","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/Modules/JarvisApp.swiftmodule"]
+    description: "Compiling Swift Module 'JarvisApp' (8 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","JarvisApp","-emit-dependencies","-emit-module","-emit-module-path","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/Modules/JarvisApp.swiftmodule","-output-file-map","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/output-file-map.json","-incremental","-c","@/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/JarvisApp.build/sources","-I","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-enable-batch-mode","-index-store-path","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j10","-DSWIFT_PACKAGE","-DDEBUG","-module-cache-path","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","JarvisApp_main","-swift-version","5","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","jarvisapp"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Sources/JarvisApp/","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Package.swift","/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/JarvisApp/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+
