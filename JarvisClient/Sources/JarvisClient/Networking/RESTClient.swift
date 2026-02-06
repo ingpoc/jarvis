@@ -54,6 +54,15 @@ public final class RESTClient {
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
 
+    public func refreshToken(refreshToken: String) async throws -> RefreshResponse {
+        var request = makeRequest(endpoint: "/api/refresh", method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["refresh_token": refreshToken])
+
+        let (data, _) = try await session.data(for: request)
+        return try decode(data)
+    }
+
     private func makeRequest(endpoint: String, method: String) -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent(endpoint))
         request.httpMethod = method
@@ -87,17 +96,17 @@ public struct ServerStatus: Codable, Sendable {
     }
 }
 
-struct DeviceListResponse: Codable {
+struct DeviceListResponse: Codable, Sendable {
     let devices: [DeviceInfo]
 }
 
 // MARK: - Errors
 
-public enum APIError: LocalizedError {
+public enum APIError: LocalizedError, Sendable {
     case serverError(String)
     case invalidURL
-    case decodingError(Error)
-    case networkError(Error)
+    case decodingError(String)
+    case networkError(String)
 
     public var errorDescription: String? {
         switch self {
@@ -106,9 +115,9 @@ public enum APIError: LocalizedError {
         case .invalidURL:
             return "Invalid URL"
         case .decodingError(let error):
-            return "Decoding error: \(error.localizedDescription)"
+            return "Decoding error: \(error)"
         case .networkError(let error):
-            return "Network error: \(error.localizedDescription)"
+            return "Network error: \(error)"
         }
     }
 }

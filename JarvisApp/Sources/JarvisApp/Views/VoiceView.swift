@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import JarvisClient
 
 /// Voice View: Push-to-talk voice commands
 /// Design: Single prominent action, clear feedback
@@ -7,6 +8,8 @@ struct VoiceView: View {
     @State private var isRecording = false
     @State private var transcript = ""
     @State private var lastCommand = ""
+    @State private var voiceRecorder: VoiceRecorder?
+    @State private var wsClient: JarvisWebSocketClient = .shared
 
     var body: some View {
         VStack(spacing: 32) {
@@ -25,7 +28,8 @@ struct VoiceView: View {
             // Voice Button
             VoiceButton(
                 isRecording: $isRecording,
-                transcript: $transcript
+                transcript: $transcript,
+                lastCommand: $lastCommand
             )
 
             // Transcript Display
@@ -61,13 +65,6 @@ struct VoiceView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
-        .onAppear {
-            requestMicrophonePermission()
-        }
-    }
-
-    private func requestMicrophonePermission() {
-        AVAudioSession.sharedInstance().requestRecordPermission { _ in }
     }
 }
 
@@ -76,8 +73,10 @@ struct VoiceView: View {
 struct VoiceButton: View {
     @Binding var isRecording: Bool
     @Binding var transcript: String
+    @Binding var lastCommand: String
 
     @State private var pulseScale: CGFloat = 1.0
+    @State private var voiceRecorder: VoiceRecorder?
 
     var body: some View {
         ZStack {
@@ -124,19 +123,39 @@ struct VoiceButton: View {
     }
 
     private func startRecording() {
-        // TODO: Implement actual recording
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            if isRecording {
-                transcript = "Run the test suite"
-                stopRecording()
+        Task {
+            // Request microphone permission
+            let recorder = VoiceRecorder { transcript in
+                Task { @MainActor in
+                    self.transcript = transcript
+                    sendTranscript(transcript)
+                }
+            }
+
+            let hasPermission = await recorder.requestMicrophonePermission()
+            guard hasPermission else {
+                return
+            }
+
+            do {
+                try recorder.startRecording()
+                self.voiceRecorder = recorder
+            } catch {
+                print("Failed to start recording: \(error)")
             }
         }
     }
 
     private func stopRecording() {
+        voiceRecorder?.stopRecording()
         isRecording = false
         pulseScale = 1.0
-        // TODO: Send transcript to Jarvis
+    }
+
+    private func sendTranscript(_ text: String) {
+        lastCommand = text
+        // Send to WebSocket (fire-and-forget)
+        JarvisWebSocketClient.shared.sendVoiceNoWait(text: text)
     }
 }
 

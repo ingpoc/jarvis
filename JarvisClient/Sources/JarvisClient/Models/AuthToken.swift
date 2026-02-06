@@ -80,3 +80,15 @@ public struct PairingConfirmResponse: Codable, Sendable {
         case expiresAt = "expires_at"
     }
 }
+
+public struct RefreshResponse: Codable, Sendable {
+    public let accessToken: String
+    public let refreshToken: String?
+    public let expiresAt: Double
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case expiresAt = "expires_at"
+    }
+}

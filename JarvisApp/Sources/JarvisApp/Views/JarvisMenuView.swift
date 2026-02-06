@@ -1,61 +1,75 @@
 import SwiftUI
+import JarvisClient
 
 struct JarvisMenuView: View {
-    @Environment(WebSocketClient.self) private var ws
+    @Environment(\.openWindow) private var openWindow
+    @Environment(AuthManager.self) private var auth
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            StatusBadge()
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-
-            Divider()
-
-            if !ws.pendingApprovals.isEmpty {
-                Text("Pending Approvals")
-                    .font(.headline)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 4)
-
-                ApprovalView()
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-
-                Divider()
-            }
-
-            Text("Timeline")
-                .font(.headline)
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 4)
-
-            TimelineView()
-                .frame(maxHeight: 300)
-
-            Divider()
-
+            // Header with status
             HStack {
-                Button("Refresh") {
-                    ws.sendCommand(action: "get_status")
-                    ws.sendCommand(action: "get_timeline")
-                }
-                .buttonStyle(.bordered)
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 8, height: 8)
+
+                Text("Jarvis Ready")
+                    .font(.system(size: 12))
 
                 Spacer()
-
-                Button("Quit") {
-                    NSApplication.shared.terminate(nil)
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            // Open window button
+            Button {
+                openWindow(id: "main-window")
+            } label: {
+                HStack {
+                    Image(systemName: "doc.text.fill")
+                    Text("Open Jarvis")
+                    Spacer()
+                }
+                .font(.system(size: 13))
+                .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+
+            Divider()
+
+            // Quick status
+            HStack {
+                Text("Connected")
+                    .font(.system(size: 11))
+                Spacer()
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 6, height: 6)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+
+            Divider()
+
+            // Quit
+            Button {
+                NSApplication.shared.terminate(nil)
+            } label: {
+                HStack {
+                    Image(systemName: "xmark")
+                    Text("Quit")
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
         }
-        .onAppear {
-            ws.connect()
-        }
+        .frame(width: 200)
     }
 }

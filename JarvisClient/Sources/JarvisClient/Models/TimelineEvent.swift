@@ -9,7 +9,6 @@ public struct TimelineEvent: Identifiable, Codable, Sendable {
     public let taskId: String?
     public let featureId: String?
     public let costUsd: Double?
-    public let metadata: [String: Any]?
 
     public var date: Date { Date(timeIntervalSince1970: timestamp) }
 
@@ -27,8 +26,7 @@ public struct TimelineEvent: Identifiable, Codable, Sendable {
         sessionId: String? = nil,
         taskId: String? = nil,
         featureId: String? = nil,
-        costUsd: Double? = nil,
-        metadata: [String: Any]? = nil
+        costUsd: Double? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -38,28 +36,14 @@ public struct TimelineEvent: Identifiable, Codable, Sendable {
         self.taskId = taskId
         self.featureId = featureId
         self.costUsd = costUsd
-        self.metadata = metadata
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, timestamp, summary, metadata
+        case id, timestamp, summary
         case eventType = "event_type"
         case sessionId = "session_id"
         case taskId = "task_id"
         case featureId = "feature_id"
         case costUsd = "cost_usd"
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decodeIfPresent(Int.self, forKey: .id)
-        timestamp = try container.decode(Double.self, forKey: .timestamp)
-        eventType = try container.decode(String.self, forKey: .eventType)
-        summary = try container.decode(String.self, forKey: .summary)
-        sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
-        taskId = try container.decodeIfPresent(String.self, forKey: .taskId)
-        featureId = try container.decodeIfPresent(String.self, forKey: .featureId)
-        costUsd = try container.decodeIfPresent(Double.self, forKey: .costUsd)
-        metadata = try container.decodeIfPresent([String: Any].self, forKey: .metadata)
     }
 }

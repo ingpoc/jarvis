@@ -1,11 +1,11 @@
 import SwiftUI
+import JarvisClient
 
 /// Enhanced Timeline View with cleaner design
 /// Design: Legible typography, clear visual hierarchy, peaceful colors
 struct TimelineView: View {
-    @State private var wsClient = WebSocketClient(
-        serverURL: URL(string: "wss://localhost:9848")!
-    )
+    @Environment(AuthManager.self) private var auth
+    @Environment(JarvisWebSocketClient.self) private var ws
 
     @State private var filter: EventFilterType = .all
 
@@ -28,24 +28,18 @@ struct TimelineView: View {
                 }
             }
         }
-        .onAppear {
-            wsClient.connect()
-        }
-        .onDisappear {
-            wsClient.disconnect()
-        }
     }
 
     private var filteredEvents: [TimelineEvent] {
         switch filter {
         case .all:
-            return wsClient.events
+            return ws.events
         case .errors:
-            return wsClient.events.filter { $0.eventType == "error" }
+            return ws.events.filter { $0.eventType == "error" }
         case .approvals:
-            return wsClient.events.filter { $0.eventType == "approval_needed" }
+            return ws.events.filter { $0.eventType == "approval_needed" }
         case .tasks:
-            return wsClient.events.filter { $0.eventType.hasPrefix("task_") }
+            return ws.events.filter { $0.eventType.hasPrefix("task_") }
         }
     }
 }

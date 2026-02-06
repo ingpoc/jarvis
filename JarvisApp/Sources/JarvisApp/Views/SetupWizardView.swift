@@ -1,10 +1,19 @@
 import SwiftUI
+import JarvisClient
 
 /// Initial setup wizard for first-time device pairing
 /// Design: Friendly, clear steps, minimal anxiety
 struct SetupWizardView: View {
     @Environment(AuthManager.self) private var auth
     @Binding var isPresented: Bool
+
+    init(isPresented: Binding<Bool>) {
+        self._isPresented = isPresented
+    }
+
+    init() {
+        self._isPresented = .constant(false)
+    }
 
     @State private var step = 1
     @State private var deviceName = ""
@@ -125,7 +134,7 @@ struct WelcomeStep: View {
 
             Image(systemName: "brain.head.profile")
                 .font(.system(size: 48))
-                .foregroundStyle(.accentColor)
+                .foregroundStyle(Color.accentColor)
 
             VStack(spacing: 8) {
                 Text("Welcome to Jarvis")
@@ -162,7 +171,7 @@ struct FeatureRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
-                .foregroundStyle(.accentColor)
+                .foregroundStyle(Color.accentColor)
                 .frame(width: 16)
 
             Text(text)
@@ -199,8 +208,6 @@ struct ServerConfigStep: View {
                 TextField("wss://your-server:9848", text: $serverURL)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12))
-                    .autocapitalization(.never)
-                    .disableAutocorrection(true)
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -209,7 +216,7 @@ struct ServerConfigStep: View {
                     .foregroundStyle(.tertiary)
 
                 Text("wss://localhost:9848")
-                    .font(.system(size: 10, family: .monospaced))
+                    .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
 

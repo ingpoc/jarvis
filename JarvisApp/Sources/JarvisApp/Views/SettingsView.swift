@@ -1,4 +1,5 @@
 import SwiftUI
+import JarvisClient
 
 /// Settings View: Authentication and device management
 /// Design: Clear sections, minimal controls, honest feedback
@@ -6,6 +7,7 @@ struct SettingsView: View {
     @Environment(AuthManager.self) private var auth
     @State private var showQRCode = false
     @State private var showDeviceList = false
+    @State private var pairingToken: String? = nil
 
     var body: some View {
         ScrollView {
@@ -29,7 +31,11 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
         .sheet(isPresented: $showQRCode) {
-            QRCodeView(isPresented: $showQRCode)
+            if let token = pairingToken {
+                QRCodeView(token: token, isPresented: $showQRCode)
+            } else {
+                Text("No pairing token")
+            }
         }
         .sheet(isPresented: $showDeviceList) {
             DeviceListView(isPresented: $showDeviceList)
@@ -41,7 +47,7 @@ struct SettingsView: View {
 
 struct ConnectionCard: View {
     @Environment(AuthManager.self) private var auth
-    @State private var wsClient: WebSocketClient?
+    @Environment(JarvisWebSocketClient.self) private var ws
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -50,10 +56,10 @@ struct ConnectionCard: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 12) {
-                ConnectionStatusIndicator(isConnected: wsClient?.isConnected ?? false)
+                ConnectionStatusIndicator(isConnected: ws.isConnected)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(wsClient?.isConnected == true ? "Connected" : "Disconnected")
+                    Text(ws.isConnected ? "Connected" : "Disconnected")
                         .font(.system(size: 13, weight: .medium))
 
                     Text(auth.serverURL.host ?? "Unknown")
@@ -63,11 +69,11 @@ struct ConnectionCard: View {
 
                 Spacer()
 
-                Button(wsClient?.isConnected == true ? "Disconnect" : "Connect") {
-                    if wsClient?.isConnected == true {
-                        wsClient?.disconnect()
+                Button(ws.isConnected ? "Disconnect" : "Connect") {
+                    if ws.isConnected {
+                        ws.disconnect()
                     } else {
-                        wsClient?.connect()
+                        ws.connect()
                     }
                 }
                 .buttonStyle(.secondaryButtonStyle)
@@ -75,9 +81,6 @@ struct ConnectionCard: View {
             .padding()
             .background(Color(nsColor: .controlBackgroundColor))
             .cornerRadius(8)
-        }
-        .onAppear {
-            wsClient = WebSocketClient(serverURL: auth.serverURL)
         }
     }
 }
@@ -387,7 +390,7 @@ struct QRCodeView: View {
                     .foregroundStyle(.white)
 
                 Text(token.prefix(8))
-                    .font(.system(size: 10, family: .monospaced))
+                    .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.7))
             }
         }

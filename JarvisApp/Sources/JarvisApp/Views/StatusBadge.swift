@@ -1,7 +1,9 @@
 import SwiftUI
+import JarvisClient
 
 struct StatusBadge: View {
-    @Environment(WebSocketClient.self) private var ws
+    @Environment(AuthManager.self) private var auth
+    @Environment(JarvisWebSocketClient.self) private var ws
 
     var body: some View {
         HStack(spacing: 10) {

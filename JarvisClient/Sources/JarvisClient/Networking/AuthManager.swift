@@ -6,8 +6,8 @@ import Observation
 public final class AuthManager {
     public private(set) var currentToken: AuthToken?
     public private(set) var isAuthenticated = false
-    public private(set) var serverURL: URL = URL(string: "wss://localhost:9848")!
-    public private(set) var restURL: URL = URL(string: "http://localhost:9849")!
+    public private(set) var serverURL: URL
+    public private(set) var restURL: URL
 
     private let tokenKey = "jarvis_auth_token"
     private let serverURLKey = "jarvis_server_url"
@@ -15,6 +15,13 @@ public final class AuthManager {
     public static let shared = AuthManager()
 
     private init() {
+        // Safe defaults - never force unwrap
+        guard let defaultServerURL = URL(string: "ws://127.0.0.1:9847"),
+              let defaultRestURL = URL(string: "http://127.0.0.1:9847") else {
+            fatalError("Invalid default URLs - this should never happen")
+        }
+        self.serverURL = defaultServerURL
+        self.restURL = defaultRestURL
         loadSavedToken()
         loadSavedServerURL()
     }
@@ -23,15 +30,32 @@ public final class AuthManager {
 
     public func setServerURL(_ url: URL) {
         self.serverURL = url
-        self.restURL = URL(string: "http://\(url.host ?? "localhost"):9849")!
+        // Derive REST URL from WebSocket URL safely
+        if let host = url.host,
+           let port = url.port,
+           let restURL = URL(string: "http://\(host):\(port)") {
+            self.restURL = restURL
+        } else {
+            // Fallback to default if URL parsing fails
+            guard let fallbackURL = URL(string: "http://127.0.0.1:9847") else {
+                self.restURL = URL(string: "http://127.0.0.1:9847")! // Safe fallback in init
+                return
+            }
+            self.restURL = fallbackURL
+        }
         UserDefaults.standard.set(url.absoluteString, forKey: serverURLKey)
     }
 
     private func loadSavedServerURL() {
-        if let savedString = UserDefaults.standard.string(forKey: serverURLKey),
-           let url = URL(string: savedString) {
-            self.serverURL = url
-            self.restURL = URL(string: "http://\(url.host ?? "localhost"):9849")!
+        guard let savedString = UserDefaults.standard.string(forKey: serverURLKey),
+              let url = URL(string: savedString) else {
+            return
+        }
+        self.serverURL = url
+        if let host = url.host,
+           let port = url.port,
+           let restURL = URL(string: "http://\(host):\(port)") {
+            self.restURL = restURL
         }
     }
 
@@ -89,22 +113,63 @@ public final class AuthManager {
     // MARK: - Device Management
 
     public func listDevices() async throws -> [DeviceInfo] {
-        guard let token = currentToken else { throw AuthError.notAuthenticated }
+        let token = try await getValidToken()
         let client = RESTClient(baseURL: restURL)
-        return try await client.listDevices(token: token.accessToken)
+        return try await client.listDevices(token: token)
     }
 
     public func revokeDevice(deviceId: String) async throws -> Bool {
-        guard let token = currentToken else { throw AuthError.notAuthenticated }
+        let token = try await getValidToken()
         let client = RESTClient(baseURL: restURL)
-        return try await client.revokeDevice(token: token.accessToken, deviceId: deviceId)
+        return try await client.revokeDevice(token: token, deviceId: deviceId)
     }
 
     // MARK: - Authentication Header
 
-    public func authHeader() -> String? {
-        guard let token = currentToken else { return nil }
-        return "Bearer \(token.accessToken)"
+    public func getValidToken() async throws -> String {
+        guard let token = currentToken else {
+            throw AuthError.notAuthenticated
+        }
+
+        // Add 5 minute buffer to refresh before actual expiration
+        let buffer: TimeInterval = 300
+        let isExpiringSoon = Date().timeIntervalSince1970 > (token.expiresAt - buffer)
+
+        if !isExpiringSoon {
+            return token.accessToken
+        }
+
+        // Token is expiring soon, attempt refresh
+        guard let refreshToken = token.refreshToken else {
+            // No refresh token available, clear auth and throw
+            clearToken()
+            throw AuthError.tokenExpired
+        }
+
+        do {
+            let client = RESTClient(baseURL: restURL)
+            let response = try await client.refreshToken(refreshToken: refreshToken)
+
+            let newToken = AuthToken(
+                accessToken: response.accessToken,
+                refreshToken: response.refreshToken ?? refreshToken,
+                deviceId: token.deviceId,
+                deviceName: token.deviceName,
+                expiresAt: response.expiresAt
+            )
+
+            saveToken(newToken)
+            return newToken.accessToken
+        } catch {
+            // Refresh failed - clear token and require re-authentication
+            clearToken()
+            throw AuthError.tokenExpired
+        }
+    }
+
+    public func authHeader() async throws -> String {
+        let token = try await getValidToken()
+        return "Bearer \(token)"
     }
 }
 

@@ -1,10 +1,8 @@
 import Foundation
 
 /// Public API for JarvisClient
-@_exported import struct Models.TimelineEvent
-@_exported import enum Models.JarvisStatus
-@_exported import struct Models.AuthToken
-@_exported import struct Models.DeviceInfo
-@_exported import class Networking.WebSocketClient
-@_exported import class Networking.RESTClient
-@_exported import class Networking.AuthManager
+/// All types are exported from their respective modules
+
+// Models are automatically available
+// Networking classes are automatically available
+// Utilities are automatically available

@@ -31,6 +31,7 @@ class JarvisDaemon:
         self._rest_runner = None
         self._slack_bot = None
         self._voice_client = None
+        self._tts_service = None
         self._running = False
         self._stop_event = asyncio.Event()
 

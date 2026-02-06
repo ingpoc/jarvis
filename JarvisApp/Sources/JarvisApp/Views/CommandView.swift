@@ -1,4 +1,5 @@
 import SwiftUI
+import JarvisClient
 
 /// Command View: Execute tasks and manage approvals
 /// Design: Clear input, prominent actions, minimal friction
@@ -34,8 +35,7 @@ struct CommandView: View {
     }
 
     private var pendingApprovals: [TimelineEvent] {
-        // TODO: Get from WebSocket client
-        []
+        WebSocketClient.shared.pendingApprovals.filter { $0.eventType == "approval_needed" }
     }
 }
 
@@ -45,6 +45,7 @@ struct CommandInputCard: View {
     @Binding var input: String
     @FocusState.Binding var isFocused: Bool
     @Binding var isExecuting: Bool
+    @State private var ws = WebSocketClient.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -69,7 +70,7 @@ struct CommandInputCard: View {
                     Button(action: executeCommand) {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 20))
-                            .foregroundStyle(.accentColor)
+                            .foregroundStyle(Color.accentColor)
                     }
                     .buttonStyle(.plain)
                 }
@@ -83,11 +84,16 @@ struct CommandInputCard: View {
 
     private func executeCommand() {
         guard !input.isEmpty else { return }
+        let command = input
         isExecuting = true
-        // TODO: Send command via WebSocket
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            isExecuting = false
-            input = ""
+
+        Task {
+            _ = try? await ws.runTask(description: command)
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                isExecuting = false
+                input = ""
+            }
         }
     }
 }

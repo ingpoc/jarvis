@@ -1,7 +1,9 @@
 import SwiftUI
+import JarvisClient
 
 struct ApprovalView: View {
-    @Environment(WebSocketClient.self) private var ws
+    @Environment(AuthManager.self) private var auth
+    @Environment(JarvisWebSocketClient.self) private var ws
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -35,13 +37,17 @@ struct ApprovalView: View {
 
     private func approve(_ event: TimelineEvent) {
         let taskId = event.taskId ?? "\(event.id ?? 0)"
-        ws.sendCommand(action: "approve", data: ["task_id": taskId])
-        ws.pendingApprovals.removeAll { $0.id == event.id }
+        Task {
+            try? await ws.approveTask(taskId: taskId)
+            ws.pendingApprovals.removeAll { $0.id == event.id }
+        }
     }
 
     private func deny(_ event: TimelineEvent) {
         let taskId = event.taskId ?? "\(event.id ?? 0)"
-        ws.sendCommand(action: "deny", data: ["task_id": taskId])
-        ws.pendingApprovals.removeAll { $0.id == event.id }
+        Task {
+            try? await ws.denyTask(taskId: taskId)
+            ws.pendingApprovals.removeAll { $0.id == event.id }
+        }
     }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import JarvisClient
 
 /// Dashboard: At-a-glance status and quick actions
 /// Design: Clear hierarchy, essential info only, calm color palette
