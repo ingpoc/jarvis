@@ -14,9 +14,12 @@ logger = logging.getLogger(__name__)
 async def ping_mcp_server(server_name: str, server_config: dict, timeout: float = 2.0) -> dict[str, Any]:
     """Ping an MCP server to check if it's responsive.
 
+    For MCP server objects with a callable interface, attempts to call list_tools()
+    within the timeout. For servers with a command config, verifies the command exists.
+
     Args:
         server_name: Name of the MCP server
-        server_config: Server configuration dict
+        server_config: Server configuration dict or MCP server object
         timeout: Timeout in seconds (default 2.0)
 
     Returns:
@@ -26,26 +29,53 @@ async def ping_mcp_server(server_name: str, server_config: dict, timeout: float 
     start_time = time.time()
 
     try:
-        # For Python MCP servers, try to import and check if callable
-        if "command" in server_config and "python" in server_config["command"]:
-            # This is a basic check - just verify the module can be imported
-            # A real implementation would need to actually call the server
-            result = {
-                "status": "healthy",
-                "server": server_name,
-                "response_time_ms": (time.time() - start_time) * 1000,
-                "error": None,
-            }
-        else:
-            # For other servers, we'd need actual network checks
-            result = {
-                "status": "unknown",
-                "server": server_name,
-                "response_time_ms": (time.time() - start_time) * 1000,
-                "error": "Health check not implemented for this server type",
-            }
+        # If the server object has a list_tools method, call it as a real health check
+        if hasattr(server_config, "list_tools"):
+            try:
+                await asyncio.wait_for(
+                    _check_server_tools(server_config),
+                    timeout=timeout,
+                )
+                return {
+                    "status": "healthy",
+                    "server": server_name,
+                    "response_time_ms": (time.time() - start_time) * 1000,
+                    "error": None,
+                }
+            except asyncio.TimeoutError:
+                return {
+                    "status": "unhealthy",
+                    "server": server_name,
+                    "response_time_ms": timeout * 1000,
+                    "error": f"Health check timed out after {timeout}s",
+                }
 
-        return result
+        # For command-based servers, verify the command binary exists
+        if isinstance(server_config, dict) and "command" in server_config:
+            import shutil
+            cmd = server_config["command"]
+            cmd_name = cmd.split()[0] if isinstance(cmd, str) else cmd[0]
+            if shutil.which(cmd_name):
+                return {
+                    "status": "healthy",
+                    "server": server_name,
+                    "response_time_ms": (time.time() - start_time) * 1000,
+                    "error": None,
+                }
+            else:
+                return {
+                    "status": "unhealthy",
+                    "server": server_name,
+                    "response_time_ms": (time.time() - start_time) * 1000,
+                    "error": f"Command not found: {cmd_name}",
+                }
+
+        return {
+            "status": "unknown",
+            "server": server_name,
+            "response_time_ms": (time.time() - start_time) * 1000,
+            "error": "Unrecognized server config type",
+        }
 
     except Exception as e:
         return {
@@ -54,6 +84,17 @@ async def ping_mcp_server(server_name: str, server_config: dict, timeout: float 
             "response_time_ms": (time.time() - start_time) * 1000,
             "error": str(e),
         }
+
+
+async def _check_server_tools(server) -> None:
+    """Attempt to call list_tools() on an MCP server object as a liveness check."""
+    if asyncio.iscoroutinefunction(getattr(server, "list_tools", None)):
+        await server.list_tools()
+    elif callable(getattr(server, "list_tools", None)):
+        server.list_tools()
+    else:
+        # Server exists but has no list_tools — consider it alive
+        pass
 
 
 async def health_check_all_servers(mcp_servers: dict[str, Any], timeout: float = 2.0) -> dict[str, Any]:
@@ -138,19 +179,29 @@ async def notify_health_failures(health_results: dict[str, Any]) -> None:
     Args:
         health_results: Results from health_check_all_servers
     """
-    from jarvis.notifications import _slack_bot
-
     unhealthy = []
     for name, result in health_results.get("servers", {}).items():
         if result["status"] in ("unhealthy", "error"):
-            unhealthy.append(f"• {name}: {result.get('error', 'timeout')}")
+            unhealthy.append(f"- {name}: {result.get('error', 'timeout')}")
 
-    if unhealthy and _slack_bot:
-        message = "⚠️ MCP Server Health Check Failed:\n" + "\n".join(unhealthy)
-        try:
-            await _slack_bot.post_message(message)
-        except Exception as e:
-            logger.error(f"Failed to send health check notification: {e}")
+    if not unhealthy:
+        return
+
+    # Always log failures
+    for line in unhealthy:
+        logger.warning(f"MCP health failure: {line}")
+
+    # Try Slack notification via the public accessor
+    try:
+        from jarvis.notifications import get_slack_bot
+        slack_bot = get_slack_bot()
+        if slack_bot:
+            message = "MCP Server Health Check Failed:\n" + "\n".join(unhealthy)
+            await slack_bot.post_message(message)
+    except (ImportError, AttributeError) as e:
+        logger.debug(f"Slack notification unavailable: {e}")
+    except Exception as e:
+        logger.error(f"Failed to send health check notification: {e}")
 
 
 def filter_healthy_servers(mcp_servers: dict[str, Any], health_results: dict[str, Any]) -> dict[str, Any]:

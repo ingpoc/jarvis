@@ -176,9 +176,14 @@ async def learn_from_task(
     learnings_saved = 0
     skills_flagged = 0
 
-    # Scan for error patterns
+    # Scan for error→fix sequences.
+    # An error sequence starts at the first error record and continues until we
+    # see a successful "resolution" tool call (Edit/Write/Bash with exit_code 0).
+    # Intermediate non-error records (e.g., Read calls used to investigate) are
+    # included in the sequence so the full context is preserved.
+    FIX_TOOLS = {"Edit", "Write", "Bash", "mcp__jarvis-git__git_commit"}
     error_sequences = []
-    current_sequence = []
+    current_sequence: list[dict] = []
     in_error = False
 
     for record in records:
@@ -191,16 +196,16 @@ async def learn_from_task(
             else:
                 current_sequence.append(record)
             errors_found += 1
-        else:
-            if in_error:
-                # Add fix records
-                current_sequence.append(record)
-                # Check if this might be a fix (non-error after error)
-                if record.get("exit_code") == 0 and record.get("tool_name") in ["Edit", "Write", "Bash"]:
-                    # End of error sequence - we found a fix
-                    error_sequences.append(current_sequence)
-                    current_sequence = []
-                    in_error = False
+        elif in_error:
+            # Non-error record while in an error sequence — could be
+            # investigation (Read/Grep) or the actual fix (Edit/Write/Bash).
+            current_sequence.append(record)
+            # Only close the sequence when we see a successful fix tool
+            tool_name = record.get("tool_name", "")
+            if record.get("exit_code", -1) == 0 and tool_name in FIX_TOOLS:
+                error_sequences.append(current_sequence)
+                current_sequence = []
+                in_error = False
 
     # Process error-fix sequences to create learnings
     for sequence in error_sequences:

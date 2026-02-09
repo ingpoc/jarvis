@@ -28,7 +28,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from jarvis.config import JARVIS_HOME
 from jarvis.memory import MemoryStore
 
 logger = logging.getLogger(__name__)
@@ -195,7 +194,7 @@ If this pattern doesn't match, decline gracefully and explain why."""
     }
 
 
-def save_skill_to_directory(skill_name: str, skill_content: str) -> Path:
+def save_skill_to_directory(skill_name: str, skill_content: str) -> Path | None:
     """Save skill to ~/.claude/skills/ directory.
 
     Args:
@@ -203,16 +202,20 @@ def save_skill_to_directory(skill_name: str, skill_content: str) -> Path:
         skill_content: SKILL.md content
 
     Returns:
-        Path to saved skill file
+        Path to saved skill file, or None if the file already exists
     """
-    # Create skills directory if it doesn't exist
-    skills_dir = JARVIS_HOME / ".claude" / "skills"
+    # Create skills directory where the Agent SDK expects them
+    skills_dir = Path.home() / ".claude" / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save skill
     skill_path = skills_dir / f"{skill_name}.md"
-    skill_path.write_text(skill_content)
 
+    # Don't overwrite existing skills (could be user-edited)
+    if skill_path.exists():
+        logger.info(f"Skill file already exists, skipping: {skill_path}")
+        return None
+
+    skill_path.write_text(skill_content)
     logger.info(f"Saved skill to {skill_path}")
     return skill_path
 
@@ -256,13 +259,21 @@ async def generate_skills_from_patterns(
                 candidate, memory, project_path
             )
 
-            # Save skill
+            # Save skill (checks for existing file to avoid overwriting)
             skill_path = save_skill_to_directory(
                 skill_data["skill_name"],
                 skill_data["skill_content"],
             )
 
-            # Mark candidate as promoted
+            if skill_path is None:
+                # Skill file already exists — skip but still mark promoted
+                logger.info(
+                    f"Skill '{skill_data['skill_name']}' already exists, marking promoted"
+                )
+                memory.mark_skill_promoted(candidate["id"])
+                continue
+
+            # Mark candidate as promoted only after file is confirmed written
             memory.mark_skill_promoted(candidate["id"])
 
             skills_generated.append({

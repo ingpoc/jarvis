@@ -199,7 +199,17 @@ class MemoryStore:
         conn.close()
         return task
 
+    # Allowed columns for update_task to prevent SQL injection via kwargs keys
+    _TASK_COLUMNS = frozenset({
+        "description", "status", "project_path", "updated_at",
+        "session_id", "plan", "result", "cost_usd", "turns", "container_id",
+    })
+
     def update_task(self, task_id: str, **kwargs) -> None:
+        # Validate column names against whitelist
+        invalid_keys = set(kwargs.keys()) - self._TASK_COLUMNS
+        if invalid_keys:
+            raise ValueError(f"Invalid task columns: {invalid_keys}")
         kwargs["updated_at"] = time.time()
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [task_id]
@@ -511,8 +521,17 @@ class MemoryStore:
         task_id: str | None = None,
         project_path: str | None = None,
         limit: int = 50,
+        order: str = "ASC",
     ) -> list[dict]:
-        """Query execution records."""
+        """Query execution records.
+
+        Args:
+            order: "ASC" (chronological, default) or "DESC" (newest first).
+                   ASC is the default because the learning loop needs records
+                   in chronological order to detect error→fix sequences.
+        """
+        if order not in ("ASC", "DESC"):
+            order = "ASC"
         conn = sqlite3.connect(self.db_path)
         query = "SELECT * FROM execution_records WHERE 1=1"
         params: list = []
@@ -522,7 +541,7 @@ class MemoryStore:
         if project_path:
             query += " AND project_path = ?"
             params.append(project_path)
-        query += " ORDER BY timestamp DESC LIMIT ?"
+        query += f" ORDER BY timestamp {order} LIMIT ?"
         params.append(limit)
         rows = conn.execute(query, params).fetchall()
         conn.close()

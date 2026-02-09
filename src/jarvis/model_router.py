@@ -115,17 +115,32 @@ class ModelRouter:
                     estimated_cost_usd=0.0,  # Local, no cost
                 )
 
-        # Complex task or offline unavailable → use GLM (Claude)
-        if offline_mode and not self.qwen3_available:
-            # Can't execute offline without local models
-            self._routing_stats["fallback"] += 1
-            return RoutingDecision(
-                tier=ModelTier.GLM_CLOUD,
-                model="claude-sonnet-4.5",
-                reason="Offline mode requested but no local models available (fallback)",
-                estimated_tokens=len(context_files or []) * 1000,
-                estimated_cost_usd=0.015 * len(context_files or []),  # Rough estimate
-            )
+        # Offline mode: cannot use cloud API
+        if offline_mode:
+            if self.qwen3_available:
+                # Route everything to Qwen3 locally
+                filtered_files = await self._qwen3_filter_context(
+                    task_description, context_files or []
+                )
+                self._routing_stats["qwen3"] += 1
+                return RoutingDecision(
+                    tier=ModelTier.QWEN3_LOCAL,
+                    model="qwen3-4b-mlx",
+                    reason="Offline mode: routing to local Qwen3 model",
+                    context_filter=filtered_files,
+                    estimated_tokens=len(filtered_files or []) * 1000,
+                    estimated_cost_usd=0.0,
+                )
+            else:
+                # No local models and no cloud — cannot proceed
+                self._routing_stats["fallback"] += 1
+                return RoutingDecision(
+                    tier=ModelTier.GLM_CLOUD,
+                    model="unavailable",
+                    reason="Offline mode: no local models available, task cannot be executed offline",
+                    estimated_tokens=0,
+                    estimated_cost_usd=0.0,
+                )
 
         # Default: use GLM for complex tasks
         self._routing_stats["glm"] += 1

@@ -48,7 +48,54 @@ from jarvis.notifications import (
 from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
 from jarvis.agents import MultiAgentPipeline
+from jarvis.model_router import get_model_router
 from jarvis.self_learning import learn_from_task, get_relevant_learnings, format_learning_for_context
+
+
+def _is_tool_error(tool_name: str, tool_response: str) -> bool:
+    """Determine if a tool response represents a real error.
+
+    Uses tool-specific heuristics to avoid false positives from responses
+    that merely mention 'error' (e.g., reading error-handling code).
+    """
+    if not isinstance(tool_response, str):
+        return False
+
+    # Read/Glob/Grep: reading code that mentions "error" is NOT an error
+    if tool_name in ("Read", "Glob", "Grep", "WebFetch", "WebSearch"):
+        return False
+
+    response_lower = tool_response.lower()
+
+    # Bash: look for common failure patterns
+    if tool_name == "Bash":
+        failure_signals = [
+            "command not found",
+            "no such file or directory",
+            "permission denied",
+            "segmentation fault",
+            "killed",
+            "npm err!",
+            "syntaxerror:",
+            "modulenotfounderror:",
+            "importerror:",
+            "typeerror:",
+            "nameerror:",
+            "valueerror:",
+            "compilation failed",
+            "build failed",
+            "test failed",
+            "tests failed",
+            "exit code",
+            "exited with",
+        ]
+        return any(sig in response_lower for sig in failure_signals)
+
+    # Edit/Write: tool-level failures (not content)
+    if tool_name in ("Edit", "Write"):
+        return "error" in response_lower and len(tool_response) < 200
+
+    return False
 
 
 class JarvisOrchestrator:
@@ -252,6 +299,9 @@ Turns: {budget_status['turns']}
 
     async def _pre_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
         """Hook: enforce trust and budget before tool execution."""
+        import time as _time
+        context["_tool_start_time"] = _time.monotonic()
+
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input", {})
 
@@ -297,6 +347,9 @@ Turns: {budget_status['turns']}
 
     async def _post_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
         """Hook: track container lifecycle, emit events, detect loops, capture execution records."""
+        import time as _time
+        hook_start = _time.monotonic()
+
         tool_name = input_data.get("tool_name", "")
         tool_response = input_data.get("tool_response", "")
         tool_input = input_data.get("tool_input", {})
@@ -313,19 +366,38 @@ Turns: {budget_status['turns']}
         task_id = context.get("task_id", "unknown")
         session_id = self._session_id or "unknown"
 
-        # Extract error information
+        # Extract error information with reduced false positives.
+        # Only flag as error when there are strong signals, not just
+        # the words "error" or "exception" appearing anywhere in output.
         error_message = None
         exit_code = 0
         if isinstance(tool_response, str):
-            if "error" in tool_response.lower() or "exception" in tool_response.lower():
+            response_lower = tool_response.lower()
+            # Bash tool: check for non-zero exit code markers
+            if tool_name == "Bash" and tool_input.get("exit_code", 0) != 0:
+                error_message = tool_response[:500]
+                exit_code = tool_input.get("exit_code", 1)
+            # Tool-level error signals: lines starting with error/traceback
+            elif any(
+                response_lower.lstrip().startswith(prefix)
+                for prefix in ("error:", "error!", "traceback ", "fatal:", "panic:")
+            ):
+                error_message = tool_response[:500]
+                exit_code = 1
+            # Explicit failure patterns (not just substring matches)
+            elif _is_tool_error(tool_name, tool_response):
                 error_message = tool_response[:500]
                 exit_code = 1
 
-        # Extract files touched (for Edit/Write tools)
+        # Extract files touched (for Edit/Write/Read tools)
         files_touched = []
         if tool_name in ["Edit", "Write"]:
             if isinstance(tool_input, dict) and "file_path" in tool_input:
                 files_touched.append(tool_input["file_path"])
+
+        # Calculate execution duration
+        duration_ms = ((_time.monotonic() - context.get("_tool_start_time", hook_start))
+                       * 1000) if "_tool_start_time" in context else 0.0
 
         # Record execution
         try:
@@ -338,7 +410,7 @@ Turns: {budget_status['turns']}
                 exit_code=exit_code,
                 files_touched=files_touched if files_touched else None,
                 error_message=error_message,
-                duration_ms=0.0,  # Could be enhanced with actual timing
+                duration_ms=duration_ms,
                 project_path=self.project_path,
             )
         except Exception:
@@ -454,6 +526,27 @@ Turns: {budget_status['turns']}
                 )
         except Exception:
             pass  # Don't block task on trace failure
+
+        # Model routing: log routing decision for observability
+        try:
+            router = get_model_router()
+            routing = await router.route_task(
+                task_description=task_description,
+                budget_remaining_usd=self.config.budget.max_per_session_usd - self.budget._session_spent,
+            )
+            self.events.emit(
+                "model_routing",
+                f"Routed to {routing.tier.value}: {routing.reason}",
+                task_id=task_id,
+                metadata={
+                    "tier": routing.tier.value,
+                    "model": routing.model,
+                    "reason": routing.reason,
+                    "estimated_cost": routing.estimated_cost_usd,
+                },
+            )
+        except Exception:
+            pass  # Don't block task on routing failure
 
         options = self._build_options()
         result = {

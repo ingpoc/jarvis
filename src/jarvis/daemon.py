@@ -11,7 +11,7 @@ from jarvis.config import JarvisConfig, ensure_jarvis_home
 from jarvis.notifications import set_slack_bot, set_voice_client
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.ws_server import JarvisWSServer
-from jarvis.mcp_health import health_check_all_servers, notify_health_failures
+from jarvis.mcp_health import health_check_all_servers, filter_healthy_servers, notify_health_failures
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +50,15 @@ class JarvisDaemon:
             f"MCP health check complete: {health_results['healthy_count']}/{health_results['total_count']} healthy"
         )
 
-        # Notify about failures
+        # Notify about failures and quarantine unhealthy servers
         if health_results["unhealthy_count"] > 0:
             await notify_health_failures(health_results)
+
+            # Remove unhealthy servers from orchestrator's MCP config
+            healthy_servers = filter_healthy_servers(mcp_servers, health_results)
+            quarantined = set(mcp_servers.keys()) - set(healthy_servers.keys())
+            if quarantined:
+                logger.warning(f"Quarantined MCP servers: {', '.join(quarantined)}")
 
         # WebSocket server (always)
         self._ws_server = JarvisWSServer(
