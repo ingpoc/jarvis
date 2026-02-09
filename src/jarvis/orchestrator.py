@@ -48,6 +48,7 @@ from jarvis.notifications import (
 from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
 from jarvis.agents import MultiAgentPipeline
+from jarvis.self_learning import learn_from_task
 
 
 class JarvisOrchestrator:
@@ -283,9 +284,10 @@ Turns: {budget_status['turns']}
         return {}
 
     async def _post_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
-        """Hook: track container lifecycle, emit events, detect loops."""
+        """Hook: track container lifecycle, emit events, detect loops, capture execution records."""
         tool_name = input_data.get("tool_name", "")
         tool_response = input_data.get("tool_response", "")
+        tool_input = input_data.get("tool_input", {})
 
         # Emit tool use event
         self.events.emit(
@@ -294,6 +296,42 @@ Turns: {budget_status['turns']}
             task_id=context.get("task_id"),
             metadata={"tool": tool_name},
         )
+
+        # Capture execution record for learning
+        task_id = context.get("task_id", "unknown")
+        session_id = self._session_id or "unknown"
+
+        # Extract error information
+        error_message = None
+        exit_code = 0
+        if isinstance(tool_response, str):
+            if "error" in tool_response.lower() or "exception" in tool_response.lower():
+                error_message = tool_response[:500]
+                exit_code = 1
+
+        # Extract files touched (for Edit/Write tools)
+        files_touched = []
+        if tool_name in ["Edit", "Write"]:
+            if isinstance(tool_input, dict) and "file_path" in tool_input:
+                files_touched.append(tool_input["file_path"])
+
+        # Record execution
+        try:
+            self.memory.record_execution(
+                task_id=task_id,
+                session_id=session_id,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                tool_output=tool_response,
+                exit_code=exit_code,
+                files_touched=files_touched if files_touched else None,
+                error_message=error_message,
+                duration_ms=0.0,  # Could be enhanced with actual timing
+                project_path=self.project_path,
+            )
+        except Exception:
+            # Don't block on execution record failure
+            pass
 
         # Track active containers
         if "container_run" in tool_name and isinstance(tool_response, str):
@@ -490,6 +528,24 @@ Turns: {budget_status['turns']}
             )
         except Exception:
             pass
+
+        # Self-learning: extract patterns from execution records
+        try:
+            learning_stats = await learn_from_task(
+                task_id=task_id,
+                project_path=self.project_path,
+                memory=self.memory,
+            )
+            if learning_stats["learnings_saved"] > 0:
+                self.events.emit(
+                    "learning_captured",
+                    f"Learned {learning_stats['learnings_saved']} patterns from task",
+                    task_id=task_id,
+                    metadata=learning_stats,
+                )
+        except Exception as e:
+            # Don't block task completion on learning failure
+            self.events.emit(EVENT_ERROR, f"Learning extraction failed: {e}", task_id=task_id)
 
         # Events + macOS notifications
         if result["status"] == "completed":

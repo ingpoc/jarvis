@@ -11,6 +11,7 @@ from jarvis.config import JarvisConfig, ensure_jarvis_home
 from jarvis.notifications import set_slack_bot, set_voice_client
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.ws_server import JarvisWSServer
+from jarvis.mcp_health import health_check_all_servers, notify_health_failures
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,24 @@ class JarvisDaemon:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, lambda: asyncio.create_task(self.stop()))
+
+        # Health check MCP servers before starting
+        logger.info("Running MCP server health checks...")
+        mcp_servers = {
+            "jarvis-container": self.orchestrator.container_server,
+            "jarvis-git": self.orchestrator.git_server,
+            "jarvis-review": self.orchestrator.review_server,
+            "jarvis-browser": self.orchestrator.browser_server,
+        }
+
+        health_results = await health_check_all_servers(mcp_servers, timeout=2.0)
+        logger.info(
+            f"MCP health check complete: {health_results['healthy_count']}/{health_results['total_count']} healthy"
+        )
+
+        # Notify about failures
+        if health_results["unhealthy_count"] > 0:
+            await notify_health_failures(health_results)
 
         # WebSocket server (always)
         self._ws_server = JarvisWSServer(
