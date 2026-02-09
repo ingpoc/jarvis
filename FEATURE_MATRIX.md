@@ -17,7 +17,7 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | PreToolUse hooks | §4.2 | ✅ | Budget + safety checks implemented | - |
 | PostToolUse hooks | §4.2 | ✅ | Execution record capture framework | 1-2 |
 | PreMessage hooks | §4.2 | ✅ | Context injection ready | 1-2 |
-| PostMessage hooks | §4.2 | ⚠️ | Token accounting partial | 3-4 |
+| PostMessage hooks | §4.2 | ✅ | Token accounting via _post_message_hook | 3-4 |
 | Multi-agent pipeline | §4.3 | ✅ | P→E→T→R fully orchestrated | - |
 | Subagent registration | §4.3 | ✅ | AgentDefinition pattern working | - |
 | Per-repo knowledge database | §6.2 | ⚠️ | Schema exists; not populated | 1-2 |
@@ -32,10 +32,10 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Feature | PRD Ref | Status | Details | Week Due |
 |---------|---------|--------|---------|----------|
 | **Context Layers** | | | |
-| L1: Repo Structure | §6.3 | ⚠️ | Detected on clone; not formalized | 5-6 |
-| L2: Module Graph | §6.3 | ❌ | AST analysis pipeline missing | 5-6 |
-| L3: Interface Signatures | §6.3 | ⚠️ | Detection sketched; not indexed | 5-6 |
-| L4: Test & Quality | §6.3 | ⚠️ | Test parsing partial; coverage incomplete | 5-6 |
+| L1: Repo Structure | §6.3 | ✅ | build_l1_repo_structure() in context_layers.py | 5-6 |
+| L2: Module Graph | §6.3 | ✅ | AST-based import analysis in context_layers.py | 5-6 |
+| L3: Interface Signatures | §6.3 | ✅ | Python AST signature extraction in context_layers.py | 5-6 |
+| L4: Test & Quality | §6.3 | ✅ | Test scanning + quality tool detection in context_layers.py | 5-6 |
 | L5: Learned Corrections | §6.3 | ⚠️ | learnings table exists; not populated | 1-2 |
 | L6: Runtime State | §6.3 | ✅ | git + container state available | - |
 | **Self-Learning Loop** | | | |
@@ -46,9 +46,9 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Learn phase | §6.4 | ❌ | Logic framework missing | 1-2 |
 | Optimize phase | §6.4 | ⚠️ | Token metrics only; pattern detection missing | 1-2 |
 | **Knowledge Pruning** | | | |
-| FSEvents invalidation | §6.5 | ❌ | FSEvents not integrated | 5-6 |
-| Passive decay | §6.5 | ❌ | No background task system | 7-8 |
-| Idle re-verification | §6.5 | ❌ | Requires idle mode | 7-8 |
+| File watcher invalidation | §6.5 | ✅ | Polling-based fs_watcher.py with debounce | 5-6 |
+| Passive decay | §6.5 | ✅ | Confidence decay in idle_mode.py background tasks | 7-8 |
+| Idle re-verification | §6.5 | ✅ | _revalidate_learnings task in idle_mode.py | 7-8 |
 | **Cross-Repo Learning** | | | |
 | Repo-specific scope | §6.6 | ✅ | Schema designed | - |
 | Language-specific scope | §6.6 | ❌ | Transfer mechanism missing | 9-14 |
@@ -62,30 +62,30 @@ This matrix tracks the implementation status of every feature mentioned in the J
 |---------|---------|--------|---------|----------|
 | **Skill Creation** | | | |
 | Pattern discovery | §7.1 | ⚠️ | Hashing logic sketched | 5-6 |
-| Pattern detection (3+) | §7.1 | ❌ | Occurrence counter missing | 5-6 |
-| Skill generation (GLM 4.7) | §7.1 | ❌ | Template designed; generation missing | 5-6 |
-| Skill validation | §7.1 | ❌ | Test-against-records logic missing | 5-6 |
+| Pattern detection (3+) | §7.1 | ⚠️ | Detection logic in skill_generator; needs activation | 5-6 |
+| Skill generation (GLM 4.7) | §7.1 | ⚠️ | Template + generation pipeline built; needs GLM integration | 5-6 |
+| Skill validation | §7.1 | ✅ | Full validate_skill() in skill_generator.py | 5-6 |
 | Skill registration | §7.1 | ✅ | .claude/skills/ directory prepared | - |
 | Progressive disclosure | §7.1 | ✅ | SDK feature (metadata→full) | - |
 | Hard cap (3 per session) | §7.1 | ⚠️ | Limit defined; ranking missing | 5-6 |
-| Confidence decay | §7.1 | ❌ | No background update task | 7-8 |
+| Confidence decay | §7.1 | ✅ | Background task in idle_mode.py | 7-8 |
 | **MCP Discovery & Creation** | | | |
 | Registry search (GitHub/npm) | §7.2 | ❌ | Registry API integration missing | 9-14 |
 | Server proposal | §7.2 | ❌ | User approval flow missing | 9-14 |
 | Server generation (GLM 4.7) | §7.2 | ❌ | Code generation template missing | 9-14 |
 | Server installation | §7.2 | ⚠️ | Directory exists; pipeline missing | 9-14 |
 | Server registration | §7.2 | ❌ | Config management incomplete | 9-14 |
-| Health validation | §7.2 | ⚠️ | health_check() stub exists; not integrated | 1-2 |
-| Silent exclusion | §7.2 | ❌ | Quarantine list missing | 1-2 |
-| User notification | §7.2 | ❌ | Failure notification incomplete | 1-2 |
+| Health validation | §7.2 | ✅ | health_check_all_servers() integrated in daemon.py | 1-2 |
+| Silent exclusion | §7.2 | ✅ | Quarantine of unhealthy servers in daemon.py | 1-2 |
+| User notification | §7.2 | ✅ | notify_health_failures() on startup | 1-2 |
 | **Idle Mode Processing** | | | |
-| Idle detection (IOKit) | §7.3 | ❌ | OSKit integration missing | 7-8 |
-| State machine (Active→Idle→Hibernated) | §7.3 | ⚠️ | States designed; implementation missing | 7-8 |
-| Skill generation batch | §7.3 | ❌ | Background task pipeline missing | 7-8 |
-| Context rebuild (L1-L4) | §7.3 | ❌ | Layer rebuild tasks missing | 7-8 |
-| Learning re-verification | §7.3 | ❌ | Verification task missing | 7-8 |
+| Idle detection | §7.3 | ⚠️ | Polling-based in idle_mode.py; not IOKit | 7-8 |
+| State machine (Active→Idle→Hibernated) | §7.3 | ✅ | Full IdleState enum + transitions in idle_mode.py | 7-8 |
+| Skill generation batch | §7.3 | ✅ | _generate_skills background task in idle_mode.py | 7-8 |
+| Context rebuild (L1-L4) | §7.3 | ✅ | _rebuild_context_metadata in idle_mode.py | 7-8 |
+| Learning re-verification | §7.3 | ✅ | _revalidate_learnings in idle_mode.py | 7-8 |
 | Article learning pipeline | §7.3 | ❌ | Article processor missing | 7-8 |
-| Token optimization reports | §7.3 | ⚠️ | Manual reporting only | 7-8 |
+| Token optimization reports | §7.3 | ✅ | _generate_token_report in idle_mode.py | 7-8 |
 | Capability assessment | §7.3 | ❌ | Analysis task missing | 7-8 |
 | Emergency hibernation | §7.3 | ❌ | DispatchSource integration missing | 7-8 |
 
@@ -132,7 +132,7 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Idle overhead | §8.1 | ✅ | Zero (no background VM) | - |
 | Hardware isolation | §8.1 | ✅ | Per-VM separation working | - |
 | Networking setup | §8.1 | ✅ | Port mapping + forwarding working | - |
-| I/O performance | §8.1 | ✅ | 31× advantage over Docker | - |
+| I/O performance | §8.1 | ✅ | 31x advantage over Docker | - |
 | Docker fallback | §8.1 | ⚠️ | Configured but untested | 5-6 |
 | Template detection | §8.2 | ✅ | 7 templates working | - |
 | Workspace binding | §8.2 | ✅ | Volume mounting working | - |
@@ -147,7 +147,7 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Apple Containerization | Container runtime | ✅ | Production | - |
 | Foundation Models | Classification | ❌ | Not integrated | 3-4 |
 | MLX Swift | Qwen3 inference | ❌ | Not imported | 3-4 |
-| FSEvents | File monitoring | ❌ | Not integrated | 5-6 |
+| FSEvents | File monitoring | ⚠️ | Polling-based fs_watcher.py (not native FSEvents) | 5-6 |
 | Core Spotlight | Code search | ❌ | Indexing missing | 5-6 |
 | XPC Services | IPC | ✅ | Menu bar↔Daemon working | - |
 | Keychain | Credential storage | ⚠️ | Config placeholders only | 7-8 |
@@ -171,36 +171,36 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Auto-reconnect | §9 | ✅ | Implemented in SwiftUI | - |
 | Message parsing | §9 | ✅ | TimelineEvent struct working | - |
 | **Status Display** | | | |
-| Current state | §9 | ✅ | idle/working/approved/failed states | - |
-| Status colors | §9 | ⚠️ | Color mapping defined; not complete | 7-8 |
-| Status icons | §9 | ⚠️ | Icon mapping sketched | 7-8 |
-| Real-time updates | §9 | ⚠️ | Event delivery partial | 7-8 |
+| Current state | §9 | ✅ | idle/working/approved/failed/reviewing/completed | - |
+| Status colors | §9 | ✅ | Per-status color mapping in JarvisStatus.swift | 7-8 |
+| Status icons | §9 | ✅ | Per-status SF Symbols in JarvisStatus.swift | 7-8 |
+| Real-time updates | §9 | ✅ | Status timer polling + event-driven updates | 7-8 |
 | **Timeline View** | | | |
 | Event list | §9 | ⚠️ | Basic framework; rendering incomplete | 7-8 |
 | Event details | §9 | ⚠️ | TimelineEvent model exists | 7-8 |
 | Event filtering | §9 | ❌ | Filter UI missing | 7-8 |
 | **Approval UI** | | | |
-| Approval prompt | §9 | ⚠️ | View scaffolded | 7-8 |
-| Approve button | §9 | ⚠️ | Button exists; logic incomplete | 7-8 |
-| Reject button | §9 | ⚠️ | Button exists; logic incomplete | 7-8 |
+| Approval prompt | §9 | ✅ | ApprovalView with approve/deny via WebSocket | 7-8 |
+| Approve button | §9 | ✅ | ws.approve(taskId:) connected | 7-8 |
+| Reject button | §9 | ✅ | ws.deny(taskId:) connected | 7-8 |
 | Modify input | §9 | ❌ | Text input for modifications missing | 7-8 |
 | **Command Input** | | | |
-| Input field | §9 | ⚠️ | Text field exists | 7-8 |
+| Input field | §9 | ✅ | CommandInputView with monospaced text field | 7-8 |
 | NL parsing | §9 | ❌ | GLM 4.7 parsing not integrated | 7-8 |
 | Confidence display | §9 | ❌ | Intent confidence UI missing | 7-8 |
-| Submit button | §9 | ✅ | WebSocket send working | - |
+| Submit button | §9 | ✅ | WebSocket send working via runTask() | - |
 | **Idle Detection** | | | |
 | IOKit monitoring | §9 | ❌ | HID input monitoring missing | 7-8 |
-| Idle timer | §9 | ❌ | 10-minute timer not implemented | 7-8 |
-| Idle notification | §9 | ❌ | Idle event not triggered | 7-8 |
+| Idle timer | §9 | ✅ | Configurable threshold in idle_mode.py | 7-8 |
+| Idle notification | §9 | ⚠️ | Idle state tracked; notification not surfaced to UI | 7-8 |
 | **File Watching** | | | |
-| FSEvents integration | §9 | ❌ | FSEvents not monitored | 5-6 |
-| Change detection | §9 | ❌ | File modification detection missing | 5-6 |
+| File system integration | §9 | ✅ | Polling-based fs_watcher.py with debounce | 5-6 |
+| Change detection | §9 | ✅ | mtime-based detection with invalidation callbacks | 5-6 |
 | **Auto-start** | | | |
 | LaunchAgent registration | §9 | ✅ | com.jarvis.daemon.plist configured | - |
 | Login persistence | §9 | ✅ | Runs after restart | - |
 | **Daemon Management** | | | |
-| Daemon startup | §9 | ✅ | daemon.py with WebSocket server | - |
+| Daemon startup | §9 | ✅ | daemon.py with WebSocket + idle + file watcher | - |
 | Daemon logging | §9 | ✅ | OSLog + file output | - |
 | Daemon monitoring | §9 | ⚠️ | Status available; no crash recovery | 7-8 |
 
@@ -211,20 +211,20 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Feature | PRD Ref | Status | Details | Week Due |
 |---------|---------|--------|---------|----------|
 | **Bootstrap Skills** | | | |
-| rest-endpoint-scaffold | §11.1 | ❌ | Not written | 5-6 |
-| test-setup | §11.1 | ❌ | Not written | 5-6 |
-| git-workflow | §11.1 | ❌ | Not written | 5-6 |
-| error-classification | §11.1 | ❌ | Not written | 5-6 |
-| dockerfile-generation | §11.1 | ❌ | Not written | 5-6 |
-| code-review-checklist | §11.1 | ❌ | Not written | 5-6 |
+| rest-endpoint-scaffold | §11.1 | ✅ | bootstrap/skills/coding/ SKILL.md written | 5-6 |
+| test-setup | §11.1 | ✅ | bootstrap/skills/coding/ SKILL.md written | 5-6 |
+| git-workflow | §11.1 | ✅ | bootstrap/skills/coding/ SKILL.md written | 5-6 |
+| error-classification | §11.1 | ✅ | bootstrap/skills/coding/ SKILL.md written | 5-6 |
+| dockerfile-generation | §11.1 | ✅ | bootstrap/skills/coding/ SKILL.md written | 5-6 |
+| code-review-checklist | §11.1 | ✅ | bootstrap/skills/coding/ SKILL.md written | 5-6 |
 | **Clone-Time Init** | | | |
 | Language detection | §11.2 | ✅ | Detects Node, Python, Rust, Go | - |
 | Framework detection | §11.2 | ✅ | Detects Flask, Django, Express, etc. | - |
 | Container template selection | §11.2 | ✅ | Selects based on detection | - |
-| Context L1 generation | §11.2 | ⚠️ | Basic structure detected | 5-6 |
-| Context L2 generation | §11.2 | ❌ | AST analysis missing | 5-6 |
-| Signature extraction (L3) | §11.2 | ⚠️ | Detection sketched | 5-6 |
-| Test baseline (L4) | §11.2 | ⚠️ | Can run tests; baseline not established | 5-6 |
+| Context L1 generation | §11.2 | ✅ | build_l1_repo_structure() in context_layers.py | 5-6 |
+| Context L2 generation | §11.2 | ✅ | build_l2_module_graph() with AST analysis | 5-6 |
+| Signature extraction (L3) | §11.2 | ✅ | build_l3_signatures() with Python AST | 5-6 |
+| Test baseline (L4) | §11.2 | ✅ | build_l4_test_quality() test scanner | 5-6 |
 | **Universal Heuristics** | | | |
 | Jest retry patterns | §11.3 | ❌ | Not formalized | 5-6 |
 | Node.js memory flags | §11.3 | ❌ | Not formalized | 5-6 |
@@ -255,9 +255,9 @@ This matrix tracks the implementation status of every feature mentioned in the J
 ## Summary Statistics
 
 ### By Status
-- ✅ **Fully Implemented**: 32 features
-- ⚠️ **Partially Implemented**: 27 features
-- ❌ **Not Started**: 68 features
+- ✅ **Fully Implemented**: 70 features
+- ⚠️ **Partially Implemented**: 15 features
+- ❌ **Not Started**: 42 features
 
 **Total**: 127 distinct features mapped
 
@@ -268,10 +268,10 @@ This matrix tracks the implementation status of every feature mentioned in the J
 - **Weeks 7-8**: 13 features (UI completion, Idle mode, Bootstrap)
 
 ### Completion Path
-1. Foundation (Learning + MCP): Weeks 1-2 → 35% → 45%
+1. Foundation (Learning + MCP): Weeks 1-2 → 35% → 45% ✅ MCP health done
 2. Intelligence (Model routing + Qwen3): Weeks 3-4 → 45% → 55%
-3. Knowledge (Skills + FSEvents + Spotlight): Weeks 5-6 → 55% → 65%
-4. UX + Optimization (UI + Idle): Weeks 7-8 → 65% → 75% (v2.0 complete)
+3. Knowledge (Skills + FSEvents + Spotlight): Weeks 5-6 → 55% → 65% ✅ Skills + context layers + file watcher done
+4. UX + Optimization (UI + Idle): Weeks 7-8 → 65% → 75% ✅ SwiftUI + idle mode done
 
 ---
 
@@ -331,6 +331,5 @@ Phase 4: Self-Extension (Weeks 19+)
 ---
 
 **Last Updated**: February 9, 2026
-**Codebase Version**: ~60% complete
+**Codebase Version**: v0.3.0 (~75% complete)
 **Next Review**: After Week 2 completion
-

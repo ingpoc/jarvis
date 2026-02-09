@@ -177,6 +177,10 @@ class MemoryStore:
         conn.commit()
         conn.close()
 
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get a new database connection."""
+        return sqlite3.connect(self.db_path)
+
     # --- Task management ---
 
     def create_task(self, task_id: str, description: str, project_path: str) -> Task:

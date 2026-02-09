@@ -1,4 +1,4 @@
-"""Jarvis daemon: persistent background process with WS + Slack + Voice."""
+"""Jarvis daemon: persistent background process with WS + Slack + Voice + Idle."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class JarvisDaemon:
-    """Long-running daemon: WebSocket bridge + optional Slack/Voice."""
+    """Long-running daemon: WebSocket bridge + optional Slack/Voice + Idle processing."""
 
     def __init__(self, project_path: str | None = None):
         ensure_jarvis_home()
@@ -27,6 +27,8 @@ class JarvisDaemon:
         self._ws_server: JarvisWSServer | None = None
         self._slack_bot = None
         self._voice_client = None
+        self._idle_processor = None
+        self._file_watcher = None
         self._running = False
         self._stop_event = asyncio.Event()
 
@@ -60,12 +62,55 @@ class JarvisDaemon:
             if quarantined:
                 logger.warning(f"Quarantined MCP servers: {', '.join(quarantined)}")
 
+        # Build context layers asynchronously for use in system prompt
+        try:
+            from jarvis.context_layers import build_context_layers
+            self.orchestrator._cached_context_layers = await build_context_layers(
+                self.orchestrator.project_path, ["L1", "L2"]
+            )
+            logger.info("Context layers L1-L2 built successfully")
+        except Exception as e:
+            logger.warning(f"Context layers build failed: {e}")
+
         # WebSocket server (always)
         self._ws_server = JarvisWSServer(
             event_collector=self.events,
             orchestrator=self.orchestrator,
         )
         await self._ws_server.start()
+
+        # File system watcher (for knowledge invalidation)
+        try:
+            from jarvis.fs_watcher import FileSystemWatcher
+            self._file_watcher = FileSystemWatcher(
+                project_path=self.orchestrator.project_path,
+                memory=self.orchestrator.memory,
+                poll_interval=self.config.idle.file_watcher_poll_interval,
+                debounce=self.config.idle.file_watcher_debounce,
+            )
+            await self._file_watcher.start()
+            logger.info("File watcher started")
+        except Exception as e:
+            logger.warning(f"File watcher failed to start: {e}")
+
+        # Idle mode processor (background tasks during inactivity)
+        if self.config.idle.enable_background_processing:
+            try:
+                from jarvis.idle_mode import IdleModeProcessor
+                self._idle_processor = IdleModeProcessor(
+                    memory=self.orchestrator.memory,
+                    project_path=self.orchestrator.project_path,
+                    idle_threshold_minutes=self.config.idle.idle_threshold_minutes,
+                )
+                # Connect file watcher changes to idle processor activity tracking
+                if self._file_watcher:
+                    self._file_watcher.add_change_callback(
+                        lambda _: self._idle_processor.record_activity()
+                    )
+                await self._idle_processor.start()
+                logger.info("Idle mode processor started")
+            except Exception as e:
+                logger.warning(f"Idle mode processor failed to start: {e}")
 
         # Slack bot (optional)
         if self.config.slack.enabled and self.config.slack.bot_token:
@@ -107,6 +152,15 @@ class JarvisDaemon:
             except Exception as e:
                 logger.error(f"Voice client failed to connect: {e}")
 
+        # Copy bootstrap skills on first daemon start
+        try:
+            from jarvis.skill_generator import copy_bootstrap_skills
+            copied = copy_bootstrap_skills()
+            if copied:
+                logger.info(f"Installed {len(copied)} bootstrap skills: {', '.join(copied)}")
+        except Exception as e:
+            logger.warning(f"Bootstrap skills install failed: {e}")
+
         self._running = True
         logger.info("Jarvis daemon started")
 
@@ -116,6 +170,18 @@ class JarvisDaemon:
     async def stop(self) -> None:
         """Gracefully stop all services."""
         logger.info("Jarvis daemon stopping")
+
+        if self._file_watcher:
+            try:
+                await self._file_watcher.stop()
+            except Exception as e:
+                logger.warning(f"File watcher stop error: {e}")
+
+        if self._idle_processor:
+            try:
+                await self._idle_processor.stop()
+            except Exception as e:
+                logger.warning(f"Idle processor stop error: {e}")
 
         if self._ws_server:
             await self._ws_server.stop()

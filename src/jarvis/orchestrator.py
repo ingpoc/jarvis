@@ -50,6 +50,7 @@ from jarvis.trust import TrustEngine
 from jarvis.agents import MultiAgentPipeline
 from jarvis.model_router import get_model_router
 from jarvis.self_learning import learn_from_task, get_relevant_learnings, format_learning_for_context
+from jarvis.context_layers import build_context_layers, format_context_for_prompt
 
 
 def _is_tool_error(tool_name: str, tool_response: str) -> bool:
@@ -147,6 +148,28 @@ class JarvisOrchestrator:
                 f"Tasks remaining: {', '.join(last_summary['tasks_remaining'])}"
             )
 
+        # Load context layers (L1-L4) for project awareness
+        context_layers_text = ""
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                # If we're already in an async context, use cached layers
+                if hasattr(self, "_cached_context_layers") and self._cached_context_layers:
+                    context_layers_text = (
+                        "\n\n## Project Context (L1-L4)\n"
+                        + format_context_for_prompt(self._cached_context_layers, max_length=2000)
+                    )
+            except RuntimeError:
+                # No event loop running, build synchronously
+                layers = asyncio.run(build_context_layers(self.project_path, ["L1"]))
+                context_layers_text = (
+                    "\n\n## Project Context (L1)\n"
+                    + format_context_for_prompt(layers, max_length=1000)
+                )
+        except Exception:
+            pass  # Context layers are supplementary, don't block
+
         # Load learned patterns
         patterns = self.memory.get_patterns(self.project_path)
         patterns_text = ""
@@ -225,7 +248,7 @@ Turns: {budget_status['turns']}
 6. If tests pass: commit changes (if T2+)
 7. Clean up containers
 8. Report results
-{jarvis_md}{continuity}{patterns_text}{learnings_text}"""
+{jarvis_md}{continuity}{context_layers_text}{patterns_text}{learnings_text}"""
 
     def _get_tier_capabilities(self, tier: int) -> str:
         capabilities = {
@@ -457,6 +480,37 @@ Turns: {budget_status['turns']}
 
         return {}
 
+    async def _post_message_hook(self, input_data: dict, context: dict) -> dict:
+        """Hook: track token usage and costs from ResultMessage events."""
+        message_type = input_data.get("type", "")
+
+        if message_type == "result":
+            cost_usd = input_data.get("total_cost_usd", 0.0)
+            num_turns = input_data.get("num_turns", 0)
+            input_tokens = input_data.get("usage", {}).get("input_tokens", 0)
+            output_tokens = input_data.get("usage", {}).get("output_tokens", 0)
+
+            # Record token usage for analytics
+            task_id = context.get("task_id", "unknown")
+            try:
+                self.memory.record_token_usage(
+                    session_id=self._session_id or "unknown",
+                    task_id=task_id,
+                    model=self.config.models.executor,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
+                    project_path=self.project_path,
+                )
+            except Exception:
+                pass  # Token tracking is best-effort
+
+            # Record cost in budget controller
+            if cost_usd > 0:
+                self.budget.record_cost(cost_usd, num_turns)
+
+        return {}
+
     def _build_options(self) -> ClaudeAgentOptions:
         """Build Agent SDK options with all Jarvis integrations."""
         options = ClaudeAgentOptions(
@@ -479,6 +533,9 @@ Turns: {budget_status['turns']}
                 ],
                 "PostToolUse": [
                     HookMatcher(hooks=[self._post_tool_hook]),
+                ],
+                "PostMessage": [
+                    HookMatcher(hooks=[self._post_message_hook]),
                 ],
             },
         )
@@ -692,16 +749,41 @@ Turns: {budget_status['turns']}
         self._active_containers.clear()
 
     async def get_status(self) -> dict:
-        """Get current Jarvis status."""
+        """Get current Jarvis status.
+
+        Returns a dict compatible with the SwiftUI JarvisStatusResponse.
+        """
         trust_status = self.trust.status(self.project_path)
         budget_status = self.budget.summary()
         active_tasks = self.memory.list_tasks(self.project_path, status="in_progress")
         recent_tasks = self.memory.list_tasks(self.project_path)[:5]
 
+        # Derive overall status for SwiftUI
+        if active_tasks:
+            overall_status = "building"
+        elif any(True for _ in self.memory.list_tasks(self.project_path, status="failed")):
+            overall_status = "error"
+        else:
+            overall_status = "idle"
+
         return {
+            "status": overall_status,
             "project": self.project_path,
-            "trust": trust_status,
-            "budget": budget_status,
+            "trust": {
+                "tier": trust_status["tier"],
+                "tier_name": trust_status["tier_name"],
+                "successful_tasks": trust_status["successful_tasks"],
+                "total_tasks": trust_status["total_tasks"],
+                "rollbacks": trust_status["rollbacks"],
+                "tasks_until_upgrade": trust_status["tasks_until_upgrade"],
+            },
+            "budget": {
+                "session": budget_status["session"],
+                "daily": budget_status["daily"],
+                "turns": budget_status["turns"],
+            },
+            "current_session": self._session_id,
+            "current_feature": active_tasks[0].description if active_tasks else None,
             "active_tasks": [{"id": t.id, "description": t.description} for t in active_tasks],
             "recent_tasks": [
                 {

@@ -302,8 +302,9 @@ async def generate_skills_from_patterns(
 async def validate_skill(skill_name: str, memory: MemoryStore) -> dict[str, Any]:
     """Validate a generated skill against execution history.
 
-    This is a stub - full implementation would test the skill against
-    historical execution records.
+    Loads the skill file, finds matching execution records, and checks
+    whether the pattern described in the skill matches successful
+    resolutions in the execution history.
 
     Args:
         skill_name: Name of the skill to validate
@@ -312,17 +313,124 @@ async def validate_skill(skill_name: str, memory: MemoryStore) -> dict[str, Any]
     Returns:
         dict with validation results
     """
-    # TODO: Implement skill validation
-    # - Load skill from file
-    # - Find matching execution records
-    # - Test skill prompt against records
-    # - Calculate success rate
-    # - Return validation metrics
+    # Load skill file
+    skills_dir = Path.home() / ".claude" / "skills"
+    skill_path = skills_dir / f"{skill_name}.md"
+
+    if not skill_path.exists():
+        return {
+            "skill_name": skill_name,
+            "validated": False,
+            "success_rate": 0.0,
+            "test_count": 0,
+            "errors": [f"Skill file not found: {skill_path}"],
+        }
+
+    skill_content = skill_path.read_text()
+
+    # Extract pattern hash from skill content
+    pattern_hash = None
+    for line in skill_content.splitlines():
+        if line.startswith("Pattern hash:"):
+            pattern_hash = line.split(":", 1)[1].strip()
+            break
+
+    if not pattern_hash:
+        return {
+            "skill_name": skill_name,
+            "validated": False,
+            "success_rate": 0.0,
+            "test_count": 0,
+            "errors": ["No pattern hash found in skill file"],
+        }
+
+    # Find the skill candidate record
+    candidates = memory.get_skill_candidates(min_occurrences=1, promoted=True)
+    matching_candidate = None
+    for candidate in candidates:
+        if candidate["pattern_hash"] == pattern_hash:
+            matching_candidate = candidate
+            break
+
+    if not matching_candidate:
+        return {
+            "skill_name": skill_name,
+            "validated": False,
+            "success_rate": 0.0,
+            "test_count": 0,
+            "errors": ["No matching skill candidate found in database"],
+        }
+
+    # Get execution records for the example tasks
+    example_tasks = matching_candidate.get("example_tasks", [])
+    successful = 0
+    total = 0
+
+    for task_id in example_tasks:
+        records = memory.get_execution_records(task_id=task_id)
+        if not records:
+            continue
+
+        total += 1
+        # Check if the task completed successfully
+        # (no errors in the last few records)
+        last_records = records[-3:] if len(records) >= 3 else records
+        has_errors = any(
+            r.get("error_message") or r.get("exit_code", 0) != 0
+            for r in last_records
+        )
+        if not has_errors:
+            successful += 1
+
+    success_rate = (successful / total) if total > 0 else 0.0
+    validated = success_rate >= 0.6 and total >= 2
 
     return {
         "skill_name": skill_name,
-        "validated": False,
-        "success_rate": 0.0,
-        "test_count": 0,
-        "errors": ["Validation not yet implemented"],
+        "validated": validated,
+        "success_rate": success_rate,
+        "test_count": total,
+        "successful": successful,
+        "pattern_hash": pattern_hash,
+        "errors": [] if validated else [
+            f"Validation threshold not met: {success_rate:.0%} success rate "
+            f"({successful}/{total} tasks)"
+        ],
     }
+
+
+def copy_bootstrap_skills(project_path: str | None = None) -> list[str]:
+    """Copy bootstrap skills to the user's skills directory.
+
+    Copies from bootstrap/skills/coding/ to ~/.claude/skills/
+    without overwriting existing files.
+
+    Args:
+        project_path: Optional project path for project-local skills
+
+    Returns:
+        List of skill names that were copied
+    """
+    import shutil
+
+    # Source: bootstrap skills bundled with Jarvis
+    bootstrap_dir = Path(__file__).parent.parent.parent / "bootstrap" / "skills" / "coding"
+    if not bootstrap_dir.exists():
+        logger.warning(f"Bootstrap skills directory not found: {bootstrap_dir}")
+        return []
+
+    # Destination: user's skills directory
+    skills_dir = Path.home() / ".claude" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+
+    copied = []
+    for skill_file in bootstrap_dir.glob("*.md"):
+        dest = skills_dir / skill_file.name
+        if not dest.exists():
+            shutil.copy2(skill_file, dest)
+            copied.append(skill_file.stem)
+            logger.info(f"Copied bootstrap skill: {skill_file.stem}")
+        else:
+            logger.debug(f"Bootstrap skill already exists: {skill_file.stem}")
+
+    return copied

@@ -42,6 +42,7 @@ from jarvis.memory import MemoryStore, generate_jarvis_md
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.container_templates import detect_template, list_templates as list_all_templates, get_template
 from jarvis.trust import TrustEngine, TrustTier
+from jarvis.skill_generator import copy_bootstrap_skills
 
 console = Console()
 
@@ -839,6 +840,221 @@ def daemon(install, uninstall):
     from jarvis.daemon import JarvisDaemon
     d = JarvisDaemon()
     _run_async(d.start())
+
+
+# --- Learnings management ---
+
+
+@cli.command()
+@click.option("--limit", "-n", default=20, help="Number of learnings to show")
+@click.option("--all-confidence", "-a", is_flag=True, help="Show all confidence levels")
+def learnings(limit, all_confidence):
+    """Show learned error-fix patterns.
+
+    Examples:
+        jarvis learnings           # high-confidence learnings
+        jarvis learnings -a        # all learnings
+        jarvis learnings -n 50     # last 50 learnings
+    """
+    memory = MemoryStore()
+    min_conf = 0.0 if all_confidence else 0.5
+
+    items = memory.get_learnings(
+        project_path=os.getcwd(),
+        min_confidence=min_conf,
+        limit=limit,
+    )
+
+    if not items:
+        console.print("[dim]No learnings yet. Run some tasks to build knowledge.[/]")
+        return
+
+    table = Table(title=f"Learned Patterns ({len(items)})")
+    table.add_column("ID", style="dim")
+    table.add_column("Error Pattern")
+    table.add_column("Fix")
+    table.add_column("Confidence")
+    table.add_column("Count")
+    table.add_column("Revalidate")
+
+    for l in items:
+        conf = l["confidence"]
+        conf_color = "green" if conf >= 0.7 else ("yellow" if conf >= 0.4 else "red")
+        reval = "[yellow]yes[/]" if l.get("needs_revalidation") else ""
+        table.add_row(
+            str(l["id"]),
+            l["error_message"][:50],
+            l["fix_description"][:40],
+            f"[{conf_color}]{conf:.2f}[/]",
+            str(l["occurrence_count"]),
+            reval,
+        )
+
+    console.print(table)
+
+
+# --- Skills management ---
+
+
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def skills(ctx):
+    """Manage auto-generated and bootstrap skills."""
+    if ctx.invoked_subcommand is None:
+        _list_skills()
+
+
+def _list_skills():
+    """List all available skills."""
+    skills_dir = Path.home() / ".claude" / "skills"
+    if not skills_dir.exists():
+        console.print("[dim]No skills directory. Run: jarvis skills bootstrap[/]")
+        return
+
+    skill_files = list(skills_dir.glob("*.md"))
+    if not skill_files:
+        console.print("[dim]No skills installed. Run: jarvis skills bootstrap[/]")
+        return
+
+    table = Table(title=f"Installed Skills ({len(skill_files)})")
+    table.add_column("Name", style="cyan")
+    table.add_column("Description")
+    table.add_column("Confidence")
+    table.add_column("Type")
+
+    for sf in sorted(skill_files):
+        content = sf.read_text()
+        # Parse frontmatter
+        desc = ""
+        conf = ""
+        skill_type = "custom"
+        for line in content.splitlines():
+            if line.startswith("description:"):
+                desc = line.split(":", 1)[1].strip()
+            elif line.startswith("confidence:"):
+                conf = line.split(":", 1)[1].strip()
+            elif line.startswith("auto_generated:"):
+                val = line.split(":", 1)[1].strip()
+                skill_type = "auto" if val == "true" else "bootstrap"
+
+        table.add_row(sf.stem, desc[:50], conf, skill_type)
+
+    console.print(table)
+
+
+@skills.command("bootstrap")
+def skills_bootstrap():
+    """Install bootstrap skills for coding domain."""
+    copied = copy_bootstrap_skills()
+    if copied:
+        console.print(f"[green]Installed {len(copied)} bootstrap skills:[/]")
+        for name in copied:
+            console.print(f"  - {name}")
+    else:
+        console.print("[dim]All bootstrap skills already installed.[/]")
+
+
+@skills.command("generate")
+def skills_generate():
+    """Generate skills from detected patterns."""
+    memory = MemoryStore()
+
+    async def _gen():
+        from jarvis.skill_generator import generate_skills_from_patterns
+        return await generate_skills_from_patterns(
+            memory=memory,
+            project_path=os.getcwd(),
+        )
+
+    result = _run_async(_gen())
+    generated = result.get("skills_generated", 0)
+    candidates = result.get("candidates_found", 0)
+
+    if generated > 0:
+        console.print(f"[green]Generated {generated} skills from {candidates} candidates:[/]")
+        for s in result.get("skills_saved", []):
+            console.print(f"  - {s['name']} (confidence: {s['confidence']:.2f})")
+    elif candidates > 0:
+        console.print(f"[yellow]Found {candidates} candidates but no new skills generated.[/]")
+    else:
+        console.print("[dim]No skill candidates ready (need 3+ occurrences of a pattern).[/]")
+
+
+@skills.command("validate")
+@click.argument("name")
+def skills_validate(name):
+    """Validate a skill against execution history."""
+    memory = MemoryStore()
+
+    async def _val():
+        from jarvis.skill_generator import validate_skill
+        return await validate_skill(name, memory)
+
+    result = _run_async(_val())
+    if result.get("validated"):
+        console.print(
+            f"[green]Skill '{name}' validated:[/] "
+            f"{result['success_rate']:.0%} success rate "
+            f"({result['successful']}/{result['test_count']} tasks)"
+        )
+    else:
+        console.print(f"[red]Skill '{name}' validation failed:[/]")
+        for err in result.get("errors", []):
+            console.print(f"  - {err}")
+
+
+# --- Context layers ---
+
+
+@cli.command()
+@click.option("--layer", "-l", default=None, help="Specific layer (L1-L4)")
+@click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
+def context(layer, json_output):
+    """Show project context layers (L1-L4).
+
+    Examples:
+        jarvis context          # summary of all layers
+        jarvis context -l L1    # repo structure only
+        jarvis context -j       # full JSON output
+    """
+    from jarvis.context_layers import build_context_layers, format_context_for_prompt
+
+    layers_to_build = [layer] if layer else None
+
+    async def _build():
+        return await build_context_layers(os.getcwd(), layers_to_build)
+
+    result = _run_async(_build())
+
+    if json_output:
+        console.print_json(json.dumps(result, indent=2, default=str))
+    else:
+        formatted = format_context_for_prompt(result)
+        console.print(Panel(formatted, title="Project Context", border_style="blue"))
+
+        # Show per-layer stats
+        for layer_name, data in result.items():
+            if layer_name == "L1":
+                console.print(f"  L1 Repo: {', '.join(data.get('languages', []))} | "
+                              f"{data.get('total_files', 0)} files")
+            elif layer_name == "L2":
+                console.print(f"  L2 Modules: {len(data.get('modules', {}))} modules, "
+                              f"{len(data.get('import_edges', []))} import edges")
+            elif layer_name == "L3":
+                console.print(f"  L3 Signatures: {data.get('total_signatures', 0)} signatures")
+            elif layer_name == "L4":
+                console.print(f"  L4 Tests: {data.get('test_count', 0)} tests in "
+                              f"{len(data.get('test_files', []))} files")
+
+
+# --- Idle mode ---
+
+
+@cli.command()
+def idle_status():
+    """Show idle mode processor status."""
+    console.print("[dim]Idle mode stats are available via the daemon (jarvis daemon).[/]")
+    console.print("[dim]Use 'jarvis status' to see overall system state.[/]")
 
 
 def main():
