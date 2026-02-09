@@ -48,7 +48,7 @@ from jarvis.notifications import (
 from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
 from jarvis.agents import MultiAgentPipeline
-from jarvis.self_learning import learn_from_task
+from jarvis.self_learning import learn_from_task, get_relevant_learnings, format_learning_for_context
 
 
 class JarvisOrchestrator:
@@ -109,6 +109,18 @@ class JarvisOrchestrator:
                 for p in patterns[:10]
             )
 
+        # Load high-confidence learnings (error-fix patterns)
+        learnings = self.memory.get_learnings(
+            project_path=self.project_path,
+            min_confidence=0.7,
+            limit=5,
+        )
+        learnings_text = ""
+        if learnings:
+            learnings_text = "\n\n## Known Error-Fix Patterns"
+            for learning in learnings:
+                learnings_text += f"\n{format_learning_for_context(learning)}"
+
         # Decision traces section
         traces_text = ""
         # (traces injected at run_task time via context)
@@ -166,7 +178,7 @@ Turns: {budget_status['turns']}
 6. If tests pass: commit changes (if T2+)
 7. Clean up containers
 8. Report results
-{jarvis_md}{continuity}{patterns_text}"""
+{jarvis_md}{continuity}{patterns_text}{learnings_text}"""
 
     def _get_tier_capabilities(self, tier: int) -> str:
         capabilities = {
