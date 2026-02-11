@@ -152,6 +152,22 @@ class JarvisWSServer:
                 else:
                     result = {"error": "Orchestrator not connected"}
 
+            elif action == "get_containers":
+                from jarvis.container_tools import _run_container_cmd
+                cmd_result = await _run_container_cmd("list", "--format", "json", timeout=10)
+                if cmd_result["exit_code"] == 0 and cmd_result["stdout"]:
+                    try:
+                        containers = json.loads(cmd_result["stdout"])
+                        jarvis_containers = [
+                            c for c in containers
+                            if c.get("configuration", {}).get("id", "").startswith("jarvis-")
+                        ]
+                        result = {"containers": jarvis_containers}
+                    except json.JSONDecodeError:
+                        result = {"containers": []}
+                else:
+                    result = {"containers": []}
+
             else:
                 result = {"error": f"Unknown action: {action}"}
 

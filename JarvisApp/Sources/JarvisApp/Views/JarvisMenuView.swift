@@ -1,13 +1,30 @@
 import SwiftUI
 
+enum MenuView: String, CaseIterable {
+    case timeline = "Timeline"
+    case commandCenter = "Command Center"
+}
+
 struct JarvisMenuView: View {
     @Environment(WebSocketClient.self) private var ws
+    @State private var selectedView: MenuView = .timeline
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             StatusBadge()
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
+
+            Divider()
+
+            Picker("View", selection: $selectedView) {
+                ForEach(MenuView.allCases, id: \.self) { view in
+                    Text(view.rawValue).tag(view)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
 
             Divider()
 
@@ -25,14 +42,21 @@ struct JarvisMenuView: View {
                 Divider()
             }
 
-            Text("Timeline")
-                .font(.headline)
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 4)
+            switch selectedView {
+            case .timeline:
+                Text("Timeline")
+                    .font(.headline)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 4)
 
-            TimelineView()
-                .frame(maxHeight: 300)
+                TimelineView()
+                    .frame(maxHeight: 300)
+
+            case .commandCenter:
+                CommandCenterView()
+                    .frame(maxHeight: 380)
+            }
 
             Divider()
 

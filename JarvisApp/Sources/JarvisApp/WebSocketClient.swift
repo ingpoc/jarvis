@@ -7,6 +7,8 @@ final class WebSocketClient {
     var status: JarvisStatus = .idle
     var events: [TimelineEvent] = []
     var pendingApprovals: [TimelineEvent] = []
+    var containers: [ContainerInfo] = []
+    var activeTasks: [TaskProgress] = []
 
     private var task: URLSessionWebSocketTask?
     private var session: URLSession = .shared
@@ -40,6 +42,10 @@ final class WebSocketClient {
         guard let json = try? JSONSerialization.data(withJSONObject: payload),
               let text = String(data: json, encoding: .utf8) else { return }
         task?.send(.string(text)) { _ in }
+    }
+
+    func refreshContainers() async {
+        sendCommand(action: "get_containers")
     }
 
     private func receiveLoop() {
@@ -105,6 +111,12 @@ final class WebSocketClient {
             if let statusData = try? JSONSerialization.data(withJSONObject: data),
                let resp = try? JSONDecoder().decode(JarvisStatusResponse.self, from: statusData) {
                 status = resp.status
+            }
+        }
+        if action == "get_containers", let data = json["data"] as? [String: Any] {
+            if let containersData = try? JSONSerialization.data(withJSONObject: data),
+               let resp = try? JSONDecoder().decode(ContainersResponse.self, from: containersData) {
+                containers = resp.containers
             }
         }
     }
