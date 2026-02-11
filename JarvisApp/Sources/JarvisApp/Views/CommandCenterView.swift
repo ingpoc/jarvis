@@ -43,8 +43,24 @@ struct CommandCenterView: View {
                     ws.sendCommand(action: "get_timeline")
                 }
                 .buttonStyle(.bordered)
+                .disabled(ws.isLoading)
+
+                if ws.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
 
                 Spacer()
+
+                if let error = ws.lastError {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(error)
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.red)
+                    .font(.caption)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -70,10 +86,10 @@ struct ContainerListView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         ForEach(containers) { container in
-                            HStack {
-                                Circle()
-                                    .fill(container.statusColor)
-                                    .frame(width: 8, height: 8)
+                            HStack(spacing: 12) {
+                                Image(systemName: container.statusIcon)
+                                    .foregroundStyle(container.statusColor)
+                                    .font(.caption)
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(container.displayName)
@@ -86,10 +102,10 @@ struct ContainerListView: View {
 
                                     if let cpus = container.cpus, let memory = container.memory {
                                         HStack(spacing: 4) {
-                                            Image(systemName: "cpu")
+                                            Image(systemName: "cpu.fill")
                                             Text("\(cpus)")
-                                            Text("•")
-                                            Image(systemName: "memorychip")
+                                            Text("·")
+                                            Image(systemName: "memorychip.fill")
                                             Text(memory)
                                         }
                                         .font(.caption2)
@@ -101,6 +117,9 @@ struct ContainerListView: View {
                             }
                             .padding(.horizontal, 16)
                             .padding(.vertical, 6)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel(container.displayName)
+                            .accessibilityValue("\(container.status), \(container.image)")
                         }
                     }
                     .padding(.vertical, 8)
@@ -134,15 +153,18 @@ struct ToolFeedView: View {
                                     .foregroundStyle(.secondary)
                                     .frame(width: 64, alignment: .leading)
 
-                                Circle()
-                                    .fill(colorForType(event.eventType))
-                                    .frame(width: 6, height: 6)
+                                Image(systemName: "wrench.and.screwdriver")
+                                    .font(.caption2)
+                                    .foregroundStyle(EventColors.color(for: event.eventType))
 
                                 Text(event.summary)
                                     .font(.caption)
                                     .lineLimit(2)
                             }
                             .padding(.horizontal, 16)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel("Tool use at \(event.timeString)")
+                            .accessibilityValue(event.summary)
                         }
                     }
                     .padding(.vertical, 6)
@@ -150,15 +172,6 @@ struct ToolFeedView: View {
             }
         }
         .frame(maxHeight: 320)
-    }
-
-    private func colorForType(_ type: String) -> Color {
-        switch type {
-        case "tool_use": .blue
-        case "error", "failure": .red
-        case "success", "complete": .green
-        default: .secondary
-        }
     }
 }
 
@@ -200,9 +213,9 @@ struct TaskProgressView: View {
                                     .tint(task.statusColor)
 
                                 HStack {
-                                    Circle()
-                                        .fill(task.statusColor)
-                                        .frame(width: 6, height: 6)
+                                    Image(systemName: task.statusIcon)
+                                        .foregroundStyle(task.statusColor)
+                                        .font(.caption2)
 
                                     Text(task.status)
                                         .font(.caption2)
@@ -221,6 +234,9 @@ struct TaskProgressView: View {
                             .padding(.vertical, 8)
                             .background(Color.secondary.opacity(0.1))
                             .cornerRadius(6)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel("Task: \(task.description)")
+                            .accessibilityValue("\(task.status), \(task.percentComplete ?? 0)% complete")
                         }
                     }
                     .padding(.vertical, 8)

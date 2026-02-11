@@ -16,4 +16,10 @@ struct JarvisApp: App {
         }
         .menuBarExtraStyle(.window)
     }
+
+    init() {
+        Task {
+            await NotificationManager.shared.requestAuthorization()
+        }
+    }
 }

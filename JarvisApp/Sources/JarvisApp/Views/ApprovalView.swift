@@ -34,13 +34,13 @@ struct ApprovalView: View {
     }
 
     private func approve(_ event: TimelineEvent) {
-        let taskId = event.taskId ?? "\(event.id ?? 0)"
+        let taskId = event.taskId ?? event.id
         ws.sendCommand(action: "approve", data: ["task_id": taskId])
         ws.pendingApprovals.removeAll { $0.id == event.id }
     }
 
     private func deny(_ event: TimelineEvent) {
-        let taskId = event.taskId ?? "\(event.id ?? 0)"
+        let taskId = event.taskId ?? event.id
         ws.sendCommand(action: "deny", data: ["task_id": taskId])
         ws.pendingApprovals.removeAll { $0.id == event.id }
     }

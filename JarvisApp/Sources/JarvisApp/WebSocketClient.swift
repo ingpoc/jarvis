@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 
 @Observable
 final class WebSocketClient {
@@ -9,17 +10,30 @@ final class WebSocketClient {
     var pendingApprovals: [TimelineEvent] = []
     var containers: [ContainerInfo] = []
     var activeTasks: [TaskProgress] = []
+    var isLoading = false
+    var lastError: String?
 
     private var task: URLSessionWebSocketTask?
     private var session: URLSession = .shared
-    private let url = URL(string: "ws://127.0.0.1:9847")!
+    private let url: URL
     private var reconnectWork: DispatchWorkItem?
+    private let maxEvents = 200
+    private let logger = Logger(subsystem: "com.jarvis.app", category: "WebSocket")
+
+    init() {
+        guard let url = URL(string: "ws://127.0.0.1:9847") else {
+            fatalError("Invalid WebSocket URL configuration: ws://127.0.0.1:9847")
+        }
+        self.url = url
+    }
 
     func connect() {
         disconnect()
         task = session.webSocketTask(with: url)
         task?.resume()
-        isConnected = true
+        DispatchQueue.main.async { [weak self] in
+            self?.isConnected = true
+        }
         receiveLoop()
         sendCommand(action: "get_status")
     }
@@ -28,7 +42,9 @@ final class WebSocketClient {
         reconnectWork?.cancel()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
-        isConnected = false
+        DispatchQueue.main.async { [weak self] in
+            self?.isConnected = false
+        }
     }
 
     func sendCommand(action: String, data: [String: Any] = [:]) {
@@ -41,10 +57,20 @@ final class WebSocketClient {
         }
         guard let json = try? JSONSerialization.data(withJSONObject: payload),
               let text = String(data: json, encoding: .utf8) else { return }
-        task?.send(.string(text)) { _ in }
+        task?.send(.string(text)) { [weak self] error in
+            if let error = error {
+                self?.logger.error("WebSocket send error: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self?.isConnected = false
+                    self?.lastError = "Send failed: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     func refreshContainers() async {
+        isLoading = true
+        defer { isLoading = false }
         sendCommand(action: "get_containers")
     }
 
@@ -55,9 +81,11 @@ final class WebSocketClient {
             case .success(let message):
                 self.handleMessage(message)
                 self.receiveLoop()
-            case .failure:
+            case .failure(let error):
+                self.logger.error("WebSocket receive error: \(error.localizedDescription)")
                 DispatchQueue.main.async {
                     self.isConnected = false
+                    self.lastError = "Connection error: \(error.localizedDescription)"
                     self.scheduleReconnect()
                 }
             }
@@ -92,16 +120,35 @@ final class WebSocketClient {
     }
 
     private func handleEvent(_ data: [String: Any]) {
-        guard let eventData = try? JSONSerialization.data(withJSONObject: data),
-              let event = try? JSONDecoder().decode(TimelineEvent.self, from: eventData) else { return }
-
-        events.insert(event, at: 0)
-        if events.count > 200 {
-            events = Array(events.prefix(200))
+        guard let eventData = try? JSONSerialization.data(withJSONObject: data) else {
+            logger.error("Failed to serialize event data")
+            return
         }
 
-        if event.eventType == "approval_needed" {
-            pendingApprovals.insert(event, at: 0)
+        do {
+            let event = try JSONDecoder().decode(TimelineEvent.self, from: eventData)
+            // O(1) append instead of O(n) insert
+            events.append(event)
+            if events.count > maxEvents {
+                events.removeFirst(events.count - maxEvents)
+            }
+
+            if event.eventType == "approval_needed" {
+                pendingApprovals.append(event)
+                if pendingApprovals.count > 50 {
+                    pendingApprovals.removeFirst(pendingApprovals.count - 50)
+                }
+                // Send notification for approval
+                Task { @MainActor in
+                    NotificationManager.shared.notifyApprovalNeeded(
+                        summary: event.summary,
+                        taskId: event.taskId ?? event.id
+                    )
+                }
+            }
+        } catch {
+            logger.error("Failed to decode TimelineEvent: \(error.localizedDescription)")
+            lastError = "Invalid event data from server"
         }
     }
 

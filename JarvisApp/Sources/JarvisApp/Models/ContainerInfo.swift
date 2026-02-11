@@ -1,4 +1,4 @@
-import SwiftUI
+import Foundation
 
 struct ContainerInfo: Identifiable, Codable {
     let id: String
@@ -8,15 +8,6 @@ struct ContainerInfo: Identifiable, Codable {
     let cpus: Int?
     let memory: String?
     let taskId: String?
-
-    var statusColor: Color {
-        switch status.lowercased() {
-        case "running": .green
-        case "stopped", "exited": .red
-        case "paused": .yellow
-        default: .secondary
-        }
-    }
 
     var displayName: String {
         name.isEmpty ? id : name
@@ -37,20 +28,6 @@ struct TaskProgress: Identifiable, Codable {
     let costUsd: Double
 
     var id: String { taskId }
-
-    var statusColor: Color {
-        switch status.lowercased() {
-        case "running", "in_progress": .blue
-        case "completed", "success": .green
-        case "failed", "error": .red
-        case "pending", "queued": .yellow
-        default: .secondary
-        }
-    }
-
-    var progressValue: Double {
-        Double(percentComplete ?? 0) / 100.0
-    }
 
     enum CodingKeys: String, CodingKey {
         case taskId = "task_id"

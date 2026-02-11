@@ -1,4 +1,4 @@
-import SwiftUI
+import Foundation
 
 enum JarvisStatus: String, Codable {
     case idle
@@ -6,16 +6,6 @@ enum JarvisStatus: String, Codable {
     case testing
     case error
     case waitingApproval = "waiting_approval"
-
-    var color: Color {
-        switch self {
-        case .idle: .green
-        case .building: .blue
-        case .testing: .yellow
-        case .error: .red
-        case .waitingApproval: .orange
-        }
-    }
 
     var label: String {
         switch self {
@@ -26,8 +16,6 @@ enum JarvisStatus: String, Codable {
         case .waitingApproval: "Waiting Approval"
         }
     }
-
-    var iconName: String { "brain.head.profile" }
 }
 
 struct JarvisStatusResponse: Codable {

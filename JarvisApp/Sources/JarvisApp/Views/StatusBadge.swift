@@ -5,9 +5,9 @@ struct StatusBadge: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(ws.status.color)
-                .frame(width: 12, height: 12)
+            Image(systemName: ws.status.iconName)
+                .foregroundStyle(ws.status.color)
+                .font(.title3)
 
             Text(ws.status.label)
                 .font(.title3)
@@ -16,14 +16,25 @@ struct StatusBadge: View {
             Spacer()
 
             if ws.isConnected {
-                Text("Connected")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Connected")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } else {
-                Text("Disconnected")
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                HStack(spacing: 4) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                    Text("Disconnected")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Jarvis status")
+        .accessibilityValue("\(ws.status.label), \(ws.isConnected ? "Connected" : "Disconnected")")
     }
 }

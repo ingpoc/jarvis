@@ -20,10 +20,9 @@ struct TimelineView: View {
                                 .foregroundStyle(.secondary)
                                 .frame(width: 64, alignment: .leading)
 
-                            Text(event.eventType)
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(colorForType(event.eventType))
+                            Image(systemName: iconForType(event.eventType))
+                                .font(.caption2)
+                                .foregroundStyle(EventColors.color(for: event.eventType))
                                 .frame(width: 80, alignment: .leading)
 
                             Text(event.summary)
@@ -38,14 +37,19 @@ struct TimelineView: View {
         }
     }
 
-    private func colorForType(_ type: String) -> Color {
+    private func iconForType(_ type: String) -> String {
         switch type {
-        case "approval_needed": .orange
-        case "error", "failure": .red
-        case "success", "complete": .green
-        case "build_start", "build_end": .blue
-        case "test_start", "test_end": .yellow
-        default: .primary
+        case "tool_use": return "wrench.and.screwdriver"
+        case "approval_needed": return "hand.raised.fill"
+        case "error", "failure": return "xmark.circle.fill"
+        case "success", "complete": return "checkmark.circle.fill"
+        case "build_start": return "hammer.fill"
+        case "build_end": return "hammer"
+        case "test_start": return "flask.fill"
+        case "test_end": return "flask"
+        case "task_start": return "play.circle.fill"
+        case "task_complete": return "checkmark.seal.fill"
+        default: return "circle.fill"
         }
     }
 }
