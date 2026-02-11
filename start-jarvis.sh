@@ -84,9 +84,82 @@ fi
 echo ""
 echo -e "${GREEN}✓ Jarvis is running!${NC}"
 echo ""
-echo "Logs:"
-echo "  tunnel:  tail -f $LOG_DIR/tunnel.log"
-echo "  daemon:  tail -f $LOG_DIR/daemon.log"
-echo "  menubar: tail -f $LOG_DIR/menubar.log"
+
+# Open log viewer terminal
+echo -e "${BLUE}◆ Opening log viewer terminal...${NC}"
+
+# Create a script for the log viewer terminal
+cat > "$PID_DIR/log_viewer.sh" << 'EOF'
+#!/bin/bash
+LOG_DIR="$HOME/.jarvis/logs"
+
+# Color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+echo -e "${BLUE}=== Jarvis Log Viewer ===${NC}"
+echo -e "${YELLOW}Press Ctrl+C to close log viewer (Jarvis continues running)${NC}"
 echo ""
+
+# Track line counts for each log file
+declare -A line_counts
+for log in daemon.log menubar.log tunnel.log; do
+    if [ -f "$LOG_DIR/$log" ]; then
+        line_counts[$log]=$(wc -l < "$LOG_DIR/$log")
+    fi
+done
+
+while true; do
+    # Check each log file for new lines
+    for log in daemon.log menubar.log tunnel.log; do
+        log_file="$LOG_DIR/$log"
+        if [ -f "$log_file" ]; then
+            current_lines=$(wc -l < "$log_file")
+            old_lines=${line_counts[$log]:-0}
+
+            if [ $current_lines -gt $old_lines ]; then
+                # Display new lines with color coding
+                tail -n +$((old_lines + 1)) "$log_file" | while IFS= read -r line; do
+                    # Color code based on content
+                    if echo "$line" | grep -qi "error\|exception\|failed\|fatal"; then
+                        echo -e "${RED}[$log]${NC} $line"
+                    elif echo "$line" | grep -qi "warn\|warning"; then
+                        echo -e "${YELLOW}[$log]${NC} $line"
+                    elif echo "$line" | grep -qi "info"; then
+                        echo -e "${GREEN}[$log]${NC} $line"
+                    elif echo "$line" | grep -qi "task.*complete\|success\|finished"; then
+                        echo -e "${CYAN}[$log]${NC} $line"
+                    elif echo "$line" | grep -qi "task.*start\|starting\|running"; then
+                        echo -e "${BLUE}[$log]${NC} $line"
+                    else
+                        echo -e "[$log] $line"
+                    fi
+                done
+                line_counts[$log]=$current_lines
+            fi
+        fi
+    done
+    sleep 0.5
+done
+EOF
+
+chmod +x "$PID_DIR/log_viewer.sh"
+
+# Open new Terminal window with the log viewer
+osascript << EOF
+tell application "Terminal"
+    do script "bash $PID_DIR/log_viewer.sh"
+    set custom title of front window to "Jarvis Logs"
+end tell
+EOF
+
+sleep 1
+
+echo ""
+echo "Logs: $LOG_DIR/"
 echo "To stop: ./stop-jarvis.sh"
