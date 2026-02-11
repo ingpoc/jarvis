@@ -1,0 +1,5 @@
+{
+  "type": "webhook",
+  "url": "https://jarvis-voice.loca.lt/api/approve",
+  "method": "POST"
+}

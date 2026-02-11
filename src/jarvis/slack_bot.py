@@ -218,11 +218,24 @@ class JarvisSlackBot:
         try:
             result = await self._orchestrator.run_task(task_text)
             status = result.get("status", "unknown")
-            cost = result.get("cost_usd", 0.0)
+            output = result.get("output", "").strip()
             emoji = ":white_check_mark:" if status == "completed" else ":x:"
+
+            # Truncate output if too long (Slack limit: 40,000 chars)
+            max_length = 35000
+            truncated = False
+            if len(output) > max_length:
+                output = output[:max_length] + "\n\n... (output truncated)"
+                truncated = True
+
+            # Format message
+            message = f"{emoji} *Task {status}*\n\n{output}"
+            if truncated:
+                message += "\n\n_Output was truncated due to size_"
+
             await self._client.chat_postMessage(
                 channel=self._default_channel,
-                text=f"{emoji} Task {status}: {task_text[:100]} (${cost:.2f})",
+                text=message,
             )
         except Exception as e:
             await self._client.chat_postMessage(

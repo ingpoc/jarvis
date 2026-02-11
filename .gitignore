@@ -49,6 +49,8 @@ env/
 *.xcworkspace/xcuserdata/
 Package.resolved
 .swiftpm/
+*.xcbuild/
+DerivedData/
 
 # Node
 node_modules/
