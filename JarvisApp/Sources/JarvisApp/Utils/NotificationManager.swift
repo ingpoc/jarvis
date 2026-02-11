@@ -10,6 +10,15 @@ class NotificationManager {
     private init() {}
 
     func requestAuthorization() async -> Bool {
+        // Check if running in proper app bundle (not command-line)
+        let bundlePath = Bundle.main.bundleURL.path
+        let hasInfoPlist = FileManager.default.fileExists(atPath: bundlePath + "/Info.plist")
+
+        guard hasInfoPlist else {
+            // Silently skip - logging might also crash without bundle
+            return false
+        }
+
         let center = UNUserNotificationCenter.current()
         do {
             let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
@@ -26,6 +35,11 @@ class NotificationManager {
     }
 
     func notify(title: String, body: String, sound: UNNotificationSound = .default) {
+        // Only send notifications if running in proper app bundle
+        guard Bundle.main.bundleURL.pathExtension == "app" else {
+            return
+        }
+
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body

@@ -80,6 +80,10 @@ struct JarvisMenuView: View {
         }
         .onAppear {
             ws.connect()
+            // Request notification authorization safely
+            Task {
+                await NotificationManager.shared.requestAuthorization()
+            }
         }
     }
 }

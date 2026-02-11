@@ -98,7 +98,6 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
@@ -106,41 +105,72 @@ echo -e "${BLUE}=== Jarvis Log Viewer ===${NC}"
 echo -e "${YELLOW}Press Ctrl+C to close log viewer (Jarvis continues running)${NC}"
 echo ""
 
-# Track line counts for each log file
-declare -A line_counts
-for log in daemon.log menubar.log tunnel.log; do
-    if [ -f "$LOG_DIR/$log" ]; then
-        line_counts[$log]=$(wc -l < "$LOG_DIR/$log")
+# Use temp files to track line counts (bash 3.2 compatible)
+COUNT_DIR="$HOME/.jarvis/pids"
+mkdir -p "$COUNT_DIR"
+daemon_count_file="$COUNT_DIR/daemon_lines.count"
+menubar_count_file="$COUNT_DIR/menubar_lines.count"
+tunnel_count_file="$COUNT_DIR/tunnel_lines.count"
+
+# Function to get/set line count
+get_count() { cat "$1" 2>/dev/null || echo 0; }
+set_count() { echo "$1" > "$2"; }
+
+# Function to color output
+color_line() {
+    local line="$1"
+    local log_name="$2"
+    if echo "$line" | grep -qi "error\|exception\|failed\|fatal"; then
+        echo -e "${RED}[${log_name}]${NC} $line"
+    elif echo "$line" | grep -qi "warn\|warning"; then
+        echo -e "${YELLOW}[${log_name}]${NC} $line"
+    elif echo "$line" | grep -qi "info"; then
+        echo -e "${GREEN}[${log_name}]${NC} $line"
+    elif echo "$line" | grep -qi "task.*complete\|success\|finished"; then
+        echo -e "${CYAN}[${log_name}]${NC} $line"
+    elif echo "$line" | grep -qi "task.*start\|starting\|running"; then
+        echo -e "${BLUE}[${log_name}]${NC} $line"
+    else
+        echo -e "[${log_name}] $line"
+    fi
+}
+
+# Show existing content
+echo -e "${BLUE}--- Existing log content ---${NC}"
+for log_name in daemon menubar tunnel; do
+    log_file="$LOG_DIR/${log_name}.log"
+    if [ -f "$log_file" ]; then
+        lines=$(wc -l < "$log_file" 2>/dev/null || echo 0)
+        if [ "$lines" -gt 0 ]; then
+            echo -e "${BLUE}>>> ${log_name}.log (${lines} lines) <<<${NC}"
+            while IFS= read -r line; do
+                color_line "$line" "${log_name}"
+            done < "$log_file"
+            # Save initial count
+            set_count "$lines" "$COUNT_DIR/${log_name}_lines.count"
+        fi
     fi
 done
 
+echo -e "${BLUE}--- Monitoring for new logs (Ctrl+C to stop) ---${NC}"
+echo ""
+
+# Monitor loop
 while true; do
-    # Check each log file for new lines
-    for log in daemon.log menubar.log tunnel.log; do
-        log_file="$LOG_DIR/$log"
+    for log_name in daemon menubar tunnel; do
+        log_file="$LOG_DIR/${log_name}.log"
+        count_file="$COUNT_DIR/${log_name}_lines.count"
+
         if [ -f "$log_file" ]; then
             current_lines=$(wc -l < "$log_file")
-            old_lines=${line_counts[$log]:-0}
+            old_lines=$(get_count "$count_file")
 
-            if [ $current_lines -gt $old_lines ]; then
-                # Display new lines with color coding
-                tail -n +$((old_lines + 1)) "$log_file" | while IFS= read -r line; do
-                    # Color code based on content
-                    if echo "$line" | grep -qi "error\|exception\|failed\|fatal"; then
-                        echo -e "${RED}[$log]${NC} $line"
-                    elif echo "$line" | grep -qi "warn\|warning"; then
-                        echo -e "${YELLOW}[$log]${NC} $line"
-                    elif echo "$line" | grep -qi "info"; then
-                        echo -e "${GREEN}[$log]${NC} $line"
-                    elif echo "$line" | grep -qi "task.*complete\|success\|finished"; then
-                        echo -e "${CYAN}[$log]${NC} $line"
-                    elif echo "$line" | grep -qi "task.*start\|starting\|running"; then
-                        echo -e "${BLUE}[$log]${NC} $line"
-                    else
-                        echo -e "[$log] $line"
-                    fi
+            if [ "$current_lines" -gt "$old_lines" ]; then
+                # Show new lines
+                tail -n +"$((old_lines + 1))" "$log_file" 2>/dev/null | while IFS= read -r line; do
+                    color_line "$line" "${log_name}"
                 done
-                line_counts[$log]=$current_lines
+                set_count "$current_lines" "$count_file"
             fi
         fi
     done
@@ -153,8 +183,9 @@ chmod +x "$PID_DIR/log_viewer.sh"
 # Open new Terminal window with the log viewer
 osascript << EOF
 tell application "Terminal"
-    do script "bash $PID_DIR/log_viewer.sh"
-    set custom title of front window to "Jarvis Logs"
+    activate
+    set newTab to do script "bash $PID_DIR/log_viewer.sh"
+    set custom title of newTab to "Jarvis Logs"
 end tell
 EOF
 
