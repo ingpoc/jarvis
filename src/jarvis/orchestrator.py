@@ -13,7 +13,9 @@ Uses the Python Agent SDK with:
 
 import asyncio
 import json
+import logging
 import os
+import traceback
 import uuid
 from pathlib import Path
 
@@ -48,6 +50,8 @@ from jarvis.notifications import (
 from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
 from jarvis.agents import MultiAgentPipeline
+
+logger = logging.getLogger(__name__)
 
 
 class JarvisOrchestrator:
@@ -459,8 +463,10 @@ Turns: {budget_status['turns']}
                             self.trust.record_failure(self.project_path)
 
         except Exception as e:
+            tb = traceback.format_exc()
+            logger.error("run_task failed: %s\n%s", e, tb)
             result["status"] = "error"
-            result["output"] = str(e)
+            result["output"] = f"{e}\n\nTraceback:\n{tb}"
             self.trust.record_failure(self.project_path)
 
         finally:
@@ -502,6 +508,7 @@ Turns: {budget_status['turns']}
             self.events.emit(
                 EVENT_ERROR, result["output"][:200],
                 task_id=task_id,
+                metadata={"error": result["output"][:5000]},
             )
             await notify_task_failed(task_id, task_description, result["output"][:100])
 

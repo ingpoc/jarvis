@@ -1,6 +1,7 @@
 import SwiftUI
 
 // MARK: - ContainerInfo Extensions
+
 extension ContainerInfo {
     var statusColor: Color {
         switch status.lowercased() {
@@ -22,6 +23,7 @@ extension ContainerInfo {
 }
 
 // MARK: - TaskProgress Extensions
+
 extension TaskProgress {
     var statusColor: Color {
         switch status.lowercased() {
@@ -49,10 +51,11 @@ extension TaskProgress {
 }
 
 // MARK: - JarvisStatus Extensions
+
 extension JarvisStatus {
     var color: Color {
         switch self {
-        case .idle: .green
+        case .idle: .gray
         case .building: .blue
         case .testing: .yellow
         case .error: .red
@@ -60,10 +63,19 @@ extension JarvisStatus {
         }
     }
 
-    var iconName: String { "brain.head.profile" }
+    var iconName: String {
+        switch self {
+        case .idle: return "brain.head.profile"
+        case .building: return "hammer"
+        case .testing: return "testtube.2"
+        case .error: return "xmark.octagon"
+        case .waitingApproval: return "hand.raised.fill"
+        }
+    }
 }
 
 // MARK: - Event Colors Utility
+
 struct EventColors {
     static func color(for eventType: String) -> Color {
         switch eventType {

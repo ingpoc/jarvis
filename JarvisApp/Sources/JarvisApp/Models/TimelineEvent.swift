@@ -10,6 +10,27 @@ struct TimelineEvent: Identifiable, Codable {
     let featureId: String?
     let costUsd: Double?
 
+    // Memberwise initializer for PersistenceManager
+    init(
+        id: String,
+        timestamp: Double,
+        eventType: String,
+        summary: String,
+        sessionId: String?,
+        taskId: String?,
+        featureId: String?,
+        costUsd: Double?
+    ) {
+        self.id = id
+        self.timestamp = timestamp
+        self.eventType = eventType
+        self.summary = summary
+        self.sessionId = sessionId
+        self.taskId = taskId
+        self.featureId = featureId
+        self.costUsd = costUsd
+    }
+
     var date: Date { Date(timeIntervalSince1970: timestamp) }
 
     private static let timeFormatter: DateFormatter = {

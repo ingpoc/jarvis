@@ -10,6 +10,8 @@ NC='\033[0m'
 
 JARVIS_HOME="$HOME/.jarvis"
 PID_DIR="$JARVIS_HOME/pids"
+MENUBAR_LABEL="com.jarvis.menubar"
+DAEMON_LABEL="com.jarvis.daemon"
 
 echo -e "${RED}=== Stopping Jarvis ===${NC}"
 echo ""
@@ -47,6 +49,10 @@ kill_process "Menu Bar" "menubar"
 kill_process "Daemon" "daemon"
 kill_process "Tunnel" "tunnel"
 
+# Unload launchd agent for menu bar app (if present)
+launchctl bootout "gui/$(id -u)/$MENUBAR_LABEL" 2>/dev/null || true
+launchctl bootout "gui/$(id -u)/$DAEMON_LABEL" 2>/dev/null || true
+
 # Also kill any remaining processes by name
 echo ""
 echo -e "${RED}◆ Cleaning up any remaining processes...${NC}"
@@ -62,6 +68,9 @@ pkill -f "JarvisApp" 2>/dev/null || true
 
 # Kill any Python jarvis processes
 pkill -f "python.*jarvis" 2>/dev/null || true
+
+# Kill log viewer terminals started by start-jarvis.sh
+pkill -f "bash $PID_DIR/log_viewer.sh" 2>/dev/null || true
 
 echo ""
 echo -e "${GREEN}✓ Jarvis stopped${NC}"

@@ -6,6 +6,8 @@ Each task gets its own lightweight Linux VM with dedicated networking.
 
 import asyncio
 import json
+import os
+import shutil
 import uuid
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -16,7 +18,28 @@ from jarvis.container_templates import detect_template, get_template, build_setu
 
 async def _run_container_cmd(*args: str, timeout: int = 60) -> dict:
     """Execute a container CLI command and return parsed output."""
-    cmd = ["container", *args]
+    container_bin = (
+        os.environ.get("CONTAINER_BIN")
+        or shutil.which("container")
+        or next(
+            (
+                p for p in (
+                    "/opt/homebrew/bin/container",
+                    "/usr/local/bin/container",
+                    "/usr/bin/container",
+                )
+                if os.path.exists(p)
+            ),
+            None,
+        )
+    )
+    if not container_bin:
+        raise FileNotFoundError(
+            "container CLI not found. Checked CONTAINER_BIN, PATH, "
+            "/opt/homebrew/bin/container, /usr/local/bin/container, /usr/bin/container"
+        )
+
+    cmd = [container_bin, *args]
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,

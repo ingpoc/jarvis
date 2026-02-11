@@ -1,21 +1,21 @@
 import SwiftUI
 
 struct StatusBadge: View {
-    @Environment(WebSocketClient.self) private var ws
+    @Environment(\.webSocket) private var webSocket
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: ws.status.iconName)
-                .foregroundStyle(ws.status.color)
+            Image(systemName: webSocket.status.iconName)
+                .foregroundStyle(webSocket.status.color)
                 .font(.title3)
 
-            Text(ws.status.label)
+            Text(webSocket.status.label)
                 .font(.title3)
                 .fontWeight(.medium)
 
             Spacer()
 
-            if ws.isConnected {
+            if webSocket.connectionState == .connected {
                 HStack(spacing: 4) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
@@ -35,6 +35,6 @@ struct StatusBadge: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Jarvis status")
-        .accessibilityValue("\(ws.status.label), \(ws.isConnected ? "Connected" : "Disconnected")")
+        .accessibilityValue("\(webSocket.status.label), \(webSocket.connectionState == .connected ? "Connected" : "Disconnected")")
     }
 }

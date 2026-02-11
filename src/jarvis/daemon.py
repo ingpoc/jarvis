@@ -60,7 +60,7 @@ class JarvisDaemon:
             except ImportError:
                 logger.warning("slack-bolt not installed, skipping Slack integration")
             except Exception as e:
-                logger.error(f"Slack bot failed to start: {e}")
+                logger.exception("Slack bot failed to start: %s", e)
 
         # Voice client (optional)
         if self.config.voice.enabled and self.config.voice.api_key:
@@ -80,7 +80,7 @@ class JarvisDaemon:
             except ImportError:
                 logger.warning("websockets not installed, skipping voice integration")
             except Exception as e:
-                logger.error(f"Voice client failed to connect: {e}")
+                logger.exception("Voice client failed to connect: %s", e)
 
         self._running = True
         logger.info("Jarvis daemon started")
@@ -99,13 +99,13 @@ class JarvisDaemon:
             try:
                 await self._slack_bot.stop()
             except Exception as e:
-                logger.warning(f"Slack bot stop error: {e}")
+                logger.exception("Slack bot stop error: %s", e)
 
         if self._voice_client:
             try:
                 await self._voice_client.disconnect()
             except Exception as e:
-                logger.warning(f"Voice client disconnect error: {e}")
+                logger.exception("Voice client disconnect error: %s", e)
 
         self._running = False
         self._stop_event.set()

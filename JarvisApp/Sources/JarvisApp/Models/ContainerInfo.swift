@@ -3,7 +3,7 @@ import Foundation
 struct ContainerInfo: Identifiable, Codable {
     let id: String
     let name: String
-    let status: String
+    var status: String
     let image: String
     let cpus: Int?
     let memory: String?
