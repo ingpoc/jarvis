@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 
 from claude_agent_sdk import (
+    AgentDefinition,
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
@@ -68,12 +69,17 @@ class JarvisOrchestrator:
         self.git_server = create_git_mcp_server()
         self.review_server = create_review_mcp_server()
         self.browser_server = create_browser_mcp_server()
+        self._dynamic_mcp_servers: dict[str, dict] = {}
+        self._dynamic_agents: dict[str, AgentDefinition] = {}
+        self._dynamic_skills: dict[str, dict] = {}
         self._session_id: str | None = None
         self._active_containers: list[str] = []
         self.loop_detector = LoopDetector(
             max_iterations=self.config.budget.max_turns_per_subtask
         )
         self.events = EventCollector(memory=self.memory)
+        self._chat_lock = asyncio.Lock()
+        self._chat_client: ClaudeSDKClient | None = None
         self.code_orchestrator = CodeOrchestrator(
             mcp_servers={
                 "jarvis-container": self.container_server,
@@ -81,6 +87,17 @@ class JarvisOrchestrator:
             },
             project_path=self.project_path,
         )
+
+    def _build_mcp_servers(self) -> dict:
+        """Build static + dynamic MCP server map."""
+        servers: dict[str, dict] = {
+            "jarvis-container": self.container_server,
+            "jarvis-git": self.git_server,
+            "jarvis-review": self.review_server,
+            "jarvis-browser": self.browser_server,
+        }
+        servers.update(self._dynamic_mcp_servers)
+        return servers
 
     def _build_system_prompt(self) -> str:
         """Build system prompt with project context and trust level."""
@@ -169,7 +186,30 @@ Turns: {budget_status['turns']}
 6. If tests pass: commit changes (if T2+)
 7. Clean up containers
 8. Report results
-{jarvis_md}{continuity}{patterns_text}"""
+{self._build_dynamic_capabilities_prompt()}{jarvis_md}{continuity}{patterns_text}"""
+
+    def _build_dynamic_capabilities_prompt(self) -> str:
+        sections: list[str] = []
+        if self._dynamic_agents:
+            agent_lines = [
+                f"- {name}: {agent.description}"
+                for name, agent in sorted(self._dynamic_agents.items())
+            ]
+            sections.append("## Dynamic Agents\n" + "\n".join(agent_lines))
+        if self._dynamic_skills:
+            skill_lines = [
+                f"- {name}: {entry.get('description', '')}"
+                for name, entry in sorted(self._dynamic_skills.items())
+            ]
+            sections.append("## Dynamic Skills\n" + "\n".join(skill_lines))
+            skill_details = [
+                f"[{name}]\n{entry.get('content', '')}"
+                for name, entry in sorted(self._dynamic_skills.items())
+            ]
+            sections.append("## Skill Definitions\n" + "\n\n".join(skill_details))
+        if not sections:
+            return ""
+        return "\n\n" + "\n\n".join(sections)
 
     def _get_tier_capabilities(self, tier: int) -> str:
         capabilities = {
@@ -349,12 +389,7 @@ Turns: {budget_status['turns']}
             max_budget_usd=self.config.budget.max_per_session_usd,
             model=self.config.models.executor,
             cwd=self.project_path,
-            mcp_servers={
-                "jarvis-container": self.container_server,
-                "jarvis-git": self.git_server,
-                "jarvis-review": self.review_server,
-                "jarvis-browser": self.browser_server,
-            },
+            mcp_servers=self._build_mcp_servers(),
             hooks={
                 "PreToolUse": [
                     HookMatcher(hooks=[self._pre_tool_hook]),
@@ -363,6 +398,7 @@ Turns: {budget_status['turns']}
                     HookMatcher(hooks=[self._post_tool_hook]),
                 ],
             },
+            agents=self._dynamic_agents or None,
         )
 
         # Resume previous session if available
@@ -370,6 +406,92 @@ Turns: {budget_status['turns']}
             options.resume = self._session_id
 
         return options
+
+    def register_mcp_server(
+        self,
+        name: str,
+        command: str,
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+    ) -> dict:
+        """Register a dynamic stdio MCP server for future task/chat turns."""
+        if not name.strip():
+            return {"success": False, "error": "MCP server name is required"}
+        if not command.strip():
+            return {"success": False, "error": "MCP server command is required"}
+        if name.startswith("jarvis-"):
+            return {"success": False, "error": "Reserved MCP server prefix: jarvis-"}
+
+        self._dynamic_mcp_servers[name] = {
+            "type": "stdio",
+            "command": command,
+            "args": args or [],
+            "env": env or {},
+        }
+        return {
+            "success": True,
+            "name": name,
+            "server_count": len(self._dynamic_mcp_servers),
+        }
+
+    def register_agent(
+        self,
+        name: str,
+        description: str,
+        prompt: str,
+        tools: list[str] | None = None,
+        model: str | None = None,
+    ) -> dict:
+        """Register a dynamic SDK sub-agent."""
+        if not name.strip():
+            return {"success": False, "error": "Agent name is required"}
+        if not description.strip() or not prompt.strip():
+            return {"success": False, "error": "Agent description and prompt are required"}
+        safe_model = model if model in ("sonnet", "opus", "haiku", "inherit", None) else "inherit"
+        self._dynamic_agents[name] = AgentDefinition(
+            description=description,
+            prompt=prompt,
+            tools=tools or None,
+            model=safe_model,
+        )
+        return {"success": True, "name": name, "agent_count": len(self._dynamic_agents)}
+
+    def register_skill(self, name: str, description: str, content: str) -> dict:
+        """Register a dynamic skill instruction block visible to Jarvis."""
+        if not name.strip():
+            return {"success": False, "error": "Skill name is required"}
+        if not description.strip() or not content.strip():
+            return {"success": False, "error": "Skill description and content are required"}
+        self._dynamic_skills[name] = {
+            "description": description.strip(),
+            "content": content.strip(),
+        }
+        return {"success": True, "name": name, "skill_count": len(self._dynamic_skills)}
+
+    def get_capabilities(self) -> dict:
+        """Return capability inventory for UI/diagnostics."""
+        dynamic_names = sorted(self._dynamic_mcp_servers.keys())
+        static_names = ["jarvis-container", "jarvis-git", "jarvis-review", "jarvis-browser"]
+        dynamic_agents = sorted(self._dynamic_agents.keys())
+        dynamic_skills = sorted(self._dynamic_skills.keys())
+        tools = sorted(set(self._build_options().allowed_tools or self._build_allowed_tools()))
+        capability_tools = tools + [f"mcp://{n}" for n in (static_names + dynamic_names)]
+        capability_tools += ["hook://PreToolUse", "hook://PostToolUse"]
+        capability_tools += ["agent://planner", "agent://executor", "agent://tester", "agent://reviewer"]
+        capability_tools += [f"agent://{name}" for name in dynamic_agents]
+        capability_tools += ["skill://Skill"]
+        capability_tools += [f"skill://{name}" for name in dynamic_skills]
+        return {
+            "tools": sorted(set(capability_tools)),
+            "mcp_servers": {
+                "static": static_names,
+                "dynamic": dynamic_names,
+            },
+            "hooks": ["PreToolUse", "PostToolUse"],
+            "agents": ["planner", "executor", "tester", "reviewer", *dynamic_agents],
+            "skills_enabled": True,
+            "skills": dynamic_skills,
+        }
 
     async def run_task(self, task_description: str, callback=None) -> dict:
         """Execute a task autonomously.
@@ -514,6 +636,114 @@ Turns: {budget_status['turns']}
 
         if callback:
             callback("task_completed", result)
+
+        return result
+
+    async def _ensure_chat_client(self) -> ClaudeSDKClient:
+        if self._chat_client is None:
+            self._chat_client = ClaudeSDKClient(options=self._build_options())
+            await self._chat_client.connect()
+        return self._chat_client
+
+    async def _reset_chat_client(self) -> None:
+        if self._chat_client is not None:
+            try:
+                await self._chat_client.disconnect()
+            except Exception:
+                pass
+            self._chat_client = None
+
+    async def close(self) -> None:
+        """Graceful shutdown for long-lived SDK clients."""
+        await self._reset_chat_client()
+
+    async def chat(self, user_message: str) -> dict:
+        """Run a conversational turn and return assistant text."""
+        result = {
+            "status": "unknown",
+            "reply": "",
+            "cost_usd": 0.0,
+            "turns": 0,
+            "session_id": None,
+            "tools": [],
+            "diagnostics": {},
+        }
+        tools_used: set[str] = set()
+
+        self.events.emit(
+            "chat_user",
+            user_message[:200],
+            metadata={"message": user_message[:5000]},
+        )
+
+        async with self._chat_lock:
+            try:
+                client = await self._ensure_chat_client()
+                await client.query(user_message)
+
+                result["reply"] = ""
+                async for message in client.receive_response():
+                    if isinstance(message, SystemMessage):
+                        if message.subtype == "init":
+                            self._session_id = message.data.get("session_id")
+                            result["session_id"] = self._session_id
+                    elif isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                result["reply"] += block.text + "\n"
+                            elif isinstance(block, ToolUseBlock):
+                                tools_used.add(block.name)
+                    elif isinstance(message, ResultMessage):
+                        result["cost_usd"] = message.total_cost_usd or 0.0
+                        result["turns"] = message.num_turns
+                        result["status"] = "completed" if not message.is_error else "failed"
+                        result["diagnostics"] = {
+                            "sdk_result": message.result,
+                            "structured_output": message.structured_output,
+                            "usage": message.usage,
+                        } if message.is_error else {}
+                        if message.result and not result["reply"].strip():
+                            result["reply"] = str(message.result).strip()
+                        self.budget.record_cost(
+                            result["cost_usd"], result["turns"], f"chat:{user_message[:120]}"
+                        )
+
+                result["reply"] = result["reply"].strip()
+                result["tools"] = sorted(tools_used)
+                if result["status"] != "completed" and not result["reply"]:
+                    try:
+                        diag_text = json.dumps(result["diagnostics"], default=str)[:3000]
+                    except Exception:
+                        diag_text = str(result["diagnostics"])[:3000]
+                    result["reply"] = (
+                        "Chat request failed without a textual error from the model runtime.\n"
+                        f"Diagnostics: {diag_text}"
+                    )
+            except Exception as e:
+                tb = traceback.format_exc()
+                logger.error("chat failed: %s\n%s", e, tb)
+                await self._reset_chat_client()
+                result["status"] = "error"
+                result["reply"] = f"{e}\n\nTraceback:\n{tb}"
+                result["tools"] = sorted(tools_used)
+                result["diagnostics"] = {"exception": str(e)}
+
+        if result["status"] == "completed" and result["reply"]:
+            self.events.emit(
+                "chat_assistant",
+                result["reply"][:200],
+                cost_usd=result["cost_usd"],
+                metadata={"reply": result["reply"][:5000], "tools": result["tools"]},
+            )
+        else:
+            self.events.emit(
+                EVENT_ERROR,
+                (result["reply"] or "Chat failed")[:200],
+                metadata={
+                    "error": (result["reply"] or "Chat failed")[:5000],
+                    "diagnostics": result.get("diagnostics") or {},
+                },
+            )
 
         return result
 

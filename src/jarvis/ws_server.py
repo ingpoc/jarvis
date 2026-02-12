@@ -129,15 +129,14 @@ class JarvisWSServer:
 
             elif action == "get_available_tools":
                 if self._orchestrator:
-                    tools = sorted(
-                        set(
-                            (
-                                self._orchestrator._build_options().allowed_tools
-                                or self._orchestrator._build_allowed_tools()
-                            )
-                        )
-                    )
+                    tools = self._orchestrator.get_capabilities().get("tools", [])
                     result = {"tools": tools}
+                else:
+                    result = {"error": "Orchestrator not connected"}
+
+            elif action == "get_capabilities":
+                if self._orchestrator:
+                    result = self._orchestrator.get_capabilities()
                 else:
                     result = {"error": "Orchestrator not connected"}
 
@@ -170,6 +169,49 @@ class JarvisWSServer:
                     result = {"queued": description[:100]}
                 else:
                     result = {"error": "Orchestrator not connected"}
+
+            elif action == "chat":
+                message = data.get("message", "")
+                if not message:
+                    result = {"error": "Missing 'message'"}
+                elif self._orchestrator:
+                    chat_result = await self._orchestrator.chat(message)
+                    result = chat_result
+                else:
+                    result = {"error": "Orchestrator not connected"}
+
+            elif action == "add_mcp_server":
+                if not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    result = self._orchestrator.register_mcp_server(
+                        name=data.get("name", ""),
+                        command=data.get("command", ""),
+                        args=data.get("args", []) or [],
+                        env=data.get("env", {}) or {},
+                    )
+
+            elif action == "add_agent":
+                if not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    result = self._orchestrator.register_agent(
+                        name=data.get("name", ""),
+                        description=data.get("description", ""),
+                        prompt=data.get("prompt", ""),
+                        tools=data.get("tools", []) or [],
+                        model=data.get("model"),
+                    )
+
+            elif action == "add_skill":
+                if not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    result = self._orchestrator.register_skill(
+                        name=data.get("name", ""),
+                        description=data.get("description", ""),
+                        content=data.get("content", ""),
+                    )
 
             elif action == "run_tests":
                 if self._orchestrator:

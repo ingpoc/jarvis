@@ -30,6 +30,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         logger.info("Jarvis app finished launching")
+        NSApp.setActivationPolicy(.regular)
 
         // Register global hotkeys after app has launched
         Task { @MainActor in

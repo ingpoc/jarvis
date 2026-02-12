@@ -156,7 +156,9 @@ final class WebSocketClient: WebSocketClientProtocol {
         guard connectionState != .connected else { return }
 
         updateState(.connecting)
-        disconnect()
+        reconnectWork?.cancel()
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
 
         task = session.webSocketTask(with: url)
         task?.resume()
@@ -337,6 +339,7 @@ final class WebSocketClient: WebSocketClientProtocol {
 
         do {
             let event = try JSONDecoder().decode(TimelineEvent.self, from: eventData)
+            lastError = nil
             appendEvent(event)
 
             if event.eventType == "approval_needed" {
@@ -387,6 +390,7 @@ final class WebSocketClient: WebSocketClientProtocol {
     }
 
     private func handleLegacyResponse(action: String, json: [String: Any]) {
+        lastError = nil
         switch action {
         case "get_status":
             if let data = json["data"] as? [String: Any],
@@ -423,6 +427,9 @@ final class WebSocketClient: WebSocketClientProtocol {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.connectionState = state
+            if state == .connected {
+                self.lastError = nil
+            }
             Task { @MainActor in
                 self.delegate?.connectionStateDidChange(state)
             }

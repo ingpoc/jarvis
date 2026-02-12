@@ -71,6 +71,21 @@ class VoiceConfig:
 
 
 @dataclass
+class ResearchConfig:
+    """Autonomous idle research settings."""
+
+    enabled: bool = True
+    topic: str = "@bcherny Claude Code workflow optimization and autonomous dev systems"
+    interval_minutes: int = 30
+    max_runs_per_day: int = 48
+    source_urls: list[str] = field(default_factory=lambda: [
+        "https://www.anthropic.com/engineering",
+        "https://foundationcapital.com/context-graphs-ais-trillion-dollar-opportunity/",
+        "https://openai.com/index/inside-our-in-house-data-agent/",
+    ])
+
+
+@dataclass
 class JarvisConfig:
     """Top-level Jarvis configuration."""
 
@@ -79,6 +94,7 @@ class JarvisConfig:
     models: ModelConfig = field(default_factory=ModelConfig)
     slack: SlackConfig = field(default_factory=SlackConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
+    research: ResearchConfig = field(default_factory=ResearchConfig)
     trust_tier: int = 1  # Default T1 (Assistant)
 
     @classmethod
@@ -106,6 +122,9 @@ class JarvisConfig:
             if "voice" in data:
                 for k, v in data["voice"].items():
                     setattr(config.voice, k, v)
+            if "research" in data:
+                for k, v in data["research"].items():
+                    setattr(config.research, k, v)
             if "trust_tier" in data:
                 config.trust_tier = data["trust_tier"]
 
@@ -175,6 +194,13 @@ class JarvisConfig:
                 "enabled": self.voice.enabled,
                 "auto_call_on_error": self.voice.auto_call_on_error,
                 "auto_call_on_approval": self.voice.auto_call_on_approval,
+            },
+            "research": {
+                "enabled": self.research.enabled,
+                "topic": self.research.topic,
+                "interval_minutes": self.research.interval_minutes,
+                "max_runs_per_day": self.research.max_runs_per_day,
+                "source_urls": self.research.source_urls,
             },
             "trust_tier": self.trust_tier,
         }

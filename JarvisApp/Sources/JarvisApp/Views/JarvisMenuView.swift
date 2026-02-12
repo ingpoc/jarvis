@@ -119,8 +119,13 @@ struct JarvisMenuView: View {
                 Spacer()
 
                 Button("Open Full App") {
+                    NSApp.setActivationPolicy(.regular)
                     NSApplication.shared.activate(ignoringOtherApps: true)
                     openWindow(id: "full-app")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        NSApp.activate(ignoringOtherApps: true)
+                        (NSApp.windows.first { $0.title == "Jarvis" } ?? NSApp.keyWindow)?.makeKeyAndOrderFront(nil)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
 
@@ -178,16 +183,30 @@ struct JarvisMenuView: View {
                     continue
                 }
 
-                _ = provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, error in
-                    guard let data = item as? Data,
-                          let url = URL(dataRepresentation: data, relativeTo: nil) else {
-                        return
+                do {
+                    let item = try await provider.loadItem(
+                        forTypeIdentifier: UTType.fileURL.identifier
+                    )
+
+                    let resolvedURL: URL?
+                    if let url = item as? URL {
+                        resolvedURL = url
+                    } else if let nsurl = item as? NSURL {
+                        resolvedURL = nsurl as URL
+                    } else if let data = item as? Data {
+                        resolvedURL = URL(dataRepresentation: data, relativeTo: nil)
+                    } else if let str = item as? String {
+                        resolvedURL = URL(string: str)
+                    } else if let nsstr = item as? NSString {
+                        resolvedURL = URL(string: nsstr as String)
+                    } else {
+                        resolvedURL = nil
                     }
 
-                    // Send file to Jarvis via WebSocket
-                    Task { @MainActor in
-                        await processDroppedFile(url)
-                    }
+                    guard let url = resolvedURL else { continue }
+                    await processDroppedFile(url)
+                } catch {
+                    ErrorHandler.shared.handle(error, context: "handleDroppedFiles")
                 }
             }
 
