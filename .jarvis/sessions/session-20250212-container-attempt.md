@@ -280,7 +280,102 @@ The 6-phase framework provided excellent structure, and the FastAPI application 
 
 ---
 
+## ✅ SOLUTION DISCOVERED (Post-Session Research)
+
+**Date:** 2025-02-12 23:38 UTC
+
+### The Missing Piece: Interactive Mode
+
+After researching Apple's container documentation and command reference, I discovered the solution:
+
+**Apple Containers DO support interactive mode** - I just wasn't using it correctly!
+
+### The Problem
+
+I was calling the MCP `container_run()` tool without understanding that it maps to the CLI `container run` command, which needs specific flags:
+
+```bash
+# What I was doing (wrong):
+container run python:3.11-slim  # No command, exits immediately
+
+# What I should have done:
+container run -it python:3.11-slim /bin/bash  # Interactive shell
+```
+
+### The Solution
+
+According to [Apple's container command reference](https://github.com/apple/container/blob/main/docs/command-reference.md):
+
+1. **`--interactive` (`-i`) flag** - Keeps STDIN open for interaction
+2. **`--tty` (`-t`) flag** - Allocates pseudo-TTY for proper shell experience
+
+**Correct workflow for development:**
+```bash
+# Step 1: Start container with interactive shell
+container run -it python:3.11-slim /bin/bash
+
+# Step 2: In another terminal, execute commands in running container
+container exec -it <container-name> pytest
+container exec -it <container-name> python -m pytest tests/
+```
+
+### MCP Tool Mapping Issue
+
+**The MCP `container_run()` tool I'm using doesn't expose `-it` flags!**
+
+Looking at the tool parameters:
+- `image`, `name`, `volumes`, `ports`, `env`, `cpus`, `memory`, `ssh_forward`, `template`
+
+**Missing parameters:**
+- No `interactive` boolean flag
+- No `tty` boolean flag
+- No `command` parameter to specify `/bin/bash` entrypoint
+
+### Root Cause (Updated)
+
+**It's not that containers can't do interactive mode - it's that the MCP tool interface doesn't expose the necessary flags!**
+
+The CLI tool supports:
+```bash
+container run -it --name mydev python:3.11-slim /bin/bash
+```
+
+But the MCP tool only provides:
+```python
+container_run(
+    image="python:3.11-slim",
+    name="mydev",
+    volumes="...",
+    ports="...",
+    # No interactive, tty, or command params!
+)
+```
+
+### Next Steps
+
+1. **Verify MCP tool capabilities** - Check if there's an updated version with interactive support
+2. **Alternative approach** - Use `container_exec()` immediately after `container_run()` to install deps
+3. **Background process trick** - Run a long-running command to keep container alive:
+   ```bash
+   container_run(..., command="tail -f /dev/null")  # Keep alive
+   ```
+
+### Resolution
+
+**HYBRID APPROACH STILL RECOMMENDED** - Not because containers don't work, but because:
+
+1. The MCP tool limitations make interactive development awkward
+2. Local development is still faster and more natural
+3. Use containers for their strengths: server testing, browser automation, production simulation
+
+---
+
 *Workflow Version:* 1.0.0
 *Session Duration:* ~37 minutes
-*Container Tests:* 2 attempts, both failed
-*Outcome:* ⚠️ Code works, but workflow needs adjustment for containers
+*Research Follow-up:* ~10 minutes
+*Container Tests:* 2 attempts, both failed (but now I know why!)
+*Outcome:* ⚠️ Code works, container issue understood, hybrid approach validated
+*Sources:*
+- [Apple Container GitHub Repository](https://github.com/apple/container)
+- [Container Command Reference](https://github.com/apple/container/blob/main/docs/command-reference.md)
+- [DeepWiki: Apple Container Command Usage](https://deepwiki.com/search/what-is-the-correct-way-to-run_86aab388-1a54-44b5-b303-5c16e72edc69)

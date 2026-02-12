@@ -16,7 +16,9 @@ This is a **self-improving development workflow** designed for autonomous AI dev
 2. **Measured Outcomes** - Every task is timed and analyzed
 3. **Persistent Learning** - Decisions stored in Context Graph for semantic retrieval
 4. **Continuous Improvement** - Weekly workflow optimization based on metrics
-5. **Isolated Testing** - All work happens in Apple Containers for repeatability
+5. **Hybrid Environment** - Local development + container testing for reliability
+
+> **⚠️ IMPORTANT:** Apple Containers have MCP tool limitations. See [container-limitations.md](container-limitations.md) for details. Use local development for interactive work, containers for server/browser testing.
 
 ---
 
@@ -31,12 +33,25 @@ This is a **self-improving development workflow** designed for autonomous AI dev
 - [ ] **Query Context Graph** for similar past decisions
 
 ### Phase 2: Environment Setup
-- [ ] Create Apple Container with appropriate image
-- [ ] Mount workspace directory
-- [ ] Install dependencies (npm, pip, cargo, etc.)
-- [ ] Configure environment variables
-- [ ] Verify container readiness
+
+**Decision Point:** Container vs Local
+
+```
+Need interactive development (coding, debugging, iteration)?
+├─ YES → Use LOCAL environment (faster, full interactivity)
+└─ NO  → Use CONTAINER (server testing, browser automation, isolation)
+```
+
+- [ ] Decide: Local or Container based on task type
+- [ ] **If Local:** Install dependencies, verify environment
+- [ ] **If Container:**
+  - [ ] Create Apple Container with appropriate image
+  - [ ] Note: MCP tools lack interactive mode limitations
+  - [ ] For server testing: Map ports, start long-running process
+  - [ ] For browser testing: Use browser_test tools
 - [ ] **Log setup time** to sessions/
+
+> See [container-limitations.md](container-limitations.md) for when to use each approach
 
 ### Phase 3: Implementation
 - [ ] Write code following test-driven development
