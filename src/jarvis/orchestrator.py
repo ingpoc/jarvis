@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import traceback
 import uuid
 from pathlib import Path
@@ -69,6 +70,7 @@ class JarvisOrchestrator:
         self.git_server = create_git_mcp_server()
         self.review_server = create_review_mcp_server()
         self.browser_server = create_browser_mcp_server()
+        self._configured_mcp_servers = self._load_configured_mcp_servers()
         self._dynamic_mcp_servers: dict[str, dict] = {}
         self._dynamic_agents: dict[str, AgentDefinition] = {}
         self._dynamic_skills: dict[str, dict] = {}
@@ -96,8 +98,110 @@ class JarvisOrchestrator:
             "jarvis-review": self.review_server,
             "jarvis-browser": self.browser_server,
         }
+        servers.update(self._configured_mcp_servers)
         servers.update(self._dynamic_mcp_servers)
         return servers
+
+    def _load_configured_mcp_servers(self) -> dict[str, dict]:
+        """Load MCP servers from project config and built-in documentation defaults."""
+        configured: dict[str, dict] = {}
+
+        # Project-level .mcp.json (Claude-style format)
+        mcp_json_path = Path(self.project_path) / ".mcp.json"
+        if mcp_json_path.exists():
+            try:
+                data = json.loads(mcp_json_path.read_text())
+                server_map = data.get("mcpServers", {})
+                if isinstance(server_map, dict):
+                    for name, raw in server_map.items():
+                        parsed = self._parse_project_mcp_server(name, raw)
+                        if parsed:
+                            configured[name] = parsed
+            except Exception as exc:
+                logger.warning("Failed to parse .mcp.json: %s", exc)
+
+        # Ensure doc/repo lookup MCPs are available by default.
+        if "context7" not in configured and shutil.which("npx"):
+            context7_args = ["-y", "@upstash/context7-mcp"]
+            api_key = os.environ.get("CONTEXT7_API_KEY") or os.environ.get("CTX7_API_KEY")
+            if api_key:
+                context7_args.extend(["--api-key", api_key])
+            configured["context7"] = {
+                "type": "stdio",
+                "command": "npx",
+                "args": context7_args,
+            }
+        if "deepwiki" not in configured:
+            configured["deepwiki"] = {
+                "type": "http",
+                "url": "https://mcp.deepwiki.com/mcp",
+            }
+
+        return configured
+
+    def _parse_project_mcp_server(self, name: str, raw: object) -> dict | None:
+        """Parse one .mcp.json server entry into Claude Agent SDK format."""
+        if not isinstance(raw, dict):
+            return None
+        if "url" in raw and raw.get("url"):
+            return {
+                "type": "http",
+                "url": str(raw["url"]),
+                "headers": raw.get("headers", {}) or {},
+            }
+
+        command = str(raw.get("command", "")).strip()
+        args = [str(a) for a in (raw.get("args", []) or [])]
+        env = {str(k): str(v) for k, v in (raw.get("env", {}) or {}).items()}
+        if not command:
+            return None
+
+        if name == "context-graph":
+            command, args, env = self._resolve_context_graph(command, args, env)
+        elif name == "token-efficient":
+            command, args = self._resolve_token_efficient(command, args)
+
+        return {
+            "type": "stdio",
+            "command": command,
+            "args": args,
+            "env": env,
+        }
+
+    def _resolve_context_graph(
+        self,
+        command: str,
+        args: list[str],
+        env: dict[str, str],
+    ) -> tuple[str, list[str], dict[str, str]]:
+        """Normalize context-graph config to a valid path + cache dir."""
+        candidate_dirs = [
+            Path(self.project_path) / "mcp" / "context-graph-mcp",
+            Path(self.project_path).parents[1] / "mcp-servers" / "context-graph-mcp",
+            Path(self.project_path).parents[2] / "mcp-servers" / "context-graph-mcp",
+        ]
+        selected = next((p for p in candidate_dirs if (p / "server.py").exists()), None)
+        if selected:
+            command = "uv"
+            args = ["--directory", str(selected), "run", "python", "server.py"]
+            env.setdefault("UV_CACHE_DIR", "/tmp/uv-cache-codex")
+        return command, args, env
+
+    def _resolve_token_efficient(self, command: str, args: list[str]) -> tuple[str, list[str]]:
+        """Normalize token-efficient config to direct stdio node launch."""
+        candidate_files = [
+            Path(self.project_path) / "mcp" / "token-efficient-mcp" / "dist" / "index.js",
+            Path(self.project_path).parents[1] / "mcp-servers" / "token-efficient-mcp" / "dist" / "index.js",
+            Path(self.project_path).parents[2] / "mcp-servers" / "token-efficient-mcp" / "dist" / "index.js",
+        ]
+        selected = next((p for p in candidate_files if p.exists()), None)
+        if selected:
+            return "node", [str(selected)]
+
+        # If .mcp.json used srt wrapper, fall back to plain node invocation.
+        if command == "srt" and args and args[0] == "node":
+            return "node", args[1:]
+        return command, args
 
     def _build_system_prompt(self) -> str:
         """Build system prompt with project context and trust level."""
@@ -165,6 +269,11 @@ Turns: {budget_status['turns']}
 - browser_api_test: test REST API endpoints from container
 - browser_wallet_test: test Solana dApps with mock Solflare/Phantom wallet
 - All browser testing runs headless inside containers (no Chrome extension needed)
+
+## External Documentation MCPs
+- Use context7 MCP for framework/library SDK documentation (resolve package first, then query docs)
+- Use deepwiki MCP for GitHub repository docs: structure, wiki pages, and repo-specific Q&A
+- Use context-graph MCP (when available) to persist/retrieve decision traces across tasks
 
 ## Full Autonomy Capabilities
 - Clone repos: use Bash with `git clone` inside containers
@@ -237,7 +346,18 @@ Turns: {budget_status['turns']}
         tier = trust_status["tier"]
 
         # Base tools everyone gets (T0+)
-        tools = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
+        tools = [
+            "Read",
+            "Glob",
+            "Grep",
+            "WebSearch",
+            "WebFetch",
+            "mcp__context7__resolve-library-id",
+            "mcp__context7__query-docs",
+            "mcp__deepwiki__read_wiki_structure",
+            "mcp__deepwiki__read_wiki_contents",
+            "mcp__deepwiki__ask_question",
+        ]
 
         if tier >= 1:  # Assistant: edit, test, search
             tools.extend(["Edit", "Write", "Bash", "Task", "Skill", "NotebookEdit"])
@@ -471,7 +591,13 @@ Turns: {budget_status['turns']}
     def get_capabilities(self) -> dict:
         """Return capability inventory for UI/diagnostics."""
         dynamic_names = sorted(self._dynamic_mcp_servers.keys())
-        static_names = ["jarvis-container", "jarvis-git", "jarvis-review", "jarvis-browser"]
+        static_names = [
+            "jarvis-container",
+            "jarvis-git",
+            "jarvis-review",
+            "jarvis-browser",
+            *sorted(self._configured_mcp_servers.keys()),
+        ]
         dynamic_agents = sorted(self._dynamic_agents.keys())
         dynamic_skills = sorted(self._dynamic_skills.keys())
         tools = sorted(set(self._build_options().allowed_tools or self._build_allowed_tools()))

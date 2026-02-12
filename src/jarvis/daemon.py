@@ -28,6 +28,7 @@ class JarvisDaemon:
         self.events = self.orchestrator.events
         self._ws_server: JarvisWSServer | None = None
         self._slack_bot = None
+        self._slack_task: asyncio.Task | None = None
         self._voice_client = None
         self._running = False
         self._stop_event = asyncio.Event()
@@ -62,8 +63,12 @@ class JarvisDaemon:
                     orchestrator=self.orchestrator,
                 )
                 set_slack_bot(self._slack_bot)
-                await self._slack_bot.start()
-                logger.info("Slack bot started")
+                self._slack_task = asyncio.create_task(
+                    self._slack_bot.start(),
+                    name="jarvis-slack-bot",
+                )
+                self._slack_task.add_done_callback(self._on_slack_task_done)
+                logger.info("Slack bot start requested")
             except ImportError:
                 logger.warning("slack-bolt not installed, skipping Slack integration")
             except Exception as e:
@@ -108,6 +113,11 @@ class JarvisDaemon:
                 await self._slack_bot.stop()
             except Exception as e:
                 logger.exception("Slack bot stop error: %s", e)
+        if self._slack_task:
+            self._slack_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._slack_task
+            self._slack_task = None
 
         if self._voice_client:
             try:
@@ -128,6 +138,16 @@ class JarvisDaemon:
 
         self._running = False
         self._stop_event.set()
+
+    def _on_slack_task_done(self, task: asyncio.Task) -> None:
+        """Surface Slack task failures and unexpected exits."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.exception("Slack bot task crashed: %s", exc)
+        else:
+            logger.warning("Slack bot task exited unexpectedly")
 
     def _start_idle_loop_if_enabled(self) -> None:
         if not self.config.research.enabled:

@@ -128,13 +128,25 @@ class JarvisSlackBot:
             text = event.get("text", "")
             # Strip bot mention
             parts = text.split(">", 1)
-            task_text = parts[1].strip() if len(parts) > 1 else text
-            if not task_text:
+            chat_text = parts[1].strip() if len(parts) > 1 else text
+            if not chat_text:
                 await say("Mention me with a task, e.g. `@Jarvis fix the failing tests`")
                 return
-            await say(f"On it: _{task_text}_")
             if self._orchestrator:
-                asyncio.create_task(self._run_task(task_text))
+                asyncio.create_task(self._run_chat_from_event(event, say, chat_text))
+
+        @self._app.event("message")
+        async def handle_message(event, say):
+            # Only handle direct conversations and ignore bot/system messages.
+            if event.get("channel_type") not in {"im", "mpim"}:
+                return
+            if event.get("bot_id") or event.get("subtype"):
+                return
+            chat_text = (event.get("text") or "").strip()
+            if not chat_text:
+                return
+            if self._orchestrator:
+                asyncio.create_task(self._run_chat_from_event(event, say, chat_text))
 
     def _register_actions(self):
         @self._app.action("jarvis_approve")
@@ -242,6 +254,22 @@ class JarvisSlackBot:
                 channel=self._default_channel,
                 text=f":x: Task failed: {e}",
             )
+
+    async def _run_chat_from_event(self, event: dict, say, chat_text: str):
+        """Handle conversational Slack message via orchestrator.chat."""
+        channel = event.get("channel")
+        thread_ts = event.get("thread_ts") or event.get("ts")
+        user = event.get("user", "unknown")
+        logger.info("Slack chat message from %s in %s: %s", user, channel, chat_text[:120])
+
+        try:
+            result = await self._orchestrator.chat(chat_text)
+            reply = (result.get("reply") or "").strip()
+            if not reply:
+                reply = "No response generated."
+            await say(reply[:35000], thread_ts=thread_ts)
+        except Exception as e:
+            await say(f":x: Chat failed: {e}", thread_ts=thread_ts)
 
     # --- Block Kit builders ---
 
