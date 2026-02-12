@@ -1,0 +1,94 @@
+{
+  "version": "1.0.0",
+  "description": "Pre-configured container specifications for common development scenarios",
+  "templates": {
+    "node-20": {
+      "name": "node-20-standard",
+      "image": "node:20-bullseye",
+      "description": "Node.js 20 development environment",
+      "default_ports": "3000:3000",
+      "default_env": "NODE_ENV=development",
+      "default_cpus": 2,
+      "default_memory": "4G",
+      "setup_commands": [
+        "corepack enable",
+        "npm install -g npm@latest"
+      ],
+      "use_cases": ["REST API", "Web app", "Microservice"]
+    },
+    "python-311": {
+      "name": "python-311-standard",
+      "image": "python:3.11-slim",
+      "description": "Python 3.11 development environment",
+      "default_ports": "8000:8000",
+      "default_env": "PYTHONUNBUFFERED=1",
+      "default_cpus": 2,
+      "default_memory": "4G",
+      "setup_commands": [
+        "pip install --upgrade pip",
+        "pip install pytest pytest-cov"
+      ],
+      "use_cases": ["REST API", "Data processing", "Scripting"]
+    },
+    "rust-latest": {
+      "name": "rust-latest-standard",
+      "image": "rust:latest",
+      "description": "Rust development environment",
+      "default_ports": "8080:8080",
+      "default_env": "",
+      "default_cpus": 4,
+      "default_memory": "8G",
+      "setup_commands": [
+        "rustup component add clippy rustfmt"
+      ],
+      "use_cases": ["High-performance API", "CLI tools", "System services"]
+    },
+    "fullstack": {
+      "name": "fullstack-node-postgres",
+      "image": "node:20-bullseye",
+      "description": "Full stack with Node.js and PostgreSQL",
+      "default_ports": "3000:3000,5432:5432",
+      "default_env": "NODE_ENV=development,POSTGRES_PASSWORD=devpassword,POSTGRES_DB=appdb",
+      "default_cpus": 4,
+      "default_memory": "8G",
+      "setup_commands": [
+        "apt-get update && apt-get install -y postgresql postgresql-contrib",
+        "corepack enable",
+        "npm install -g npm@latest"
+      ],
+      "use_cases": ["Full-stack web app", "API with database"]
+    },
+    "browser-test": {
+      "name": "browser-playwright",
+      "image": "node:20-bullseye",
+      "description": "Browser testing with Playwright",
+      "default_ports": "",
+      "default_env": "NODE_ENV=development",
+      "default_cpus": 2,
+      "default_memory": "4G",
+      "setup_commands": [
+        "npx playwright install --with-deps chromium"
+      ],
+      "use_cases": ["Browser testing", "E2E tests", "Web scraping"]
+    },
+    "go-latest": {
+      "name": "go-latest-standard",
+      "image": "golang:latest",
+      "description": "Go development environment",
+      "default_ports": "8080:8080",
+      "default_env": "GO111MODULE=on",
+      "default_cpus": 2,
+      "default_memory": "4G",
+      "setup_commands": [
+        "go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"
+      ],
+      "use_cases": ["REST API", "Microservices", "CLI tools"]
+    }
+  },
+  "usage_notes": {
+    "selecting_template": "Choose based on primary language and requirements",
+    "customizing": "Override any default value when creating container",
+    "ports": "Format is 'host:container', can specify multiple with commas",
+    "memory": "Allocate based on complexity: simple=4G, medium=8G, complex=16G"
+  }
+}
