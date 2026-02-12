@@ -27,7 +27,7 @@ struct CommandCenterView: View {
             case .containers:
                 ContainerListView(containers: ws.containers)
             case .tools:
-                ToolFeedView(events: ws.events)
+                AvailableToolsView(tools: ws.availableTools)
             case .tasks:
                 TaskProgressView(tasks: ws.activeTasks)
             }
@@ -41,6 +41,7 @@ struct CommandCenterView: View {
                     }
                     ws.sendCommand(action: "get_status")
                     ws.sendCommand(action: "get_timeline")
+                    ws.sendCommand(action: "get_available_tools")
                 }
                 .buttonStyle(.bordered)
                 .disabled(ws.isLoading)
@@ -130,41 +131,32 @@ struct ContainerListView: View {
     }
 }
 
-struct ToolFeedView: View {
-    let events: [TimelineEvent]
-
-    private var toolEvents: [TimelineEvent] {
-        events.filter { $0.eventType == "tool_use" }
-    }
+struct AvailableToolsView: View {
+    let tools: [String]
 
     var body: some View {
         Group {
-            if toolEvents.isEmpty {
-                Text("No tool activity")
+            if tools.isEmpty {
+                Text("No tools discovered yet")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 200)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(toolEvents.prefix(50))) { event in
-                            HStack(alignment: .top, spacing: 8) {
-                                Text(event.timeString)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 64, alignment: .leading)
-
+                        ForEach(Array(tools.prefix(200)), id: \.self) { tool in
+                            HStack(alignment: .center, spacing: 8) {
                                 Image(systemName: "wrench.and.screwdriver")
                                     .font(.caption2)
-                                    .foregroundStyle(EventColors.color(for: event.eventType))
+                                    .foregroundStyle(.blue)
 
-                                Text(event.summary)
+                                Text(tool)
                                     .font(.caption)
-                                    .lineLimit(2)
+                                    .lineLimit(1)
                             }
                             .padding(.horizontal, 16)
                             .accessibilityElement(children: .combine)
-                            .accessibilityLabel("Tool use at \(event.timeString)")
-                            .accessibilityValue(event.summary)
+                            .accessibilityLabel("Available tool")
+                            .accessibilityValue(tool)
                         }
                     }
                     .padding(.vertical, 6)

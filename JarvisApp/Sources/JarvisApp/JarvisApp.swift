@@ -32,6 +32,13 @@ struct JarvisApp: App {
                 )
         }
         .menuBarExtraStyle(.window)
+
+        Window("Jarvis", id: "full-app") {
+            FullAppView()
+                .environment(webSocket)
+                .environment(\.webSocket, webSocket)
+                .frame(minWidth: 1000, minHeight: 700)
+        }
     }
 }
 

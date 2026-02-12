@@ -127,6 +127,20 @@ class JarvisWSServer:
                 else:
                     result = {"error": "Orchestrator not connected"}
 
+            elif action == "get_available_tools":
+                if self._orchestrator:
+                    tools = sorted(
+                        set(
+                            (
+                                self._orchestrator._build_options().allowed_tools
+                                or self._orchestrator._build_allowed_tools()
+                            )
+                        )
+                    )
+                    result = {"tools": tools}
+                else:
+                    result = {"error": "Orchestrator not connected"}
+
             elif action == "approve":
                 task_id = data.get("task_id", "")
                 self._events.emit(

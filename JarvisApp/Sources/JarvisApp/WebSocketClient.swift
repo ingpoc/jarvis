@@ -74,6 +74,7 @@ protocol WebSocketClientProtocol: AnyObject {
     var delegate: WebSocketDelegate? { get set }
     var events: [TimelineEvent] { get }
     var containers: [ContainerInfo] { get }
+    var availableTools: [String] { get }
     var pendingApprovals: [TimelineEvent] { get }
     var status: JarvisStatus { get }
 
@@ -117,6 +118,7 @@ final class WebSocketClient: WebSocketClientProtocol {
     var events: [TimelineEvent] = []
     var pendingApprovals: [TimelineEvent] = []
     var containers: [ContainerInfo] = []
+    var availableTools: [String] = []
     var activeTasks: [TaskProgress] = []
     var isLoading = false
     var lastError: String?
@@ -165,6 +167,7 @@ final class WebSocketClient: WebSocketClientProtocol {
 
         Task {
             try? await sendWithoutResponse(action: "get_status", data: nil)
+            try? await sendWithoutResponse(action: "get_available_tools", data: nil)
         }
     }
 
@@ -404,6 +407,11 @@ final class WebSocketClient: WebSocketClientProtocol {
                     }
                 }
             }
+        case "get_available_tools":
+            if let data = json["data"] as? [String: Any],
+               let tools = data["tools"] as? [String] {
+                availableTools = tools
+            }
         default:
             break
         }
@@ -463,5 +471,6 @@ extension WebSocketClient {
         isLoading = true
         defer { isLoading = false }
         try? await sendWithoutResponse(action: "get_containers", data: nil)
+        try? await sendWithoutResponse(action: "get_available_tools", data: nil)
     }
 }

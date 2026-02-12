@@ -315,8 +315,11 @@ echo ""
 echo -e "${GREEN}✓ Jarvis is running!${NC}"
 echo ""
 
-# Open log viewer terminal
-echo -e "${BLUE}◆ Opening log viewer terminal...${NC}"
+# Open log viewer terminal only when explicitly enabled.
+if [ "${JARVIS_OPEN_LOG_VIEWER:-0}" != "1" ]; then
+    echo -e "${BLUE}◆ Log viewer auto-open disabled (set JARVIS_OPEN_LOG_VIEWER=1 to enable)${NC}"
+else
+    echo -e "${BLUE}◆ Opening log viewer terminal...${NC}"
 
 # Create a script for the log viewer terminal
 cat > "$PID_DIR/log_viewer.sh" << 'EOF'
@@ -410,19 +413,20 @@ EOF
 
 chmod +x "$PID_DIR/log_viewer.sh"
 
-# Open a single Terminal log viewer instance (avoid duplicate tabs/windows)
-if pgrep -f "bash $PID_DIR/log_viewer.sh" >/dev/null 2>&1; then
-    echo -e "${YELLOW}⚠️  Log viewer already running; reusing existing terminal${NC}"
-elif command -v osascript >/dev/null 2>&1; then
-    osascript << EOF
+    # Open a single Terminal log viewer instance (avoid duplicate tabs/windows)
+    if pgrep -f "bash $PID_DIR/log_viewer.sh" >/dev/null 2>&1; then
+        echo -e "${YELLOW}⚠️  Log viewer already running; reusing existing terminal${NC}"
+    elif command -v osascript >/dev/null 2>&1; then
+        osascript << EOF
 tell application "Terminal"
     activate
     set newTab to do script "bash $PID_DIR/log_viewer.sh"
     set custom title of newTab to "Jarvis Logs"
 end tell
 EOF
-else
-    echo -e "${YELLOW}⚠️  osascript not available; skipping log viewer terminal auto-open${NC}"
+    else
+        echo -e "${YELLOW}⚠️  osascript not available; skipping log viewer terminal auto-open${NC}"
+    fi
 fi
 
 sleep 1

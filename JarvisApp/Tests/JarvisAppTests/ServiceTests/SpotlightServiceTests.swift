@@ -163,6 +163,7 @@ final class MockWebSocketClient: WebSocketClientProtocol {
     var delegate: (any WebSocketDelegate)?
     var events: [TimelineEvent] = []
     var containers: [ContainerInfo] = []
+    var availableTools: [String] = []
     var pendingApprovals: [TimelineEvent] = []
     var status: JarvisStatus = .idle
     var isLoading = false

@@ -23,6 +23,7 @@ enum MenuView: String, CaseIterable, Identifiable {
 
 struct JarvisMenuView: View {
     @Environment(\.webSocket) private var webSocket
+    @Environment(\.openWindow) private var openWindow
     @State private var selectedView: MenuView = .timeline
     @State private var droppedFiles: [URL] = []
     @State private var showDropOverlay = false
@@ -116,6 +117,12 @@ struct JarvisMenuView: View {
                     .controlSize(.small)
 
                 Spacer()
+
+                Button("Open Full App") {
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    openWindow(id: "full-app")
+                }
+                .buttonStyle(.borderedProminent)
 
                 Button("Quit") {
                     NSApplication.shared.terminate(nil)
