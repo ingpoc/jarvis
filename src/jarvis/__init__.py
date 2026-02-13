@@ -1,6 +1,6 @@
 """Jarvis: Autonomous Mac-native development partner."""
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.agents import MultiAgentPipeline
@@ -14,6 +14,7 @@ from jarvis.code_orchestrator import CodeOrchestrator
 from jarvis.fs_watcher import FileSystemWatcher
 from jarvis.idle_mode import IdleModeProcessor, IdleState
 from jarvis.context_layers import build_context_layers, format_context_for_prompt
+from jarvis.universal_heuristics import seed_universal_heuristics, auto_seed_project
 
 __all__ = [
     "JarvisOrchestrator",
@@ -32,4 +33,6 @@ __all__ = [
     "IdleState",
     "build_context_layers",
     "format_context_for_prompt",
+    "seed_universal_heuristics",
+    "auto_seed_project",
 ]

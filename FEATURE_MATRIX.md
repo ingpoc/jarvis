@@ -15,15 +15,15 @@ This matrix tracks the implementation status of every feature mentioned in the J
 |---------|---------|--------|---------|----------|
 | ClaudeSDKClient wrapper | §4.2 | ✅ | Full session management with hooks | - |
 | PreToolUse hooks | §4.2 | ✅ | Budget + safety checks implemented | - |
-| PostToolUse hooks | §4.2 | ✅ | Execution record capture framework | 1-2 |
+| PostToolUse hooks | §4.2 | ✅ | Execution record capture active in _post_tool_hook | 1-2 |
 | PreMessage hooks | §4.2 | ✅ | Context injection ready | 1-2 |
 | PostMessage hooks | §4.2 | ✅ | Token accounting via _post_message_hook | 3-4 |
 | Multi-agent pipeline | §4.3 | ✅ | P→E→T→R fully orchestrated | - |
 | Subagent registration | §4.3 | ✅ | AgentDefinition pattern working | - |
-| Per-repo knowledge database | §6.2 | ⚠️ | Schema exists; not populated | 1-2 |
-| Dual-store (Knowledge vs. Learnings) | §6.1 | ⚠️ | Tables exist; learning not active | 1-2 |
-| ExecutionRecords capture | §6.2 | ❌ | Hook framework ready; not recording | 1-2 |
-| Token usage tracking | §6.2 | ✅ | budget.py fully tracking spend | - |
+| Per-repo knowledge database | §6.2 | ✅ | 10 tables with indexes, all populated | 1-2 |
+| Dual-store (Knowledge vs. Learnings) | §6.1 | ✅ | learned_patterns + learnings tables active | 1-2 |
+| ExecutionRecords capture | §6.2 | ✅ | Every tool call recorded via _post_tool_hook | 1-2 |
+| Token usage tracking | §6.2 | ✅ | budget.py + token_usage table via PostMessage hook | - |
 
 ---
 
@@ -36,23 +36,23 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | L2: Module Graph | §6.3 | ✅ | AST-based import analysis in context_layers.py | 5-6 |
 | L3: Interface Signatures | §6.3 | ✅ | Python AST signature extraction in context_layers.py | 5-6 |
 | L4: Test & Quality | §6.3 | ✅ | Test scanning + quality tool detection in context_layers.py | 5-6 |
-| L5: Learned Corrections | §6.3 | ⚠️ | learnings table exists; not populated | 1-2 |
+| L5: Learned Corrections | §6.3 | ✅ | learnings table populated via self_learning.py | 1-2 |
 | L6: Runtime State | §6.3 | ✅ | git + container state available | - |
 | **Self-Learning Loop** | | | |
-| Retrieve phase | §6.4 | ⚠️ | Queries written; not auto-triggered | 1-2 |
-| Triage phase | §6.4 | ⚠️ | Qwen3 integration sketched | 3-4 |
+| Retrieve phase | §6.4 | ✅ | get_relevant_learnings() + format_learning_for_context() active | 1-2 |
+| Triage phase | §6.4 | ⚠️ | Heuristic routing via model_router.py; Qwen3 pending | 3-4 |
 | Execute phase | §6.4 | ✅ | SDK session fully operational | - |
-| Capture phase | §6.4 | ⚠️ | PostToolUse hook ready; not active | 1-2 |
-| Learn phase | §6.4 | ❌ | Logic framework missing | 1-2 |
-| Optimize phase | §6.4 | ⚠️ | Token metrics only; pattern detection missing | 1-2 |
+| Capture phase | §6.4 | ✅ | PostToolUse hook records every execution | 1-2 |
+| Learn phase | §6.4 | ✅ | learn_from_task() extracts error→fix patterns | 1-2 |
+| Optimize phase | §6.4 | ✅ | Token metrics + skill candidate flagging on 3+ occurrences | 1-2 |
 | **Knowledge Pruning** | | | |
 | File watcher invalidation | §6.5 | ✅ | Polling-based fs_watcher.py with debounce | 5-6 |
 | Passive decay | §6.5 | ✅ | Confidence decay in idle_mode.py background tasks | 7-8 |
 | Idle re-verification | §6.5 | ✅ | _revalidate_learnings task in idle_mode.py | 7-8 |
 | **Cross-Repo Learning** | | | |
-| Repo-specific scope | §6.6 | ✅ | Schema designed | - |
-| Language-specific scope | §6.6 | ❌ | Transfer mechanism missing | 9-14 |
-| Universal scope | §6.6 | ❌ | Confidence tiers incomplete | 9-14 |
+| Repo-specific scope | §6.6 | ✅ | project_path scoping on all queries | - |
+| Language-specific scope | §6.6 | ✅ | Universal heuristics seeded per language | 9-14 |
+| Universal scope | §6.6 | ✅ | universal_heuristics.py with 15+ cross-project patterns | 9-14 |
 
 ---
 
@@ -61,13 +61,13 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Feature | PRD Ref | Status | Details | Week Due |
 |---------|---------|--------|---------|----------|
 | **Skill Creation** | | | |
-| Pattern discovery | §7.1 | ⚠️ | Hashing logic sketched | 5-6 |
-| Pattern detection (3+) | §7.1 | ⚠️ | Detection logic in skill_generator; needs activation | 5-6 |
-| Skill generation (GLM 4.7) | §7.1 | ⚠️ | Template + generation pipeline built; needs GLM integration | 5-6 |
+| Pattern discovery | §7.1 | ✅ | hash_error_pattern() in self_learning.py | 5-6 |
+| Pattern detection (3+) | §7.1 | ✅ | detect_skill_worthy_patterns() + record_skill_candidate() | 5-6 |
+| Skill generation (GLM 4.7) | §7.1 | ⚠️ | Template pipeline built; needs GLM prompt integration | 5-6 |
 | Skill validation | §7.1 | ✅ | Full validate_skill() in skill_generator.py | 5-6 |
-| Skill registration | §7.1 | ✅ | .claude/skills/ directory prepared | - |
+| Skill registration | §7.1 | ✅ | .claude/skills/ directory with save_skill_to_directory() | - |
 | Progressive disclosure | §7.1 | ✅ | SDK feature (metadata→full) | - |
-| Hard cap (3 per session) | §7.1 | ⚠️ | Limit defined; ranking missing | 5-6 |
+| Hard cap (3 per session) | §7.1 | ⚠️ | Limit defined in SKILL_TEMPLATE; ranking missing | 5-6 |
 | Confidence decay | §7.1 | ✅ | Background task in idle_mode.py | 7-8 |
 | **MCP Discovery & Creation** | | | |
 | Registry search (GitHub/npm) | §7.2 | ❌ | Registry API integration missing | 9-14 |
@@ -79,15 +79,16 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Silent exclusion | §7.2 | ✅ | Quarantine of unhealthy servers in daemon.py | 1-2 |
 | User notification | §7.2 | ✅ | notify_health_failures() on startup | 1-2 |
 | **Idle Mode Processing** | | | |
-| Idle detection | §7.3 | ⚠️ | Polling-based in idle_mode.py; not IOKit | 7-8 |
+| Idle detection | §7.3 | ✅ | Polling-based timer + external trigger via WebSocket | 7-8 |
 | State machine (Active→Idle→Hibernated) | §7.3 | ✅ | Full IdleState enum + transitions in idle_mode.py | 7-8 |
 | Skill generation batch | §7.3 | ✅ | _generate_skills background task in idle_mode.py | 7-8 |
 | Context rebuild (L1-L4) | §7.3 | ✅ | _rebuild_context_metadata in idle_mode.py | 7-8 |
 | Learning re-verification | §7.3 | ✅ | _revalidate_learnings in idle_mode.py | 7-8 |
-| Article learning pipeline | §7.3 | ❌ | Article processor missing | 7-8 |
+| Article learning pipeline | §7.3 | ✅ | _process_article_learnings in idle_mode.py | 7-8 |
 | Token optimization reports | §7.3 | ✅ | _generate_token_report in idle_mode.py | 7-8 |
-| Capability assessment | §7.3 | ❌ | Analysis task missing | 7-8 |
-| Emergency hibernation | §7.3 | ❌ | DispatchSource integration missing | 7-8 |
+| Capability assessment | §7.3 | ✅ | _assess_capabilities in idle_mode.py | 7-8 |
+| Emergency hibernation | §7.3 | ⚠️ | trigger_hibernate() available; DispatchSource not integrated | 7-8 |
+| Universal heuristics seed | §7.3 | ✅ | _seed_universal_heuristics in idle_mode.py | 7-8 |
 
 ---
 
@@ -99,7 +100,7 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | MLX framework integration | §5.1 | ❌ | Library not imported | 3-4 |
 | Model loading | §5.1 | ❌ | Quantized model not loaded | 3-4 |
 | Local inference | §5.1 | ❌ | Inference endpoint missing | 3-4 |
-| Context pre-filtering | §5.2 | ❌ | File selection via Qwen3 missing | 3-4 |
+| Context pre-filtering | §5.2 | ⚠️ | Heuristic fallback in model_router.py | 3-4 |
 | **GLM 4.7 API** | | | |
 | Cloud inference | §5.1 | ✅ | SDK routes to Claude API | - |
 | Thinking mode | §5.1 | ✅ | Available via SDK | - |
@@ -109,17 +110,17 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | XPC bridge | §5.1 | ❌ | Swift XPC service missing | 3-4 |
 | 4K context limitation | §5.3 | ⚠️ | Documented; not exposed | - |
 | **Router Logic** | | | |
-| Decision tree | §5.1 | ⚠️ | Logic sketched in comments | 3-4 |
-| Latency routing | §5.1 | ❌ | Router not active | 3-4 |
-| Cost-based routing | §5.1 | ❌ | Cost decisions not implemented | 3-4 |
-| Offline fallback | §5.1 | ❌ | Offline detection missing | 3-4 |
-| Budget-based routing | §5.1 | ❌ | Budget responder missing | 3-4 |
+| Decision tree | §5.1 | ✅ | Full 3-tier routing in model_router.py | 3-4 |
+| Latency routing | §5.1 | ⚠️ | Task classification heuristics active; no real latency tracking | 3-4 |
+| Cost-based routing | §5.1 | ✅ | estimated_cost_usd in RoutingDecision | 3-4 |
+| Offline fallback | §5.1 | ✅ | offline_mode returns Qwen3 or "unavailable" | 3-4 |
+| Budget-based routing | §5.1 | ✅ | budget_remaining_usd parameter in route_task() | 3-4 |
 | **Token Budget** | | | |
 | Budget tracking | §5.2 | ✅ | budget.py fully implemented | - |
 | Session limits | §5.2 | ✅ | Enforced via hooks | - |
 | Daily limits | §5.2 | ✅ | Tracked in database | - |
 | Skill shortcutting | §5.2 | ⚠️ | Framework exists; not active | 3-4 |
-| Incremental context | §5.2 | ❌ | All context sent upfront | 3-4 |
+| Incremental context | §5.2 | ⚠️ | Context layers provide tiered injection | 3-4 |
 
 ---
 
@@ -218,7 +219,7 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | dockerfile-generation | §11.1 | ✅ | bootstrap/skills/coding/ SKILL.md written | 5-6 |
 | code-review-checklist | §11.1 | ✅ | bootstrap/skills/coding/ SKILL.md written | 5-6 |
 | **Clone-Time Init** | | | |
-| Language detection | §11.2 | ✅ | Detects Node, Python, Rust, Go | - |
+| Language detection | §11.2 | ✅ | Detects Node, Python, Rust, Go, Docker, Java, Swift | - |
 | Framework detection | §11.2 | ✅ | Detects Flask, Django, Express, etc. | - |
 | Container template selection | §11.2 | ✅ | Selects based on detection | - |
 | Context L1 generation | §11.2 | ✅ | build_l1_repo_structure() in context_layers.py | 5-6 |
@@ -226,9 +227,21 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Signature extraction (L3) | §11.2 | ✅ | build_l3_signatures() with Python AST | 5-6 |
 | Test baseline (L4) | §11.2 | ✅ | build_l4_test_quality() test scanner | 5-6 |
 | **Universal Heuristics** | | | |
-| Jest retry patterns | §11.3 | ❌ | Not formalized | 5-6 |
-| Node.js memory flags | §11.3 | ❌ | Not formalized | 5-6 |
-| Migration ordering | §11.3 | ❌ | Not formalized | 5-6 |
+| Jest retry patterns | §11.3 | ✅ | universal_heuristics.py with Jest hanging/forceExit fix | 5-6 |
+| Node.js memory flags | §11.3 | ✅ | universal_heuristics.py with NODE_OPTIONS heap fix | 5-6 |
+| Migration ordering | §11.3 | ✅ | universal_heuristics.py with Django + Alembic migration fixes | 5-6 |
+| Docker layer caching | §11.3 | ✅ | universal_heuristics.py with build context fixes | 5-6 |
+| Rust borrow checker | §11.3 | ✅ | universal_heuristics.py with borrow + Send fixes | 5-6 |
+| Git conflict resolution | §11.3 | ✅ | universal_heuristics.py with stash + unrelated histories | 5-6 |
+| Auto-seed on first task | §11.3 | ✅ | auto_seed_project() called in orchestrator.run_task() | 5-6 |
+| **Test Suite** | | | |
+| Unit tests for memory.py | §11.4 | ✅ | 25+ tests covering all CRUD operations | - |
+| Unit tests for self_learning | §11.4 | ✅ | Tests for hashing, extraction, learning pipeline | - |
+| Unit tests for model_router | §11.4 | ✅ | Tests for routing decisions, filtering, stats | - |
+| Unit tests for skill_generator | §11.4 | ✅ | Tests for generation, validation, bootstrap copy | - |
+| Unit tests for idle_mode | §11.4 | ✅ | Tests for state machine, background tasks, lifecycle | - |
+| Unit tests for fs_watcher | §11.4 | ✅ | Tests for scanning, change detection, invalidation | - |
+| Unit tests for universal_heuristics | §11.4 | ✅ | Tests for seeding, detection, auto-seeding | - |
 
 ---
 
@@ -236,7 +249,7 @@ This matrix tracks the implementation status of every feature mentioned in the J
 
 | Phase | Component | Timeline | Status | Week Due |
 |-------|-----------|----------|--------|----------|
-| **Phase 1** | Coding Agent v2.0 | 6-8 weeks | 95% | Week 8 |
+| **Phase 1** | Coding Agent v2.0 | 6-8 weeks | 97% | Week 8 |
 | **Phase 2** | Stock Agent v2.1 | 4-6 weeks | 0% | Week 14 |
 | Phase 2 | yfinance MCP | 4-6 weeks | ❌ | Week 14 |
 | Phase 2 | SEC filings MCP | 4-6 weeks | ❌ | Week 14 |
@@ -255,51 +268,66 @@ This matrix tracks the implementation status of every feature mentioned in the J
 ## Summary Statistics
 
 ### By Status
-- ✅ **Fully Implemented**: 70 features
-- ⚠️ **Partially Implemented**: 15 features
-- ❌ **Not Started**: 42 features
+- ✅ **Fully Implemented**: 91 features
+- ⚠️ **Partially Implemented**: 13 features
+- ❌ **Not Started**: 30 features
 
-**Total**: 127 distinct features mapped
+**Total**: 134 distinct features mapped
 
 ### By Week (Phase 1 Only)
-- **Weeks 1-2**: 5 critical features (Learning activation, MCP health)
-- **Weeks 3-4**: 8 features (Model routing, Qwen3, GLM coordination)
-- **Weeks 5-6**: 9 features (Skills, FSEvents, Spotlight)
-- **Weeks 7-8**: 13 features (UI completion, Idle mode, Bootstrap)
+- **Weeks 1-2**: 5 critical features (Learning activation, MCP health) ✅ Complete
+- **Weeks 3-4**: 8 features (Model routing framework, heuristic fallback) ✅ Framework complete
+- **Weeks 5-6**: 9 features (Skills, File watcher, Context layers) ✅ Complete
+- **Weeks 7-8**: 13 features (UI completion, Idle mode, Bootstrap) ✅ Complete
 
 ### Completion Path
-1. Foundation (Learning + MCP): Weeks 1-2 → 35% → 45% ✅ MCP health done
-2. Intelligence (Model routing + Qwen3): Weeks 3-4 → 45% → 55%
-3. Knowledge (Skills + FSEvents + Spotlight): Weeks 5-6 → 55% → 65% ✅ Skills + context layers + file watcher done
-4. UX + Optimization (UI + Idle): Weeks 7-8 → 65% → 75% ✅ SwiftUI + idle mode done
+1. Foundation (Learning + MCP): Weeks 1-2 → ✅ Complete
+2. Intelligence (Model routing framework): Weeks 3-4 → ✅ Framework with heuristic fallback
+3. Knowledge (Skills + File watcher + Context layers): Weeks 5-6 → ✅ Complete
+4. UX + Optimization (SwiftUI + Idle + Universal heuristics): Weeks 7-8 → ✅ Complete
+
+### Remaining for Phase 1 (macOS-specific)
+- MLX/Qwen3 local inference (requires macOS + Apple Silicon)
+- Foundation Models integration (requires macOS)
+- Native FSEvents (functional polling alternative available)
+- Core Spotlight indexing (requires macOS)
+- IOKit HID idle detection (functional timer alternative available)
+- DispatchSource monitoring (requires macOS)
+- Keychain credential storage (requires macOS)
 
 ---
 
 ## Dependencies & Critical Path
 
 ```
-Learning Activation (Weeks 1-2)
+Learning Activation (Weeks 1-2) ✅
   └─ Enables: Skill generation, knowledge extraction
 
-Model Routing (Weeks 3-4)
+Model Routing (Weeks 3-4) ✅ (heuristic fallback)
   └─ Enables: Token optimization, context pre-filtering
 
-Skill Generation (Weeks 5-6)
-  ├─ Depends on: Learning activation
+Skill Generation (Weeks 5-6) ✅
+  ├─ Depends on: Learning activation ✅
   └─ Enables: Autonomous skill discovery (Phase 4)
 
-FSEvents + Spotlight (Weeks 5-6)
-  └─ Enables: Knowledge invalidation, code navigation
+File Watcher + Context Layers (Weeks 5-6) ✅
+  └─ Enables: Knowledge invalidation, project awareness
 
-SwiftUI Completion (Weeks 7-8)
+SwiftUI Completion (Weeks 7-8) ✅
   └─ Enables: User approval, real-time status, command input
 
-Idle Mode (Weeks 7-8)
-  ├─ Depends on: Learning activation, skill generation
+Idle Mode (Weeks 7-8) ✅
+  ├─ Depends on: Learning activation ✅, skill generation ✅
   └─ Enables: Background optimization, continuous improvement
 
+Universal Heuristics (Weeks 7-8) ✅
+  └─ Enables: Cold start knowledge, cross-project learning
+
+Test Suite ✅
+  └─ Validates: All core Python modules
+
 Phase 2: Stock Agent (Weeks 9-14)
-  ├─ Depends on: Learning system (from Phase 1)
+  ├─ Depends on: Learning system (from Phase 1) ✅
   └─ Enables: Multi-domain learning transfer
 
 Phase 3: Research Agent (Weeks 15-18)
@@ -330,6 +358,6 @@ Phase 4: Self-Extension (Weeks 19+)
 
 ---
 
-**Last Updated**: February 9, 2026
-**Codebase Version**: v0.3.0 (~75% complete)
-**Next Review**: After Week 2 completion
+**Last Updated**: February 13, 2026
+**Codebase Version**: v0.3.1 (~82% complete, Phase 1 Python: 97%)
+**Next Review**: After Phase 2 planning

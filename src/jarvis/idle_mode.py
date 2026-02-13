@@ -101,16 +101,34 @@ class IdleModeProcessor:
                 interval_seconds=300,  # Every 5 minutes
             ),
             BackgroundTask(
+                name="universal_heuristics_seed",
+                func=self._seed_universal_heuristics,
+                priority=TaskPriority.HIGH,
+                interval_seconds=3600,  # Once per hour (idempotent)
+            ),
+            BackgroundTask(
                 name="context_rebuild",
                 func=self._rebuild_context_metadata,
                 priority=TaskPriority.MEDIUM,
                 interval_seconds=600,  # Every 10 minutes
             ),
             BackgroundTask(
+                name="capability_assessment",
+                func=self._assess_capabilities,
+                priority=TaskPriority.MEDIUM,
+                interval_seconds=1200,  # Every 20 minutes
+            ),
+            BackgroundTask(
                 name="skill_generation",
                 func=self._generate_skills,
                 priority=TaskPriority.LOW,
                 interval_seconds=900,  # Every 15 minutes
+            ),
+            BackgroundTask(
+                name="article_learning",
+                func=self._process_article_learnings,
+                priority=TaskPriority.LOW,
+                interval_seconds=1800,  # Every 30 minutes
             ),
             BackgroundTask(
                 name="token_optimization_report",
@@ -215,6 +233,151 @@ class IdleModeProcessor:
             return {"layers_built": len(layers), "status": "success"}
         except ImportError:
             return {"status": "skipped", "reason": "context_layers module not available"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    async def _seed_universal_heuristics(self) -> dict[str, Any]:
+        """Seed universal heuristics for cold start.
+
+        Auto-detects project languages and injects known error-fix
+        patterns so Jarvis can help even before seeing project-specific errors.
+        """
+        try:
+            from jarvis.universal_heuristics import auto_seed_project
+            result = await auto_seed_project(self.memory, self.project_path)
+            return result
+        except ImportError:
+            return {"status": "skipped", "reason": "universal_heuristics module not available"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    async def _assess_capabilities(self) -> dict[str, Any]:
+        """Assess and report system capabilities.
+
+        Checks what's available for this project:
+        - Which languages are detected
+        - How many learnings exist
+        - Skill generation readiness
+        - Token usage trends
+        - Context layer coverage
+        """
+        from pathlib import Path
+
+        project = Path(self.project_path)
+        assessment: dict[str, Any] = {"status": "success"}
+
+        # Language detection
+        try:
+            from jarvis.universal_heuristics import detect_project_languages
+            languages = detect_project_languages(self.project_path)
+            assessment["languages"] = languages
+        except Exception:
+            assessment["languages"] = []
+
+        # Learning statistics
+        learnings = self.memory.get_learnings(
+            project_path=self.project_path, min_confidence=0.0, limit=1000
+        )
+        assessment["learnings_count"] = len(learnings)
+        assessment["high_confidence_learnings"] = sum(
+            1 for l in learnings if l["confidence"] >= 0.7
+        )
+        assessment["needs_revalidation"] = sum(
+            1 for l in learnings if l.get("needs_revalidation")
+        )
+
+        # Skill candidate statistics
+        candidates = self.memory.get_skill_candidates(min_occurrences=1)
+        promoted = self.memory.get_skill_candidates(min_occurrences=1, promoted=True)
+        assessment["skill_candidates"] = len(candidates)
+        assessment["skills_promoted"] = len(promoted)
+
+        # Token usage summary
+        usage = self.memory.get_token_usage(project_path=self.project_path, limit=50)
+        if usage:
+            assessment["total_tokens_used"] = sum(u.get("total_tokens", 0) for u in usage)
+            assessment["total_cost_usd"] = sum(u.get("cost_usd", 0.0) for u in usage)
+            assessment["avg_cost_per_task"] = assessment["total_cost_usd"] / len(usage)
+        else:
+            assessment["total_tokens_used"] = 0
+            assessment["total_cost_usd"] = 0.0
+            assessment["avg_cost_per_task"] = 0.0
+
+        # Task completion rate
+        all_tasks = self.memory.list_tasks(project_path=self.project_path)
+        completed = [t for t in all_tasks if t.status == "completed"]
+        failed = [t for t in all_tasks if t.status == "failed"]
+        assessment["total_tasks"] = len(all_tasks)
+        assessment["completed_tasks"] = len(completed)
+        assessment["failed_tasks"] = len(failed)
+        assessment["success_rate"] = (
+            len(completed) / len(all_tasks) if all_tasks else 0.0
+        )
+
+        logger.info(
+            f"Capability assessment: {len(learnings)} learnings, "
+            f"{len(candidates)} skill candidates, "
+            f"{len(all_tasks)} tasks ({len(completed)} completed)"
+        )
+
+        return assessment
+
+    async def _process_article_learnings(self) -> dict[str, Any]:
+        """Extract learnings from execution records that weren't processed.
+
+        Scans recent tasks for error-fix patterns that might have been
+        missed during the original task run (e.g., due to transient errors
+        in the learning pipeline).
+        """
+        try:
+            from jarvis.self_learning import learn_from_task
+
+            # Get recent completed/failed tasks
+            tasks = self.memory.list_tasks(
+                project_path=self.project_path,
+            )
+
+            # Focus on tasks from the last 24 hours
+            cutoff = time.time() - 86400
+            recent_tasks = [
+                t for t in tasks
+                if t.updated_at >= cutoff
+                and t.status in ("completed", "failed")
+            ]
+
+            total_learnings = 0
+            tasks_processed = 0
+
+            for task in recent_tasks[:10]:  # Limit to 10 per cycle
+                records = self.memory.get_execution_records(task_id=task.id)
+                if not records:
+                    continue
+
+                # Check if we already extracted learnings for this task
+                # by looking for learnings created after the task
+                existing_learnings = self.memory.get_learnings(
+                    project_path=self.project_path,
+                    min_confidence=0.0,
+                )
+                # Simple heuristic: if there are errors in records but no
+                # learnings were created recently, re-process
+                has_errors = any(r.get("error_message") for r in records)
+                if not has_errors:
+                    continue
+
+                stats = await learn_from_task(
+                    task_id=task.id,
+                    project_path=self.project_path,
+                    memory=self.memory,
+                )
+                total_learnings += stats.get("learnings_saved", 0)
+                tasks_processed += 1
+
+            return {
+                "tasks_processed": tasks_processed,
+                "learnings_extracted": total_learnings,
+                "recent_tasks_scanned": len(recent_tasks),
+            }
         except Exception as e:
             return {"status": "error", "error": str(e)}
 

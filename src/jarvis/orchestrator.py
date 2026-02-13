@@ -51,6 +51,7 @@ from jarvis.agents import MultiAgentPipeline
 from jarvis.model_router import get_model_router
 from jarvis.self_learning import learn_from_task, get_relevant_learnings, format_learning_for_context
 from jarvis.context_layers import build_context_layers, format_context_for_prompt
+from jarvis.universal_heuristics import auto_seed_project
 
 
 def _is_tool_error(tool_name: str, tool_response: str) -> bool:
@@ -497,8 +498,8 @@ Turns: {budget_status['turns']}
                     session_id=self._session_id or "unknown",
                     task_id=task_id,
                     model=self.config.models.executor,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
+                    prompt_tokens=input_tokens,
+                    completion_tokens=output_tokens,
                     cost_usd=cost_usd,
                     project_path=self.project_path,
                 )
@@ -565,6 +566,19 @@ Turns: {budget_status['turns']}
         self.events.emit(EVENT_TASK_START, task_description, task_id=task_id)
         if callback:
             callback("task_started", {"id": task_id, "description": task_description})
+
+        # Seed universal heuristics on first task (idempotent)
+        try:
+            seed_result = await auto_seed_project(self.memory, self.project_path)
+            if seed_result.get("seeded", 0) > 0:
+                self.events.emit(
+                    "heuristics_seeded",
+                    f"Seeded {seed_result['seeded']} universal heuristics for {seed_result.get('languages', [])}",
+                    task_id=task_id,
+                    metadata=seed_result,
+                )
+        except Exception:
+            pass  # Seeding is best-effort
 
         # Query decision traces for precedents
         try:
