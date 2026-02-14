@@ -1,6 +1,6 @@
 """Jarvis: Autonomous Mac-native development partner."""
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.agents import MultiAgentPipeline
