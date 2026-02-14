@@ -1068,6 +1068,7 @@ Turns: {budget_status['turns']}
                 "- Prefer ask when multiple interpretations exist or critical details are missing.\n"
                 "- Keep reply/ask conversational and concise.\n"
                 "- If execute, task_description must be specific and include success criteria.\n"
+                "- This system uses Apple 'container' CLI (command: container), not Docker.\n"
             ),
             # Disable base tools completely for routing.
             tools=[],
