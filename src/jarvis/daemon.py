@@ -12,6 +12,7 @@ from jarvis.notifications import set_slack_bot, set_voice_client
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.ws_server import JarvisWSServer
 from jarvis.mcp_health import health_check_all_servers, filter_healthy_servers, notify_health_failures
+from jarvis.model_router import get_model_router
 
 logger = logging.getLogger(__name__)
 
@@ -161,15 +162,113 @@ class JarvisDaemon:
         except Exception as e:
             logger.warning(f"Bootstrap skills install failed: {e}")
 
+        # Initialize 3-tier model router (loads MLX + Foundation Models if available)
+        try:
+            router = get_model_router()
+            init_result = await router.initialize()
+            logger.info(f"Model router initialized: MLX={init_result.get('mlx')}, "
+                        f"Foundation={init_result.get('foundation')}")
+        except Exception as e:
+            logger.warning(f"Model router initialization failed: {e}")
+
+        # macOS native integrations
+        try:
+            from jarvis.macos_native import get_platform_capabilities
+            caps = get_platform_capabilities()
+            if caps["is_apple_silicon"]:
+                chip = caps.get("chip_info", {})
+                logger.info(
+                    f"Apple Silicon detected: {chip.get('chip', 'unknown')}, "
+                    f"{chip.get('total_memory_gb', '?')}GB RAM"
+                )
+
+                # Start IOKit-based idle detection polling
+                if caps["iokit_available"] and self._idle_processor:
+                    self._iokit_idle_task = asyncio.create_task(
+                        self._iokit_idle_loop()
+                    )
+                    logger.info("IOKit HID idle detection active")
+
+                # Load credentials from Keychain
+                from jarvis.macos_native import keychain_retrieve
+                kc_api_key = keychain_retrieve("com.jarvis.anthropic", "api_key")
+                if kc_api_key:
+                    import os
+                    os.environ.setdefault("ANTHROPIC_API_KEY", kc_api_key)
+                    logger.info("Loaded API key from Keychain")
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"macOS native init: {e}")
+
         self._running = True
         logger.info("Jarvis daemon started")
 
         # Block until stop is requested
         await self._stop_event.wait()
 
+    async def _iokit_idle_loop(self) -> None:
+        """Poll IOKit HID idle time and trigger idle mode transitions.
+
+        Runs every 30s and checks the actual HID idle seconds.
+        More accurate than timer-based idle detection since it
+        uses real keyboard/mouse/trackpad activity.
+        """
+        from jarvis.macos_native import get_idle_seconds, get_memory_pressure
+
+        threshold = self.config.idle.idle_threshold_minutes * 60
+
+        while self._running:
+            try:
+                await asyncio.sleep(30)
+
+                idle_secs = get_idle_seconds()
+                if idle_secs is None:
+                    continue
+
+                if self._idle_processor:
+                    if idle_secs >= threshold:
+                        self._idle_processor.trigger_idle()
+                    elif idle_secs < 5:
+                        # Recent activity
+                        self._idle_processor.record_activity()
+
+                # Check memory pressure for hibernation
+                pressure = get_memory_pressure()
+                if pressure and pressure.get("should_hibernate"):
+                    if self._idle_processor:
+                        self._idle_processor.trigger_hibernate()
+                    # Also unload MLX model to free memory
+                    router = get_model_router()
+                    await router.shutdown()
+                    logger.warning(
+                        f"Memory pressure CRITICAL ({pressure.get('free_mb', '?')}MB free) "
+                        "— hibernated + unloaded local models"
+                    )
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"IOKit idle loop error: {e}")
+
     async def stop(self) -> None:
         """Gracefully stop all services."""
         logger.info("Jarvis daemon stopping")
+
+        # Shutdown model router (unload MLX)
+        try:
+            router = get_model_router()
+            await router.shutdown()
+        except Exception as e:
+            logger.debug(f"Model router shutdown error: {e}")
+
+        # Cancel IOKit idle loop
+        if hasattr(self, "_iokit_idle_task") and self._iokit_idle_task:
+            self._iokit_idle_task.cancel()
+            try:
+                await self._iokit_idle_task
+            except asyncio.CancelledError:
+                pass
 
         if self._file_watcher:
             try:

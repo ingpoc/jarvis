@@ -97,21 +97,22 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Feature | PRD Ref | Status | Details | Week Due |
 |---------|---------|--------|---------|----------|
 | **Qwen3 4B (MLX)** | | | |
-| MLX framework integration | §5.1 | ❌ | Library not imported | 3-4 |
-| Model loading | §5.1 | ❌ | Quantized model not loaded | 3-4 |
-| Local inference | §5.1 | ❌ | Inference endpoint missing | 3-4 |
-| Context pre-filtering | §5.2 | ⚠️ | Heuristic fallback in model_router.py | 3-4 |
+| MLX framework integration | §5.1 | ✅ | mlx_inference.py with conditional import + Apple Silicon detection | 3-4 |
+| Model loading | §5.1 | ✅ | Async load_model() with thread pool, unload for hibernation | 3-4 |
+| Local inference | §5.1 | ✅ | generate(), classify_task(), filter_context_files(), summarize_error() | 3-4 |
+| Context pre-filtering | §5.2 | ✅ | MLX filter_context_files() with heuristic fallback | 3-4 |
 | **GLM 4.7 API** | | | |
 | Cloud inference | §5.1 | ✅ | SDK routes to Claude API | - |
 | Thinking mode | §5.1 | ✅ | Available via SDK | - |
 | 200K context support | §5.1 | ✅ | Supported by SDK | - |
 | **Foundation Models** | | | |
-| Task classification | §5.1 | ❌ | @Generable macro not used | 3-4 |
-| XPC bridge | §5.1 | ❌ | Swift XPC service missing | 3-4 |
-| 4K context limitation | §5.3 | ⚠️ | Documented; not exposed | - |
+| Task classification | §5.1 | ✅ | FoundationModelsBridge.swift with LanguageModelSession | 3-4 |
+| HTTP bridge | §5.1 | ✅ | Swift HTTP server on port 9848 + Python client | 3-4 |
+| Intent classification | §5.1 | ✅ | classify_intent() via Foundation Models client | 3-4 |
+| 4K context limitation | §5.3 | ✅ | Enforced in bridge (text.prefix(1000)) | - |
 | **Router Logic** | | | |
-| Decision tree | §5.1 | ✅ | Full 3-tier routing in model_router.py | 3-4 |
-| Latency routing | §5.1 | ⚠️ | Task classification heuristics active; no real latency tracking | 3-4 |
+| Decision tree | §5.1 | ✅ | Full 3-tier routing with live MLX + Foundation Models | 3-4 |
+| Latency routing | §5.1 | ✅ | Foundation Models (<100ms) → MLX (200-500ms) → Cloud | 3-4 |
 | Cost-based routing | §5.1 | ✅ | estimated_cost_usd in RoutingDecision | 3-4 |
 | Offline fallback | §5.1 | ✅ | offline_mode returns Qwen3 or "unavailable" | 3-4 |
 | Budget-based routing | §5.1 | ✅ | budget_remaining_usd parameter in route_task() | 3-4 |
