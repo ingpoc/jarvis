@@ -39,23 +39,5 @@ env/
 # Logs
 *.log
 
-# Environment & config
-.env
-.mcp.json
-
-# Swift
-.build/
-*.xcodeproj/xcuserdata/
-*.xcworkspace/xcuserdata/
-Package.resolved
-.swiftpm/
-
-# Node
-node_modules/
-
-# uv
-uv.lock
-
-# ChromaDB local data
-chroma/
-.claude/chroma/
+# Swift build
+JarvisApp/.build/

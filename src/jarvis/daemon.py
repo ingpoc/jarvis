@@ -7,6 +7,8 @@ import logging
 import signal
 import sys
 
+import os
+
 from jarvis.config import JarvisConfig, ensure_jarvis_home
 from jarvis.notifications import set_slack_bot, set_voice_client
 from jarvis.orchestrator import JarvisOrchestrator
@@ -122,6 +124,9 @@ class JarvisDaemon:
         self.orchestrator = JarvisOrchestrator(project_path)
         self.events = self.orchestrator.events
         self._ws_server: JarvisWSServer | None = None
+        self._remote_server = None
+        self._rest_app = None
+        self._rest_runner = None
         self._slack_bot = None
         self._voice_client = None
         self._idle_processor = None
@@ -148,79 +153,16 @@ class JarvisDaemon:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, lambda: asyncio.create_task(self.stop()))
 
-        # Health check MCP servers before starting
-        logger.info("Running MCP server health checks...")
-        mcp_servers = {
-            "jarvis-container": self.orchestrator.container_server,
-            "jarvis-git": self.orchestrator.git_server,
-            "jarvis-review": self.orchestrator.review_server,
-            "jarvis-browser": self.orchestrator.browser_server,
-        }
-
-        health_results = await health_check_all_servers(mcp_servers, timeout=2.0)
-        logger.info(
-            f"MCP health check complete: {health_results['healthy_count']}/{health_results['total_count']} healthy"
-        )
-
-        # Notify about failures and quarantine unhealthy servers
-        if health_results["unhealthy_count"] > 0:
-            await notify_health_failures(health_results)
-
-            # Remove unhealthy servers from orchestrator's MCP config
-            healthy_servers = filter_healthy_servers(mcp_servers, health_results)
-            quarantined = set(mcp_servers.keys()) - set(healthy_servers.keys())
-            if quarantined:
-                logger.warning(f"Quarantined MCP servers: {', '.join(quarantined)}")
-
-        # Build context layers asynchronously for use in system prompt
-        try:
-            from jarvis.context_layers import build_context_layers
-            self.orchestrator._cached_context_layers = await build_context_layers(
-                self.orchestrator.project_path, ["L1", "L2"]
-            )
-            logger.info("Context layers L1-L2 built successfully")
-        except Exception as e:
-            logger.warning(f"Context layers build failed: {e}")
-
-        # WebSocket server (always)
+        # Local WebSocket server (always)
         self._ws_server = JarvisWSServer(
             event_collector=self.events,
             orchestrator=self.orchestrator,
         )
         await self._ws_server.start()
 
-        # File system watcher (for knowledge invalidation)
-        try:
-            from jarvis.fs_watcher import FileSystemWatcher
-            self._file_watcher = FileSystemWatcher(
-                project_path=self.orchestrator.project_path,
-                memory=self.orchestrator.memory,
-                poll_interval=self.config.idle.file_watcher_poll_interval,
-                debounce=self.config.idle.file_watcher_debounce,
-            )
-            await self._file_watcher.start()
-            logger.info("File watcher started")
-        except Exception as e:
-            logger.warning(f"File watcher failed to start: {e}")
-
-        # Idle mode processor (background tasks during inactivity)
-        if self.config.idle.enable_background_processing:
-            try:
-                from jarvis.idle_mode import IdleModeProcessor
-                self._idle_processor = IdleModeProcessor(
-                    memory=self.orchestrator.memory,
-                    project_path=self.orchestrator.project_path,
-                    idle_threshold_minutes=self.config.idle.idle_threshold_minutes,
-                )
-                # Connect file watcher changes to idle processor activity tracking
-                if self._file_watcher:
-                    self._file_watcher.add_change_callback(
-                        lambda _: self._idle_processor.record_activity()
-                    )
-                await self._idle_processor.start()
-                logger.info("Idle mode processor started")
-            except Exception as e:
-                logger.warning(f"Idle mode processor failed to start: {e}")
+        # Remote WSS server (if enabled)
+        if self._remote_enabled():
+            await self._start_remote_server()
 
         # Slack bot (optional)
         if self.config.slack.enabled and self.config.slack.bot_token:
@@ -394,6 +336,12 @@ class JarvisDaemon:
         if self._ws_server:
             await self._ws_server.stop()
 
+        if self._remote_server:
+            await self._remote_server.stop()
+
+        if self._rest_runner:
+            await self._rest_runner.cleanup()
+
         if self._slack_bot:
             try:
                 await self._slack_bot.stop()
@@ -409,6 +357,100 @@ class JarvisDaemon:
         self._running = False
         CrashRecovery.clear_pid()
         self._stop_event.set()
+
+    def _remote_enabled(self) -> bool:
+        """Check if remote server is enabled."""
+        return os.getenv("JARVIS_REMOTE_ENABLED", "false").lower() in ("true", "1", "yes")
+
+    async def _start_remote_server(self) -> None:
+        """Start remote WSS server and REST API."""
+        try:
+            from jarvis.remote_server import JarvisRemoteServer, RESTAPIHandler
+            from jarvis.auth import Authenticator
+            from aiohttp import web
+
+            # Initialize authenticator
+            jwt_secret = os.getenv("JARVIS_JWT_SECRET")
+            if not jwt_secret:
+                logger.warning("JARVIS_JWT_SECRET not set, using default (UNSAFE)")
+                jwt_secret = "change-me-in-production"
+
+            authenticator = Authenticator(
+                secret=jwt_secret,
+                expiry_seconds=int(os.getenv("JARVIS_JWT_EXPIRY", "86400")),
+                max_devices=int(os.getenv("MAX_DEVICES", "10")),
+            )
+
+            # Start remote WSS server
+            remote_port = int(os.getenv("JARVIS_REMOTE_PORT", "9848"))
+            remote_bind = os.getenv("JARVIS_REMOTE_BIND", "0.0.0.0")
+
+            self._remote_server = JarvisRemoteServer(
+                event_collector=self.events,
+                orchestrator=self.orchestrator,
+                authenticator=authenticator,
+                port=remote_port,
+                bind=remote_bind,
+            )
+            await self._remote_server.start()
+            logger.info(f"Remote WSS server started on {remote_bind}:{remote_port}")
+
+            # Start REST API
+            rest_handler = RESTAPIHandler(authenticator, self._remote_server)
+            self._rest_app = await rest_handler.create_app()
+
+            if self._rest_app:
+                rest_port = int(os.getenv("JARVIS_REST_PORT", "9849"))
+                self._rest_runner = web.AppRunner(self._rest_app)
+                await self._rest_runner.setup()
+                site = web.TCPSite(self._rest_runner, "0.0.0.0", rest_port)
+                await site.start()
+                logger.info(f"REST API started on port {rest_port}")
+
+                # Start Tailscale funnel if enabled
+                if os.getenv("TAILSCALE_ENABLED", "false").lower() == "true":
+                    await self._start_tailscale_funnel(remote_port)
+
+        except ImportError as e:
+            logger.warning(f"Remote server dependencies missing: {e}")
+        except Exception as e:
+            logger.error(f"Remote server failed to start: {e}")
+
+    async def _start_tailscale_funnel(self, port: int) -> None:
+        """Start Tailscale funnel for remote access."""
+        try:
+            import asyncio.subprocess
+
+            proc = await asyncio.create_subprocess_exec(
+                "tailscale", "funnel", str(port),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            # Wait a bit to check if it started successfully
+            await asyncio.sleep(2)
+
+            if proc.returncode is not None:
+                stderr = await proc.stderr.read()
+                logger.warning(f"Tailscale funnel failed: {stderr.decode()}")
+            else:
+                logger.info(f"Tailscale funnel started for port {port}")
+
+                # Get Tailscale IP
+                ip_proc = await asyncio.create_subprocess_exec(
+                    "tailscale", "ip", "-4",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await ip_proc.communicate()
+                if ip_proc.returncode == 0:
+                    ts_ip = stdout.decode().strip()
+                    logger.info(f"Tailscale IP: {ts_ip}")
+
+        except FileNotFoundError:
+            logger.warning("Tailscale not installed")
+        except Exception as e:
+            logger.error(f"Tailscale funnel error: {e}")
 
 
 def main():
