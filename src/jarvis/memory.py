@@ -14,6 +14,30 @@ from pathlib import Path
 
 from jarvis.config import JARVIS_DB, JARVIS_HOME
 
+STATUS_ALIAS_TO_CANONICAL = {
+    "queued": "pending",
+    "running": "in_progress",
+    "success": "completed",
+    "error": "failed",
+}
+VALID_TASK_STATUSES = {
+    "pending",
+    "in_progress",
+    "paused",
+    "completed",
+    "failed",
+    "cancelled",
+}
+TERMINAL_TASK_STATUSES = {"completed", "failed", "cancelled"}
+VALID_TRANSITIONS = {
+    "pending": {"in_progress", "failed", "cancelled"},
+    "in_progress": {"paused", "completed", "failed", "cancelled"},
+    "paused": {"in_progress", "failed", "cancelled"},
+    "completed": set(),
+    "failed": set(),
+    "cancelled": set(),
+}
+
 
 @dataclass
 class Task:
@@ -111,11 +135,48 @@ class MemoryStore:
             CREATE INDEX IF NOT EXISTS idx_patterns_project ON learned_patterns(project_path);
             CREATE INDEX IF NOT EXISTS idx_traces_project ON decision_traces(project_path);
             CREATE INDEX IF NOT EXISTS idx_traces_category ON decision_traces(category);
+
+            CREATE TABLE IF NOT EXISTS channel_turn_memory (
+                channel_id TEXT PRIMARY KEY,
+                project_path TEXT,
+                last_user_message TEXT,
+                last_assistant_reply TEXT,
+                updated_at REAL
+            );
+
+            CREATE TABLE IF NOT EXISTS idle_research_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT,
+                topic TEXT,
+                conclusion TEXT,
+                evidence TEXT,
+                applied INTEGER DEFAULT 0,
+                commit_sha TEXT,
+                created_at REAL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_idle_research_url ON idle_research_history(url);
+            CREATE INDEX IF NOT EXISTS idx_idle_research_ts ON idle_research_history(created_at);
+
+            CREATE TABLE IF NOT EXISTS research_sources (
+                url TEXT PRIMARY KEY,
+                source TEXT,
+                status TEXT DEFAULT 'new',
+                first_seen_at REAL,
+                last_seen_at REAL,
+                last_researched_at REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_research_sources_status ON research_sources(status);
+            CREATE INDEX IF NOT EXISTS idx_research_sources_last_researched ON research_sources(last_researched_at);
         """)
         conn.commit()
         conn.close()
 
     # --- Task management ---
+    @staticmethod
+    def _canonical_status(status: str) -> str:
+        raw = (status or "").strip().lower()
+        return STATUS_ALIAS_TO_CANONICAL.get(raw, raw)
 
     def create_task(self, task_id: str, description: str, project_path: str) -> Task:
         now = time.time()
@@ -138,6 +199,11 @@ class MemoryStore:
         return task
 
     def update_task(self, task_id: str, **kwargs) -> None:
+        if "status" in kwargs:
+            status = self._canonical_status(str(kwargs["status"]))
+            if status not in VALID_TASK_STATUSES:
+                raise ValueError(f"Invalid task status: {kwargs['status']}")
+            kwargs["status"] = status
         kwargs["updated_at"] = time.time()
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [task_id]
@@ -145,6 +211,21 @@ class MemoryStore:
         conn.execute(f"UPDATE tasks SET {sets} WHERE id = ?", values)
         conn.commit()
         conn.close()
+
+    def transition_task(self, task_id: str, to_status: str, **kwargs) -> None:
+        """Apply a validated task status transition."""
+        task = self.get_task(task_id)
+        if task is None:
+            raise ValueError(f"Task not found: {task_id}")
+        current = self._canonical_status(task.status)
+        target = self._canonical_status(to_status)
+        if target not in VALID_TASK_STATUSES:
+            raise ValueError(f"Invalid task status: {to_status}")
+        if current != target:
+            allowed = VALID_TRANSITIONS.get(current, set())
+            if target not in allowed:
+                raise ValueError(f"Invalid transition: {current} -> {target}")
+        self.update_task(task_id, status=target, **kwargs)
 
     def get_task(self, task_id: str) -> Task | None:
         conn = sqlite3.connect(self.db_path)
@@ -162,12 +243,39 @@ class MemoryStore:
             query += " AND project_path = ?"
             params.append(project_path)
         if status:
+            status = self._canonical_status(status)
             query += " AND status = ?"
             params.append(status)
         query += " ORDER BY created_at DESC"
         rows = conn.execute(query, params).fetchall()
         conn.close()
         return [Task(*r) for r in rows]
+
+    def recover_stale_in_progress_tasks(
+        self,
+        project_path: str,
+        stale_after_seconds: int,
+        reason: str,
+    ) -> list[str]:
+        """Mark stale in-progress tasks as failed and return affected IDs."""
+        stale_after_seconds = max(1, int(stale_after_seconds))
+        cutoff = time.time() - stale_after_seconds
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT id, result FROM tasks WHERE project_path = ? AND status = 'in_progress' AND updated_at < ?",
+            (project_path, cutoff),
+        ).fetchall()
+        task_ids: list[str] = []
+        for task_id, existing_result in rows:
+            out = (existing_result or "")[:4500] + f"\n\n[{reason}]"
+            conn.execute(
+                "UPDATE tasks SET status = 'failed', result = ?, updated_at = ? WHERE id = ?",
+                (out, time.time(), task_id),
+            )
+            task_ids.append(task_id)
+        conn.commit()
+        conn.close()
+        return task_ids
 
     # --- Session summaries ---
 
@@ -404,6 +512,145 @@ class MemoryStore:
             "total_events": sum(r[1] for r in rows),
             "total_cost": total_cost,
         }
+
+    # --- Slack channel turn memory ---
+
+    def save_channel_turn(
+        self,
+        channel_id: str,
+        project_path: str,
+        user_message: str,
+        assistant_reply: str,
+    ) -> None:
+        now = time.time()
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO channel_turn_memory "
+            "(channel_id, project_path, last_user_message, last_assistant_reply, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(channel_id) DO UPDATE SET "
+            "project_path=excluded.project_path, "
+            "last_user_message=excluded.last_user_message, "
+            "last_assistant_reply=excluded.last_assistant_reply, "
+            "updated_at=excluded.updated_at",
+            (channel_id, project_path, user_message[:5000], assistant_reply[:5000], now),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_channel_turn(self, channel_id: str) -> dict | None:
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT channel_id, project_path, last_user_message, last_assistant_reply, updated_at "
+            "FROM channel_turn_memory WHERE channel_id = ?",
+            (channel_id,),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "channel_id": row[0],
+            "project_path": row[1],
+            "last_user_message": row[2],
+            "last_assistant_reply": row[3],
+            "updated_at": row[4],
+        }
+
+    # --- Idle research history ---
+
+    def record_idle_research(
+        self,
+        *,
+        url: str,
+        topic: str,
+        conclusion: str,
+        evidence: str,
+        applied: bool,
+        commit_sha: str | None = None,
+    ) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO idle_research_history "
+            "(url, topic, conclusion, evidence, applied, commit_sha, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                url[:2000],
+                topic[:500],
+                conclusion[:4000],
+                evidence[:4000],
+                1 if applied else 0,
+                (commit_sha or "")[:120],
+                time.time(),
+            ),
+        )
+        conn.execute(
+            "UPDATE research_sources "
+            "SET status = 'reviewed', last_researched_at = ?, last_seen_at = ? "
+            "WHERE url = ?",
+            (time.time(), time.time(), url[:2000]),
+        )
+        conn.commit()
+        conn.close()
+
+    def recent_research_urls(self, days: int = 14) -> set[str]:
+        cutoff = time.time() - max(1, days) * 86400
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT DISTINCT url FROM idle_research_history WHERE created_at >= ?",
+            (cutoff,),
+        ).fetchall()
+        conn.close()
+        return {r[0] for r in rows if r and r[0]}
+
+    def add_research_sources(self, urls: list[str], source: str = "conversation") -> int:
+        """Upsert candidate research URLs for future idle cycles."""
+        cleaned = [u.strip()[:2000] for u in urls if isinstance(u, str) and u.strip()]
+        if not cleaned:
+            return 0
+        now = time.time()
+        conn = sqlite3.connect(self.db_path)
+        added = 0
+        for url in cleaned:
+            cur = conn.execute(
+                "SELECT url FROM research_sources WHERE url = ?",
+                (url,),
+            ).fetchone()
+            if cur:
+                conn.execute(
+                    "UPDATE research_sources SET source = ?, last_seen_at = ? WHERE url = ?",
+                    (source[:120], now, url),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO research_sources (url, source, status, first_seen_at, last_seen_at) "
+                    "VALUES (?, ?, 'new', ?, ?)",
+                    (url, source[:120], now, now),
+                )
+                added += 1
+        conn.commit()
+        conn.close()
+        return added
+
+    def get_pending_research_sources(
+        self,
+        *,
+        min_days_before_repeat: int = 14,
+        limit: int = 50,
+    ) -> list[str]:
+        """Return URLs that are new or due for refresh."""
+        repeat_days = max(1, int(min_days_before_repeat))
+        max_rows = max(1, int(limit))
+        cutoff = time.time() - repeat_days * 86400
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT url FROM research_sources "
+            "WHERE status != 'rejected' AND (last_researched_at IS NULL OR last_researched_at < ?) "
+            "ORDER BY COALESCE(last_researched_at, 0) ASC, last_seen_at DESC "
+            "LIMIT ?",
+            (cutoff, max_rows),
+        ).fetchall()
+        conn.close()
+        return [r[0] for r in rows if r and r[0]]
 
 
 # --- JARVIS.md template ---

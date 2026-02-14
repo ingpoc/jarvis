@@ -4,7 +4,11 @@ struct TimelineView: View {
     @Environment(WebSocketClient.self) private var ws
 
     var body: some View {
-        let visible = Array(ws.events.prefix(50))
+        let visible = Array(
+            ws.events
+                .sorted { $0.timestamp > $1.timestamp }
+                .prefix(50)
+        )
 
         if visible.isEmpty {
             Text("No events yet")

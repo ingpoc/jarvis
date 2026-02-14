@@ -127,6 +127,7 @@ final class WebSocketClient: WebSocketClientProtocol {
     private let session: URLSession = .shared
     private let url: URL
     private var reconnectWork: DispatchWorkItem?
+    private var didBootstrapAfterConnect = false
 
     // Request/Response correlation
     private var pendingRequests: [String: PendingRequest] = [:]
@@ -156,6 +157,7 @@ final class WebSocketClient: WebSocketClientProtocol {
         guard connectionState != .connected else { return }
 
         updateState(.connecting)
+        didBootstrapAfterConnect = false
         reconnectWork?.cancel()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
@@ -163,13 +165,14 @@ final class WebSocketClient: WebSocketClientProtocol {
         task = session.webSocketTask(with: url)
         task?.resume()
 
-        updateState(.connected)
         receiveLoop()
-        print("WebSocket connect() called for \(url.absoluteString)")
-
-        Task {
-            try? await sendWithoutResponse(action: "get_status", data: nil)
-            try? await sendWithoutResponse(action: "get_available_tools", data: nil)
+        task?.sendPing { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.handleConnectionError(error)
+                return
+            }
+            self.establishConnectedSession()
         }
     }
 
@@ -259,7 +262,8 @@ final class WebSocketClient: WebSocketClientProtocol {
                 do {
                     try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                     self.pendingRequestsQueue.sync {
-                        if let pending = self.pendingRequests[requestId], !pending.isExpired {
+                        if let pending = self.pendingRequests[requestId] {
+                            _ = pending
                             self.pendingRequests.removeValue(forKey: requestId)?.callback(.failure(WebSocketError.requestTimeout))
                         }
                     }
@@ -305,6 +309,7 @@ final class WebSocketClient: WebSocketClientProtocol {
     }
 
     private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
+        establishConnectedSession()
         let data: Data
         switch message {
         case .string(let text):
@@ -368,6 +373,7 @@ final class WebSocketClient: WebSocketClientProtocol {
 
     private func handleResponse(_ json: [String: Any]) {
         // First, try to match with pending request by id
+        var actionForStateUpdate: String?
         if let requestId = json["id"] as? String {
             pendingRequestsQueue.sync {
                 if let pending = pendingRequests[requestId] {
@@ -379,14 +385,17 @@ final class WebSocketClient: WebSocketClientProtocol {
                     } catch {
                         pending.callback(.failure(WebSocketError.decodingFailed(error)))
                     }
-                    return
+                    actionForStateUpdate = json["action"] as? String
                 }
             }
         }
 
-        // Legacy handling for action-based responses
-        guard let action = json["action"] as? String else { return }
-        handleLegacyResponse(action: action, json: json)
+        // Always perform state updates for known responses, even when request/response
+        // correlation is used. Otherwise fire-and-forget calls like get_containers
+        // never update observable state.
+        if let action = actionForStateUpdate ?? (json["action"] as? String) {
+            handleLegacyResponse(action: action, json: json)
+        }
     }
 
     private func handleLegacyResponse(action: String, json: [String: Any]) {
@@ -403,6 +412,9 @@ final class WebSocketClient: WebSocketClientProtocol {
                let containersData = try? JSONSerialization.data(withJSONObject: data),
                let resp = try? JSONDecoder().decode(ContainersResponse.self, from: containersData) {
                 containers = resp.containers
+                if let err = resp.error, !err.isEmpty {
+                    lastError = err
+                }
 
                 // Index containers in Spotlight
                 Task { @MainActor in
@@ -439,9 +451,23 @@ final class WebSocketClient: WebSocketClientProtocol {
     private func handleConnectionError(_ error: Error) {
         let ns = error as NSError
         print("handleConnectionError domain=\(ns.domain) code=\(ns.code) desc=\(ns.localizedDescription)")
+        didBootstrapAfterConnect = false
         updateState(.disconnected)
         lastError = "Connection error: \(error.localizedDescription)"
         scheduleReconnect()
+    }
+
+    private func establishConnectedSession() {
+        if connectionState != .connected {
+            updateState(.connected)
+        }
+        guard !didBootstrapAfterConnect else { return }
+        didBootstrapAfterConnect = true
+        Task {
+            try? await sendWithoutResponse(action: "get_status", data: nil)
+            try? await sendWithoutResponse(action: "get_available_tools", data: nil)
+            try? await sendWithoutResponse(action: "get_containers", data: nil)
+        }
     }
 
     private func scheduleReconnect() {

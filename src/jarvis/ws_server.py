@@ -59,6 +59,16 @@ class JarvisWSServer:
         # Register as EventCollector listener
         self._events.add_listener(self._broadcast_event)
 
+    def _resolve_client_path(self, raw_path: str) -> Path:
+        """Resolve client-provided paths strictly inside Jarvis workspace."""
+        base = Path(self._orchestrator.project_path if self._orchestrator else ".").expanduser().resolve()
+        incoming = Path(raw_path).expanduser()
+        candidate = incoming if incoming.is_absolute() else (base / incoming)
+        resolved = candidate.resolve()
+        if resolved != base and base not in resolved.parents:
+            raise PermissionError(f"Path escapes workspace: {resolved}")
+        return resolved
+
     async def start(self) -> None:
         """Start WebSocket server on 127.0.0.1."""
         self._server = await serve(
@@ -111,6 +121,7 @@ class JarvisWSServer:
         data = cmd_data.get("data", {})
         request_id = cmd_data.get("id")
         result: Any = None
+        started_at = time.time()
 
         try:
             if action == "get_status":
@@ -163,10 +174,20 @@ class JarvisWSServer:
                 if not description:
                     result = {"error": "Missing 'description'"}
                 elif self._orchestrator:
-                    asyncio.create_task(
-                        self._orchestrator.run_task(description)
-                    )
-                    result = {"queued": description[:100]}
+                    origin_tag = f"ws:{request_id}" if request_id else "ws"
+                    force_mode = str(data.get("mode", "")).strip().lower()
+                    if force_mode == "pipeline":
+                        async def runner(desc: str):
+                            return await self._orchestrator.run_pipeline(desc)
+                        mode = "pipeline"
+                    else:
+                        # WS default is single-agent for predictable conversational UX.
+                        # Callers can explicitly request pipeline mode with data.mode="pipeline".
+                        async def runner(desc: str):
+                            return await self._orchestrator.run_task(desc, origin=origin_tag)
+                        mode = "single"
+                    asyncio.create_task(runner(description))
+                    result = {"queued": description[:100], "mode": mode, "origin": origin_tag}
                 else:
                     result = {"error": "Orchestrator not connected"}
 
@@ -175,10 +196,51 @@ class JarvisWSServer:
                 if not message:
                     result = {"error": "Missing 'message'"}
                 elif self._orchestrator:
-                    chat_result = await self._orchestrator.chat(message)
-                    result = chat_result
+                    result = await self._orchestrator.handle_message(
+                        message,
+                        origin=f"ws:{ws.remote_address[0]}:{ws.remote_address[1]}",
+                    )
                 else:
                     result = {"error": "Orchestrator not connected"}
+
+            elif action == "message":
+                message = data.get("message", "")
+                if not message:
+                    result = {"error": "Missing 'message'"}
+                elif not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    origin_tag = f"ws:{ws.remote_address[0]}:{ws.remote_address[1]}"
+                    result = await self._orchestrator.handle_message(
+                        message,
+                        origin=origin_tag,
+                    )
+                    route = result.get("route", "unknown")
+                    decision = result.get("decision", {}) or {}
+                    self._events.emit(
+                        "chat_intent",
+                        f"route={route}",
+                        metadata={
+                            "route": route,
+                            "confidence": decision.get("confidence"),
+                            "reason": decision.get("reason"),
+                            "mode": decision.get("mode"),
+                        },
+                    )
+
+            elif action == "run_code_orchestration":
+                if not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    code = str(data.get("code", "") or "")
+                    timeout = int(data.get("timeout", 30) or 30)
+                    if not code.strip():
+                        result = {"error": "Missing 'code'"}
+                    else:
+                        result = self._orchestrator.run_code_orchestration(
+                            code=code,
+                            timeout=max(1, min(timeout, 300)),
+                        )
 
             elif action == "add_mcp_server":
                 if not self._orchestrator:
@@ -219,7 +281,8 @@ class JarvisWSServer:
                         "Run the project's test suite, report failures, and suggest fixes. "
                         "Use the project's native test command."
                     )
-                    asyncio.create_task(self._orchestrator.run_task(prompt))
+                    origin_tag = f"ws:{request_id}:run_tests" if request_id else "ws:run_tests"
+                    asyncio.create_task(self._orchestrator.run_task(prompt, origin=origin_tag))
                     result = {"queued": "run_tests"}
                 else:
                     result = {"error": "Orchestrator not connected"}
@@ -227,7 +290,8 @@ class JarvisWSServer:
             elif action == "build_project":
                 if self._orchestrator:
                     prompt = "Build the current project and report build status and any errors."
-                    asyncio.create_task(self._orchestrator.run_task(prompt))
+                    origin_tag = f"ws:{request_id}:build_project" if request_id else "ws:build_project"
+                    asyncio.create_task(self._orchestrator.run_task(prompt, origin=origin_tag))
                     result = {"queued": "build_project"}
                 else:
                     result = {"error": "Orchestrator not connected"}
@@ -251,7 +315,7 @@ class JarvisWSServer:
                 if not file_path:
                     result = {"error": "Missing 'file_path'"}
                 else:
-                    path = Path(file_path).expanduser()
+                    path = self._resolve_client_path(file_path)
                     if not path.exists():
                         result = {"error": f"File not found: {path}"}
                     elif path.is_dir():
@@ -270,7 +334,7 @@ class JarvisWSServer:
                 if not file_path:
                     result = {"error": "Missing 'file_path'"}
                 else:
-                    path = Path(file_path).expanduser()
+                    path = self._resolve_client_path(file_path)
                     if not path.exists() or path.is_dir():
                         result = {"error": f"File not found: {path}"}
                     else:
@@ -290,7 +354,7 @@ class JarvisWSServer:
                 if not file_path:
                     result = {"error": "Missing 'file_path'"}
                 else:
-                    path = Path(file_path).expanduser()
+                    path = self._resolve_client_path(file_path)
                     if not path.exists():
                         result = {"error": f"File not found: {path}"}
                     else:
@@ -303,7 +367,8 @@ class JarvisWSServer:
 
             elif action == "get_containers":
                 from jarvis.container_tools import _run_container_cmd
-                cmd_result = await _run_container_cmd("list", "--format", "json", timeout=10)
+                # Listing containers can be slow right after the container system is started.
+                cmd_result = await _run_container_cmd("list", "--format", "json", timeout=30)
                 if cmd_result["exit_code"] == 0 and cmd_result["stdout"]:
                     try:
                         containers = json.loads(cmd_result["stdout"])
@@ -317,9 +382,14 @@ class JarvisWSServer:
                             ]
                         }
                     except json.JSONDecodeError:
-                        result = {"containers": []}
+                        result = {
+                            "containers": [],
+                            "error": "Failed to decode container list JSON",
+                            "raw_output": (cmd_result["stdout"] or "")[:2000],
+                        }
                 else:
-                    result = {"containers": []}
+                    err = cmd_result.get("stderr") or cmd_result.get("stdout") or "container list failed"
+                    result = {"containers": [], "error": err[:2000]}
 
             elif action == "stop_container":
                 from jarvis.container_tools import _run_container_cmd
@@ -367,13 +437,23 @@ class JarvisWSServer:
 
         except Exception as e:
             logger.exception("Command error (%s): %s", action, e)
-            result = {"error": str(e)}
+            result = {"error": str(e), "error_type": type(e).__name__}
+
+        duration_ms = int(max(0.0, (time.time() - started_at) * 1000))
+        if isinstance(result, dict):
+            result.setdefault("_meta", {})
+            result["_meta"].update({
+                "request_id": request_id,
+                "action": action,
+                "duration_ms": duration_ms,
+            })
 
         response = {"type": "response", "id": request_id, "action": action, "data": result}
         # Include the result fields at top-level for clients decoding direct payload types.
         if isinstance(result, dict):
             response.update(result)
         await ws.send(json.dumps(response, default=str))
+
 
     def _build_status_payload(self, raw_status: dict) -> dict:
         """Normalize status shape for both legacy and typed Swift clients."""
@@ -385,6 +465,7 @@ class JarvisWSServer:
             status = "building"
         elif any(t.get("status") in ("failed", "error") for t in recent_tasks):
             status = "error"
+        preflight = raw_status.get("preflight") or {}
 
         return {
             **raw_status,
@@ -392,6 +473,9 @@ class JarvisWSServer:
             "current_session": raw_status.get("session_id"),
             "current_feature": active_tasks[0]["description"][:120] if active_tasks else None,
             "uptime": max(0.0, time.time() - self._started_at),
+            "preflight_ready": bool(preflight.get("ready", False)),
+            "preflight_errors": preflight.get("errors", []),
+            "preflight_warnings": preflight.get("warnings", []),
         }
 
     @staticmethod

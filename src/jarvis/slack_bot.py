@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import time
 from typing import TYPE_CHECKING
 
 try:
@@ -45,6 +47,7 @@ class JarvisSlackBot:
         bot_token: str,
         app_token: str,
         default_channel: str,
+        research_channel: str = "#jarvisresearch",
         event_collector: EventCollector | None = None,
         orchestrator=None,
     ):
@@ -52,12 +55,15 @@ class JarvisSlackBot:
         self._bot_token = bot_token
         self._app_token = app_token
         self._default_channel = default_channel
+        self._research_channel = research_channel
         self._event_collector = event_collector
         self._orchestrator = orchestrator
 
         self._app = AsyncApp(token=bot_token)
         self._handler: AsyncSocketModeHandler | None = None
         self._client = AsyncWebClient(token=bot_token)
+        self._notify_dedupe_window_secs = int(os.environ.get("JARVIS_SLACK_DEDUPE_SECS", "180"))
+        self._last_notify_at: dict[str, float] = {}
 
         self._register_commands()
         self._register_events()
@@ -178,6 +184,9 @@ class JarvisSlackBot:
     def _on_event(self, event_data: dict):
         """Handle events from EventCollector - send to Slack."""
         event_type = event_data.get("event_type", "")
+        metadata = event_data.get("metadata") or {}
+        if metadata.get("slack_notify") is False:
+            return
         auto_notify_types = {
             "feature_complete", "error", "approval_needed",
             "task_complete", "trust_change",
@@ -190,6 +199,13 @@ class JarvisSlackBot:
         event_type = event_data["event_type"]
         summary = event_data.get("summary", "")
         task_id = event_data.get("task_id", "")
+        dedupe_key = f"{event_type}|{task_id}|{summary[:180]}"
+        now = time.time()
+        last = self._last_notify_at.get(dedupe_key, 0.0)
+        if (now - last) < self._notify_dedupe_window_secs:
+            logger.info("Skipping duplicate Slack notification within window: %s", dedupe_key)
+            return
+        self._last_notify_at[dedupe_key] = now
 
         if event_type == "approval_needed":
             blocks = self._build_approval_blocks(task_id, summary)
@@ -263,7 +279,11 @@ class JarvisSlackBot:
         logger.info("Slack chat message from %s in %s: %s", user, channel, chat_text[:120])
 
         try:
-            result = await self._orchestrator.chat(chat_text)
+            result = await self._orchestrator.handle_message(
+                chat_text,
+                origin=f"slack:{channel or 'unknown'}",
+            )
+            route = result.get("route")
             reply = (result.get("reply") or "").strip()
             if not reply:
                 reply = "No response generated."

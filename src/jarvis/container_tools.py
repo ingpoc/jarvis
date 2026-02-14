@@ -118,6 +118,7 @@ async def _collect_container_diagnostics(container_id: str) -> dict:
         "ssh_forward": bool,
         "keep_alive": bool,
         "command": str,
+        "mode": str,  # service | job
         "template": str,
     },
 )
@@ -148,10 +149,12 @@ async def container_run(args: dict) -> dict:
     ]
 
     for vol in volumes:
-        cmd_args.extend(["--volume", vol])
+        if vol and ":" in vol:  # Only add valid volume mappings with colon
+            cmd_args.extend(["--volume", vol])
 
     for port in ports:
-        cmd_args.extend(["--publish", port])
+        if port and ":" in str(port):  # Only add valid port mappings with colon
+            cmd_args.extend(["--publish", port])
 
     for env_var in env_vars:
         cmd_args.extend(["--env", env_var])
@@ -161,7 +164,21 @@ async def container_run(args: dict) -> dict:
 
     cmd_args.append(image)
     explicit_command = str(args.get("command", "")).strip()
+    mode = str(args.get("mode", "service") or "service").strip().lower()
+    if mode not in {"service", "job"}:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "status": "error",
+            "error": f"Invalid mode '{mode}'. Expected 'service' or 'job'.",
+        })}]}
+
     keep_alive = bool(args.get("keep_alive", True))
+    if mode == "job" and not explicit_command:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "status": "error",
+            "error": "Job mode requires a non-empty command.",
+            "hint": "Use mode='service' for long-running containers or provide command for mode='job'.",
+        })}]}
+
     if explicit_command:
         cmd_args.extend(["sh", "-lc", explicit_command])
     elif keep_alive:
@@ -171,14 +188,16 @@ async def container_run(args: dict) -> dict:
     result = await _run_container_cmd(*cmd_args, timeout=120)
 
     if result["exit_code"] == 0:
+        await asyncio.sleep(0.5)
         status = await _get_container_status(name)
-        if status not in ("running", "starting"):
+        if mode == "service" and status not in ("running", "starting"):
             diagnostics = await _collect_container_diagnostics(name)
             return {"content": [{"type": "text", "text": json.dumps({
                 "status": "error",
                 "container_id": name,
-                "error": "Container exited immediately after start",
+                "error": "Service-mode container exited immediately after start",
                 "start_output": result["stdout"] or result["stderr"],
+                "mode": mode,
                 **diagnostics,
             })}]}
 
@@ -215,26 +234,30 @@ async def container_run(args: dict) -> dict:
                     "setup_exit_code": setup_result["exit_code"],
                     "setup_stdout": setup_result["stdout"][:2000],
                     "setup_stderr": setup_result["stderr"][:2000],
+                    "mode": mode,
                     **diagnostics,
                 })}]}
 
         status = await _get_container_status(name)
-        if status != "running":
+        if mode == "service" and status != "running":
             diagnostics = await _collect_container_diagnostics(name)
             return {"content": [{"type": "text", "text": json.dumps({
                 "status": "error",
                 "container_id": name,
-                "error": "Container not running after initialization",
+                "error": "Service-mode container not running after initialization",
                 "template": setup_info["template"] if setup_info else None,
                 "setup_exit_code": setup_info["setup_exit_code"] if setup_info else None,
+                "mode": mode,
                 **diagnostics,
             })}]}
 
         response = {
-            "status": "running",
+            "status": "running" if status == "running" else "accepted",
             "container_id": name,
             "image": image,
             "message": result["stdout"],
+            "mode": mode,
+            "container_status": status,
             "keep_alive": keep_alive and not explicit_command,
         }
         if setup_info:

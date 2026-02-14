@@ -1,65 +1,43 @@
 # AGENTS.md
 
-## Mission
-Improve Jarvis continuously while delivering user requests with high reliability.
+## Scope
+This file contains only Jarvis-core, repository-specific rules.
+Global operating policy lives in `~/.codex/AGENTS.md` and `~/.codex/rules/*`.
 
-## Identity
-- Be useful, direct, and evidence-first.
-- Push back when needed, from care not ego.
-- Optimize for learning rate, not only task completion.
-- Do not perform fake certainty.
+## Context Contract
+- Apply global baseline first from `~/.codex/AGENTS.md`.
+- Use this file only for rules specific to this repository.
+- Do not duplicate global policy text here; add short references when needed.
 
-## Principles
-- Friction is signal: investigate resistance, do not route around it blindly.
-- Explicit failures beat silent degradation.
-- Use primary sources for technical decisions whenever possible.
-- Keep memory compact and high-signal.
-- If uncertain, separate `verified` from `inferred`.
+## Mission (Jarvis Core)
+Improve Jarvis reliability and capability while keeping failures explicit and diagnosable.
 
-## Operating Workflow
-1. Load minimal context:
-   - this `AGENTS.md`
-   - global `~/.codex/rules/soul.md`
-   - global `~/.codex/rules/principles.md`
-2. Classify request:
-   - delivery, research, or platform
-3. Select smallest tool set and execute end-to-end.
-4. Verify with concrete evidence (tests/logs/runtime checks).
-5. Persist concise learnings to project memory files only when working on non-Jarvis target repos.
+## Jarvis-Core Mandatory Rules
+- Startup checks are fail-fast only:
+  - If daemon launch env cannot be loaded, abort startup with explicit `FATAL` log.
+  - Do not add fallback paths that mask broken launch/permissions state.
+- Launchd compatibility:
+  - Daemon launch context must not depend on reading project files under `Documents` at runtime.
+  - Required launch env must be sourced from `~/.jarvis` artifacts generated at startup.
+- Port cleanup safety:
+  - Kill only listeners on service ports (`-sTCP:LISTEN`), never all processes touching the port.
+- Launchctl validation:
+  - Do not trust a single captured PID during bootstrap (PID can churn).
+  - Validate via launchctl service state + port readiness, then refresh/write current PID.
 
-## Progressive Disclosure
-- Start local: repo files, logs, tests.
-- Then primary docs (Context7).
-- Then repo intelligence (DeepWiki).
-- Use heavy web browsing only when unresolved.
+## Verification Standard (Jarvis Core)
+After startup or daemon lifecycle changes:
+- `stop-jarvis.sh` then `start-jarvis.sh` must pass with clean logs.
+- Confirm daemon WebSocket port is listening.
+- Confirm menu bar process is running and connected.
 
-## Tool Budget Rules
-- Parallelize only independent reads.
-- Prefer token-efficient MCP for bulk data.
-- Keep outputs concise and machine-checkable when possible.
+## Scope Routing (Jarvis)
+- Jarvis-core implementation policy stays in this repo (`AGENTS.md`, `ROADMAP.md`).
+- `JARVIS.md` is only for non-core target repos where Jarvis executes user tasks.
 
-## Skill Policy
-- Create skill after 3+ repeated stable workflows.
-- Keep skill scope narrow.
-- Include trigger, steps, success criteria, and failure modes.
+## Trace Requirement
+Use global Context Graph workflow from:
+- `~/.codex/rules/WORKFLOW.md`
+- `~/.codex/rules/TOOLS-POLICY.md`
 
-## Scope Routing
-- Use global skill `project-context-router` when deciding where updates belong.
-- Keep cross-project policy in `~/.codex/rules/*`.
-- Keep Jarvis-core implementation policy in this repo's `AGENTS.md` and `ROADMAP.md`.
-- Keep `JARVIS.md` only in non-core target repos where Jarvis is actively executing work.
-
-## Research Policy
-- Track source status: `new`, `reviewed`, `adopted`, `rejected`.
-- Only update workflow files when evidence is concrete.
-- Post research summaries only to dedicated research channel.
-
-## Failure Policy
-- Never hide errors.
-- Include root cause, impact, and exact next fix.
-- If blocked by auth/permissions/quota, report explicitly.
-
-## Safety and Boundaries
-- Private data stays private.
-- Ask before high-impact external actions.
-- Prefer reversible changes and explicit rollback paths.
+For this repo, non-trivial fixes are not done unless trace query/store/update workflow is followed.

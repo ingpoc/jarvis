@@ -183,7 +183,7 @@ final class MockWebSocketClient: WebSocketClientProtocol {
             return JarvisStatusResponse(status: .idle, currentSession: nil, currentFeature: nil, uptime: 100) as! T
         }
         if T.self == ContainersResponse.self {
-            return ContainersResponse(containers: []) as! T
+            return ContainersResponse(containers: [], error: nil, rawOutput: nil) as! T
         }
         throw WebSocketError.notConnected
     }

@@ -15,10 +15,13 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
+import time
 import traceback
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -37,10 +40,18 @@ from jarvis.code_orchestrator import CodeOrchestrator
 from jarvis.config import JARVIS_HOME, JarvisConfig
 from jarvis.decision_tracer import DecisionTracer, TraceCategory
 from jarvis.browser_tools import create_browser_mcp_server
+from jarvis.context_files import (
+    append_project_turn,
+    ensure_core_context_files,
+    ensure_project_jarvis_file,
+    load_core_context,
+    should_use_project_jarvis,
+)
 from jarvis.container_tools import create_container_mcp_server
 from jarvis.events import EventCollector, EVENT_TOOL_USE, EVENT_TASK_START, EVENT_TASK_COMPLETE, EVENT_ERROR
 from jarvis.git_tools import create_git_mcp_server
 from jarvis.harness import BuildHarness
+from typing import Literal, TypedDict, cast
 from jarvis.memory import MemoryStore
 from jarvis.loop_detector import LoopDetector, LoopAction, build_intervention_message
 from jarvis.notifications import (
@@ -54,14 +65,33 @@ from jarvis.trust import TrustEngine
 from jarvis.agents import MultiAgentPipeline
 
 logger = logging.getLogger(__name__)
+_DYNAMIC_CAPS_FILE = JARVIS_HOME / "dynamic_capabilities.json"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+class MessageRouteDecision(TypedDict, total=False):
+    mode: Literal["reply", "ask", "execute"]
+    reply: str
+    question: str
+    choices: list[str]
+    task_description: str
+    confidence: float
+    reason: str
 
 
 class JarvisOrchestrator:
     """Main Jarvis orchestration engine."""
 
     def __init__(self, project_path: str | None = None):
-        self.project_path = project_path or os.getcwd()
         self.config = JarvisConfig.load()
+        default_workspace = (
+            os.environ.get("JARVIS_WORKSPACE")
+            or self.config.workspace_root
+            or os.getcwd()
+        )
+        self.project_path = str(Path(project_path or default_workspace).expanduser().resolve())
+        Path(self.project_path).mkdir(parents=True, exist_ok=True)
+        ensure_core_context_files()
+        ensure_project_jarvis_file(self.project_path)
         self.trust = TrustEngine()
         self.budget = BudgetController()
         self.memory = MemoryStore()
@@ -74,6 +104,7 @@ class JarvisOrchestrator:
         self._dynamic_mcp_servers: dict[str, dict] = {}
         self._dynamic_agents: dict[str, AgentDefinition] = {}
         self._dynamic_skills: dict[str, dict] = {}
+        self._load_dynamic_capabilities()
         self._session_id: str | None = None
         self._active_containers: list[str] = []
         self.loop_detector = LoopDetector(
@@ -82,6 +113,7 @@ class JarvisOrchestrator:
         self.events = EventCollector(memory=self.memory)
         self._chat_lock = asyncio.Lock()
         self._chat_client: ClaudeSDKClient | None = None
+        self._router_lock = asyncio.Lock()
         self.code_orchestrator = CodeOrchestrator(
             mcp_servers={
                 "jarvis-container": self.container_server,
@@ -89,6 +121,26 @@ class JarvisOrchestrator:
             },
             project_path=self.project_path,
         )
+        self._preflight_status: dict = {
+            "ready": False,
+            "checked_at": None,
+            "live_check": False,
+            "errors": ["preflight_not_run"],
+            "warnings": [],
+            "provider": {
+                "base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
+                "token_present": bool(
+                    os.environ.get("ANTHROPIC_AUTH_TOKEN")
+                    or os.environ.get("ANTHROPIC_API_KEY")
+                ),
+            },
+            "models": {
+                "planner": self.config.models.planner,
+                "executor": self.config.models.executor,
+                "reviewer": self.config.models.reviewer,
+                "quick": self.config.models.quick,
+            },
+        }
 
     def _build_mcp_servers(self) -> dict:
         """Build static + dynamic MCP server map."""
@@ -102,23 +154,122 @@ class JarvisOrchestrator:
         servers.update(self._dynamic_mcp_servers)
         return servers
 
+    def _extract_urls_from_text(self, text: str) -> list[str]:
+        """Extract and normalize HTTP(S) URLs from free-form text."""
+        if not text:
+            return []
+        matches = re.findall(r"https?://[^\s<>()\"']+", text, flags=re.IGNORECASE)
+        urls: list[str] = []
+        seen: set[str] = set()
+        for raw in matches:
+            cleaned = raw.rstrip(".,;:!?)]}")
+            try:
+                parts = urlsplit(cleaned)
+            except Exception:
+                continue
+            if parts.scheme not in ("http", "https") or not parts.netloc:
+                continue
+            normalized = urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+            if normalized not in seen:
+                seen.add(normalized)
+                urls.append(normalized)
+        return urls
+
+    def _ingest_research_urls_from_text(self, text: str, source: str) -> int:
+        urls = self._extract_urls_from_text(text)
+        if not urls:
+            return 0
+        added = self.memory.add_research_sources(urls, source=source)
+        if added:
+            self.events.emit(
+                "research_sources_added",
+                f"Added {added} research source(s) from {source}",
+                metadata={"source": source, "count": added, "urls": urls[:20]},
+            )
+        return added
+
+    def _load_dynamic_capabilities(self) -> None:
+        """Load dynamic MCP servers/agents/skills persisted across restarts."""
+        if not _DYNAMIC_CAPS_FILE.exists():
+            return
+        try:
+            data = json.loads(_DYNAMIC_CAPS_FILE.read_text())
+        except Exception as exc:
+            logger.warning("Failed to load dynamic capabilities: %s", exc)
+            return
+
+        for name, server in (data.get("mcp_servers", {}) or {}).items():
+            if isinstance(server, dict):
+                self._dynamic_mcp_servers[str(name)] = server
+
+        for name, skill in (data.get("skills", {}) or {}).items():
+            if not isinstance(skill, dict):
+                continue
+            desc = str(skill.get("description", "")).strip()
+            content = str(skill.get("content", "")).strip()
+            if desc and content:
+                self._dynamic_skills[str(name)] = {"description": desc, "content": content}
+
+        for name, raw_agent in (data.get("agents", {}) or {}).items():
+            if not isinstance(raw_agent, dict):
+                continue
+            description = str(raw_agent.get("description", "")).strip()
+            prompt = str(raw_agent.get("prompt", "")).strip()
+            if not description or not prompt:
+                continue
+            tools = raw_agent.get("tools")
+            model = raw_agent.get("model")
+            safe_model = model if model in ("sonnet", "opus", "haiku", "inherit", None) else "inherit"
+            self._dynamic_agents[str(name)] = AgentDefinition(
+                description=description,
+                prompt=prompt,
+                tools=tools if isinstance(tools, list) else None,
+                model=safe_model,
+            )
+
+    def _persist_dynamic_capabilities(self) -> None:
+        """Persist dynamic capabilities so they survive daemon restart."""
+        try:
+            JARVIS_HOME.mkdir(parents=True, exist_ok=True)
+            agents_payload: dict[str, dict] = {}
+            for name, agent in self._dynamic_agents.items():
+                agents_payload[name] = {
+                    "description": agent.description,
+                    "prompt": agent.prompt,
+                    "tools": list(agent.tools) if agent.tools else [],
+                    "model": agent.model,
+                }
+            payload = {
+                "mcp_servers": self._dynamic_mcp_servers,
+                "agents": agents_payload,
+                "skills": self._dynamic_skills,
+            }
+            _DYNAMIC_CAPS_FILE.write_text(json.dumps(payload, indent=2))
+        except Exception as exc:
+            logger.warning("Failed to persist dynamic capabilities: %s", exc)
+
     def _load_configured_mcp_servers(self) -> dict[str, dict]:
         """Load MCP servers from project config and built-in documentation defaults."""
         configured: dict[str, dict] = {}
 
-        # Project-level .mcp.json (Claude-style format)
-        mcp_json_path = Path(self.project_path) / ".mcp.json"
-        if mcp_json_path.exists():
+        # Load .mcp.json from workspace first, then fallback to Jarvis core repo.
+        mcp_candidates = [
+            Path(self.project_path) / ".mcp.json",
+            REPO_ROOT / ".mcp.json",
+        ]
+        for mcp_json_path in mcp_candidates:
+            if not mcp_json_path.exists():
+                continue
             try:
                 data = json.loads(mcp_json_path.read_text())
                 server_map = data.get("mcpServers", {})
                 if isinstance(server_map, dict):
                     for name, raw in server_map.items():
                         parsed = self._parse_project_mcp_server(name, raw)
-                        if parsed:
+                        if parsed and name not in configured:
                             configured[name] = parsed
             except Exception as exc:
-                logger.warning("Failed to parse .mcp.json: %s", exc)
+                logger.warning("Failed to parse .mcp.json (%s): %s", mcp_json_path, exc)
 
         # Ensure doc/repo lookup MCPs are available by default.
         if "context7" not in configured and shutil.which("npx"):
@@ -177,6 +328,7 @@ class JarvisOrchestrator:
         """Normalize context-graph config to a valid path + cache dir."""
         candidate_dirs = [
             Path(self.project_path) / "mcp" / "context-graph-mcp",
+            REPO_ROOT / "mcp" / "context-graph-mcp",
             Path(self.project_path).parents[1] / "mcp-servers" / "context-graph-mcp",
             Path(self.project_path).parents[2] / "mcp-servers" / "context-graph-mcp",
         ]
@@ -191,6 +343,7 @@ class JarvisOrchestrator:
         """Normalize token-efficient config to direct stdio node launch."""
         candidate_files = [
             Path(self.project_path) / "mcp" / "token-efficient-mcp" / "dist" / "index.js",
+            REPO_ROOT / "mcp" / "token-efficient-mcp" / "dist" / "index.js",
             Path(self.project_path).parents[1] / "mcp-servers" / "token-efficient-mcp" / "dist" / "index.js",
             Path(self.project_path).parents[2] / "mcp-servers" / "token-efficient-mcp" / "dist" / "index.js",
         ]
@@ -208,11 +361,16 @@ class JarvisOrchestrator:
         trust_status = self.trust.status(self.project_path)
         budget_status = self.budget.summary()
 
-        # Load JARVIS.md if it exists
+        # Load project JARVIS markdown if it exists.
         jarvis_md = ""
-        jarvis_md_path = Path(self.project_path) / "JARVIS.md"
-        if jarvis_md_path.exists():
-            jarvis_md = f"\n\n## Project Rules (JARVIS.md)\n{jarvis_md_path.read_text()}"
+        if should_use_project_jarvis(self.project_path):
+            jarvis_md_path = Path(self.project_path) / "JARVIS.md"
+            if not jarvis_md_path.exists():
+                jarvis_md_path = Path(self.project_path) / "Jarvis.md"
+            if jarvis_md_path.exists():
+                jarvis_md = f"\n\n## Project Rules (JARVIS.md)\n{jarvis_md_path.read_text()}"
+
+        core_context = load_core_context()
 
         # Load last session summary for continuity
         last_summary = self.memory.get_last_summary(self.project_path)
@@ -295,7 +453,7 @@ Turns: {budget_status['turns']}
 6. If tests pass: commit changes (if T2+)
 7. Clean up containers
 8. Report results
-{self._build_dynamic_capabilities_prompt()}{jarvis_md}{continuity}{patterns_text}"""
+{self._build_dynamic_capabilities_prompt()}\n\n## Core Context\n{core_context}{jarvis_md}{continuity}{patterns_text}"""
 
     def _build_dynamic_capabilities_prompt(self) -> str:
         sections: list[str] = []
@@ -357,6 +515,30 @@ Turns: {budget_status['turns']}
             "mcp__deepwiki__read_wiki_structure",
             "mcp__deepwiki__read_wiki_contents",
             "mcp__deepwiki__ask_question",
+            "mcp__context-graph__context_get_trace",
+            "mcp__context-graph__context_list_categories",
+            "mcp__context-graph__context_list_traces",
+            "mcp__context-graph__context_query_traces",
+            "mcp__context-graph__context_store_trace",
+            "mcp__context-graph__context_update_outcome",
+            "mcp__token-efficient__batch_process_csv",
+            "mcp__token-efficient__execute_code",
+            "mcp__token-efficient__get_token_savings_report",
+            "mcp__token-efficient__list_token_efficient_tools",
+            "mcp__token-efficient__process_csv",
+            "mcp__token-efficient__process_logs",
+            "mcp__token-efficient__search_tools",
+            "mcp__comet-bridge__comet_ask",
+            "mcp__comet-bridge__comet_connect",
+            "mcp__comet-bridge__comet_mode",
+            "mcp__comet-bridge__comet_poll",
+            "mcp__comet-bridge__comet_screenshot",
+            "mcp__comet-bridge__comet_stop",
+            "mcp__jarvis-x-bookmarks__x_health",
+            "mcp__jarvis-x-bookmarks__x_get_me",
+            "mcp__jarvis-x-bookmarks__x_list_bookmarks",
+            "mcp__jarvis-x-bookmarks__x_list_bookmark_folders",
+            "mcp__jarvis-x-bookmarks__x_list_folder_bookmarks",
         ]
 
         if tier >= 1:  # Assistant: edit, test, search
@@ -548,6 +730,7 @@ Turns: {budget_status['turns']}
             "args": args or [],
             "env": env or {},
         }
+        self._persist_dynamic_capabilities()
         return {
             "success": True,
             "name": name,
@@ -574,6 +757,7 @@ Turns: {budget_status['turns']}
             tools=tools or None,
             model=safe_model,
         )
+        self._persist_dynamic_capabilities()
         return {"success": True, "name": name, "agent_count": len(self._dynamic_agents)}
 
     def register_skill(self, name: str, description: str, content: str) -> dict:
@@ -586,6 +770,7 @@ Turns: {budget_status['turns']}
             "description": description.strip(),
             "content": content.strip(),
         }
+        self._persist_dynamic_capabilities()
         return {"success": True, "name": name, "skill_count": len(self._dynamic_skills)}
 
     def get_capabilities(self) -> dict:
@@ -607,6 +792,7 @@ Turns: {budget_status['turns']}
         capability_tools += [f"agent://{name}" for name in dynamic_agents]
         capability_tools += ["skill://Skill"]
         capability_tools += [f"skill://{name}" for name in dynamic_skills]
+        capability_tools += ["code_orchestrator://execute"]
         return {
             "tools": sorted(set(capability_tools)),
             "mcp_servers": {
@@ -619,7 +805,34 @@ Turns: {budget_status['turns']}
             "skills": dynamic_skills,
         }
 
-    async def run_task(self, task_description: str, callback=None) -> dict:
+    def run_code_orchestration(self, code: str, timeout: int = 30) -> dict:
+        """Execute batched tool script via CodeOrchestrator."""
+        result = self.code_orchestrator.execute(code, timeout=timeout)
+        summary = (
+            f"status={result.get('status')} "
+            f"tool_calls={result.get('tool_calls', 0)} "
+            f"saved~{result.get('cost_saved_estimate', 0)} tokens"
+        )
+        self.events.emit(
+            EVENT_TOOL_USE,
+            "code_orchestrator.execute",
+            metadata={
+                "summary": summary,
+                "status": result.get("status"),
+                "tool_calls": result.get("tool_calls", 0),
+                "error": result.get("error"),
+            },
+        )
+        return result
+
+    async def run_task(
+        self,
+        task_description: str,
+        callback=None,
+        *,
+        origin: str = "user",
+        emit_notifications: bool = True,
+    ) -> dict:
         """Execute a task autonomously.
 
         Args:
@@ -629,13 +842,23 @@ Turns: {budget_status['turns']}
         Returns:
             Task result dict with status, cost, session_id
         """
+        if origin != "idle_research":
+            self._ingest_research_urls_from_text(task_description, source=f"task:{origin}")
+
         # Create task record
         task_id = f"task-{uuid.uuid4().hex[:8]}"
-        task = self.memory.create_task(task_id, task_description, self.project_path)
-        self.memory.update_task(task_id, status="in_progress")
+        self.memory.create_task(task_id, task_description, self.project_path)
+        self.memory.transition_task(task_id, "in_progress")
 
-        await notify_task_started(task_id, task_description)
-        self.events.emit(EVENT_TASK_START, task_description, task_id=task_id)
+        ensure_project_jarvis_file(self.project_path)
+        if emit_notifications:
+            await notify_task_started(task_id, task_description)
+        self.events.emit(
+            EVENT_TASK_START,
+            task_description,
+            task_id=task_id,
+            metadata={"origin": origin, "slack_notify": emit_notifications},
+        )
         if callback:
             callback("task_started", {"id": task_id, "description": task_description})
 
@@ -668,48 +891,68 @@ Turns: {budget_status['turns']}
         }
 
         try:
-            async with ClaudeSDKClient(options=options) as client:
-                await client.query(task_description)
+            async def _run_query() -> None:
+                async with ClaudeSDKClient(options=options) as client:
+                    await client.query(task_description)
 
-                async for message in client.receive_response():
-                    # Extract session ID
-                    if isinstance(message, SystemMessage):
-                        if message.subtype == "init":
-                            self._session_id = message.data.get("session_id")
-                            result["session_id"] = self._session_id
+                    async for message in client.receive_response():
+                        # Extract session ID
+                        if isinstance(message, SystemMessage):
+                            if message.subtype == "init":
+                                self._session_id = message.data.get("session_id")
+                                result["session_id"] = self._session_id
 
-                    # Track assistant output
-                    elif isinstance(message, AssistantMessage):
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                if callback:
-                                    callback("assistant_text", {"text": block.text})
-                                result["output"] += block.text + "\n"
-                            elif isinstance(block, ToolUseBlock):
-                                if callback:
-                                    callback("tool_use", {
-                                        "tool": block.name,
-                                        "input": block.input,
-                                    })
+                        # Track assistant output
+                        elif isinstance(message, AssistantMessage):
+                            for block in message.content:
+                                if isinstance(block, TextBlock):
+                                    if callback:
+                                        callback("assistant_text", {"text": block.text})
+                                    result["output"] += block.text + "\n"
+                                elif isinstance(block, ToolUseBlock):
+                                    if callback:
+                                        callback("tool_use", {
+                                            "tool": block.name,
+                                            "input": block.input,
+                                        })
 
-                    # Final result
-                    elif isinstance(message, ResultMessage):
-                        cost = message.total_cost_usd or 0.0
-                        result["cost_usd"] = cost
-                        result["turns"] = message.num_turns
-                        result["status"] = "completed" if not message.is_error else "failed"
+                        # Final result
+                        elif isinstance(message, ResultMessage):
+                            cost = message.total_cost_usd or 0.0
+                            result["cost_usd"] = cost
+                            result["turns"] = message.num_turns
+                            result["status"] = "completed" if not message.is_error else "failed"
 
-                        # Record cost
-                        self.budget.record_cost(cost, message.num_turns, task_description)
+                            # Record cost
+                            self.budget.record_cost(cost, message.num_turns, task_description)
 
-                        # Update trust
-                        if not message.is_error:
-                            upgrade_msg = self.trust.record_success(self.project_path)
-                            if upgrade_msg and callback:
-                                callback("trust_upgrade", {"message": upgrade_msg})
-                        else:
-                            self.trust.record_failure(self.project_path)
+                            # Update trust
+                            if not message.is_error:
+                                upgrade_msg = self.trust.record_success(self.project_path)
+                                if upgrade_msg and callback:
+                                    callback("trust_upgrade", {"message": upgrade_msg})
+                            else:
+                                self.trust.record_failure(self.project_path)
 
+            # Task runtime watchdog:
+            # - unset/empty: unbounded (no timeout)
+            # - <= 0: unbounded (no timeout)
+            # - > 0: seconds
+            raw_timeout = os.environ.get("JARVIS_TASK_TIMEOUT_SECS", "").strip()
+            max_runtime_seconds = int(raw_timeout) if raw_timeout else 0
+
+            if max_runtime_seconds <= 0:
+                await _run_query()
+            else:
+                await asyncio.wait_for(_run_query(), timeout=max_runtime_seconds)
+        except asyncio.TimeoutError:
+            result["status"] = "error"
+            timeout_display = os.environ.get("JARVIS_TASK_TIMEOUT_SECS", "").strip() or "unbounded"
+            result["output"] = (
+                f"Task timed out after {timeout_display} seconds.\n"
+                "Execution was terminated to avoid indefinite in_progress state."
+            )
+            self.trust.record_failure(self.project_path)
         except Exception as e:
             tb = traceback.format_exc()
             logger.error("run_task failed: %s\n%s", e, tb)
@@ -722,9 +965,12 @@ Turns: {budget_status['turns']}
             await self._cleanup_containers()
 
         # Update task record
-        self.memory.update_task(
+        final_status = result["status"]
+        if final_status not in ("completed", "failed", "cancelled"):
+            final_status = "failed"
+        self.memory.transition_task(
             task_id,
-            status=result["status"],
+            final_status,
             cost_usd=result["cost_usd"],
             turns=result["turns"],
             session_id=result["session_id"],
@@ -750,15 +996,29 @@ Turns: {budget_status['turns']}
             self.events.emit(
                 EVENT_TASK_COMPLETE, task_description,
                 task_id=task_id, cost_usd=result["cost_usd"],
+                metadata={"origin": origin, "slack_notify": emit_notifications},
             )
-            await notify_task_completed(task_id, task_description, result["cost_usd"])
+            if emit_notifications:
+                await notify_task_completed(task_id, task_description, result["cost_usd"])
         elif result["status"] in ("failed", "error"):
             self.events.emit(
                 EVENT_ERROR, result["output"][:200],
                 task_id=task_id,
-                metadata={"error": result["output"][:5000]},
+                metadata={
+                    "error": result["output"][:5000],
+                    "origin": origin,
+                    "slack_notify": emit_notifications,
+                },
             )
-            await notify_task_failed(task_id, task_description, result["output"][:100])
+            if emit_notifications:
+                await notify_task_failed(task_id, task_description, result["output"][:100])
+
+        append_project_turn(
+            self.project_path,
+            actor=f"task:{origin}",
+            message=task_description,
+            outcome=f"status={result['status']} turns={result['turns']} cost=${result['cost_usd']:.2f}",
+        )
 
         if callback:
             callback("task_completed", result)
@@ -779,9 +1039,207 @@ Turns: {budget_status['turns']}
                 pass
             self._chat_client = None
 
+    def _build_router_options(self) -> ClaudeAgentOptions:
+        """Build a tool-less routing call.
+
+        This is the "conversation control plane": decide whether to reply, ask, or execute.
+        Tool execution happens only after an explicit router decision of mode=execute.
+        """
+        # NOTE: We intentionally do not use SDK structured-output / json-schema here.
+        # Some Anthropic-compatible proxies do not support the CLI `--json-schema` flag,
+        # which results in `ResultMessage.result=None`. Instead we require JSON in text
+        # and parse it ourselves, surfacing any failures explicitly.
+        return ClaudeAgentOptions(
+            # Do not duplicate the whole system prompt; keep it routing-specific.
+            system_prompt=(
+                "You are Jarvis (autonomous coding agent).\n"
+                "You are doing internal routing: decide what to do with the user's message.\n"
+                "Never mention routing, control planes, or that you are a router.\n\n"
+                "You MUST return a single JSON object (no markdown, no prose).\n"
+                "Keys allowed: mode, reply, question, choices, task_description, confidence, reason.\n"
+                "mode must be one of: reply | ask | execute.\n"
+                "confidence must be a number 0..1.\n\n"
+                "Modes:\n"
+                "- reply: user is asking a question or chatting; produce a direct helpful reply.\n"
+                "- ask: you are unsure or need a missing detail; ask a single concise question.\n"
+                "- execute: user is asking you to do work; produce an executable task_description.\n\n"
+                "Rules:\n"
+                "- Prefer execute when the user clearly requests work.\n"
+                "- Prefer ask when multiple interpretations exist or critical details are missing.\n"
+                "- Keep reply/ask conversational and concise.\n"
+                "- If execute, task_description must be specific and include success criteria.\n"
+            ),
+            # Disable base tools completely for routing.
+            tools=[],
+            allowed_tools=[],
+            permission_mode="default",
+            max_turns=1,
+            max_budget_usd=1.0,
+            model=self.config.models.planner,
+            cwd=self.project_path,
+        )
+
+    @staticmethod
+    def _extract_json_object(text: str) -> str:
+        """Extract a JSON object from model text.
+
+        Some models wrap JSON in markdown fences like ```json ... ```.
+        We still require the output to contain a single JSON object, but
+        we parse defensively so the router remains usable.
+        """
+        raw = (text or "").strip()
+        if not raw:
+            return ""
+
+        # Handle fenced blocks.
+        fence_prefixes = ("```json", "```JSON", "```")
+        if raw.startswith(fence_prefixes):
+            # Best-effort: drop the first fence line and the trailing fence.
+            lines = raw.splitlines()
+            if lines and lines[0].lstrip().startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].rstrip().endswith("```"):
+                lines = lines[:-1]
+            raw = "\n".join(lines).strip()
+
+        # If there's still surrounding prose, slice the first {...} object.
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return raw[start : end + 1].strip()
+        return raw
+
+    async def _route_message(self, *, user_message: str, origin: str) -> MessageRouteDecision:
+        """Model-driven routing: reply vs ask vs execute (no heuristics)."""
+        # Include minimal continuity from last turn in this channel/session (Slack or WS).
+        prior = self.memory.get_channel_turn(origin) if origin else None
+        context_lines: list[str] = []
+        if prior:
+            context_lines.append("Prior turn (most recent):")
+            context_lines.append(f"- user: {(prior.get('last_user_message') or '')[:600]}")
+            context_lines.append(f"- assistant: {(prior.get('last_assistant_reply') or '')[:900]}")
+        context_lines.append("Current user message:")
+        context_lines.append(user_message)
+        prompt = "\n".join(context_lines).strip()
+
+        async with self._router_lock:
+            options = self._build_router_options()
+            try:
+                async with ClaudeSDKClient(options=options) as client:
+                    await client.query(prompt)
+                    text_buf: list[str] = []
+                    async for message in client.receive_response():
+                        if isinstance(message, AssistantMessage):
+                            for block in message.content:
+                                if isinstance(block, TextBlock):
+                                    text_buf.append(block.text)
+                        if isinstance(message, ResultMessage):
+                            if message.is_error:
+                                # Fail loudly with whatever diagnostics the SDK provides.
+                                # Some Anthropic-compatible proxies return an error ResultMessage
+                                # with empty assistant text; treat that as a hard router failure.
+                                err = message.result or message.structured_output or "unknown_router_error"
+                                raise RuntimeError(f"Router model error: {err}")
+
+                            # Prefer structured output when present.
+                            if message.structured_output:
+                                return cast(MessageRouteDecision, message.structured_output)
+                            if isinstance(message.result, dict):
+                                return cast(MessageRouteDecision, message.result)
+
+                            raw = "".join(text_buf).strip()
+                            if not raw and message.result is not None:
+                                raw = str(message.result).strip()
+                            if not raw:
+                                raise RuntimeError("Router returned empty output.")
+                            try:
+                                parsed = json.loads(self._extract_json_object(raw))
+                            except Exception as exc:
+                                raise RuntimeError(f"Router returned non-JSON text: {raw[:500]}") from exc
+                            if not isinstance(parsed, dict):
+                                raise RuntimeError(f"Router JSON was not an object: {type(parsed).__name__}")
+                            return cast(MessageRouteDecision, parsed)
+            except Exception as exc:
+                tb = traceback.format_exc()
+                logger.error("router failed: %s\n%s", exc, tb)
+                return {
+                    "mode": "reply",
+                    "confidence": 0.0,
+                    "reply": f"Router error: {exc}",
+                    "reason": "router_exception",
+                }
+
+        return {
+            "mode": "reply",
+            "confidence": 0.0,
+            "reply": "Router produced no result.",
+            "reason": "router_no_result",
+        }
+
     async def close(self) -> None:
         """Graceful shutdown for long-lived SDK clients."""
         await self._reset_chat_client()
+
+    def get_preflight_status(self) -> dict:
+        """Return last known model/provider preflight result."""
+        return dict(self._preflight_status)
+
+    async def run_model_preflight(self, *, live_check: bool = False, timeout_seconds: int = 25) -> dict:
+        """Validate provider+models before serving requests."""
+        errors: list[str] = []
+        warnings: list[str] = []
+        provider = {
+            "base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
+            "token_present": bool(
+                os.environ.get("ANTHROPIC_AUTH_TOKEN")
+                or os.environ.get("ANTHROPIC_API_KEY")
+            ),
+        }
+        models = {
+            "planner": self.config.models.planner,
+            "executor": self.config.models.executor,
+            "reviewer": self.config.models.reviewer,
+            "quick": self.config.models.quick,
+        }
+
+        if not provider["token_present"]:
+            warnings.append("missing_anthropic_token_env_using_cli_auth_if_available")
+        for key, value in models.items():
+            if not str(value).strip():
+                errors.append(f"missing_model:{key}")
+        if provider["base_url"] and "api.z.ai" in provider["base_url"]:
+            # z.ai Anthropic-compatible proxy typically expects glm model IDs.
+            non_glm = [k for k, v in models.items() if not str(v).strip().lower().startswith("glm")]
+            if non_glm:
+                warnings.append(f"z_ai_non_glm_models:{','.join(non_glm)}")
+
+        live_probe = {"attempted": bool(live_check), "ok": False, "error": ""}
+        if live_check and not errors:
+            try:
+                async def _probe() -> None:
+                    async with ClaudeSDKClient(options=self._build_options()) as client:
+                        await client.query("Respond with exactly: JARVIS_PREFLIGHT_OK")
+                        async for msg in client.receive_response():
+                            if isinstance(msg, ResultMessage) and msg.is_error:
+                                raise RuntimeError(str(msg.result or "live_probe_failed"))
+                await asyncio.wait_for(_probe(), timeout=max(5, timeout_seconds))
+                live_probe["ok"] = True
+            except Exception as exc:
+                live_probe["error"] = str(exc)
+                errors.append("live_probe_failed")
+
+        status = {
+            "ready": len(errors) == 0,
+            "checked_at": time.time(),
+            "live_check": bool(live_check),
+            "errors": errors,
+            "warnings": warnings,
+            "provider": provider,
+            "models": models,
+            "live_probe": live_probe,
+        }
+        self._preflight_status = status
+        return dict(status)
 
     async def chat(self, user_message: str) -> dict:
         """Run a conversational turn and return assistant text."""
@@ -796,6 +1254,7 @@ Turns: {budget_status['turns']}
         }
         tools_used: set[str] = set()
 
+        ensure_project_jarvis_file(self.project_path)
         self.events.emit(
             "chat_user",
             user_message[:200],
@@ -871,7 +1330,106 @@ Turns: {budget_status['turns']}
                 },
             )
 
+        append_project_turn(
+            self.project_path,
+            actor="chat",
+            message=user_message,
+            outcome=(result["reply"] or result["status"])[:500],
+        )
+
         return result
+
+    async def handle_message(
+        self,
+        user_message: str,
+        *,
+        origin: str = "message",
+    ) -> dict:
+        """Conversational entrypoint: model decides whether to reply, ask, or execute."""
+        self._ingest_research_urls_from_text(user_message, source=f"chat:{origin}")
+
+        decision = await self._route_message(user_message=user_message, origin=origin)
+        mode = (decision.get("mode") or "reply").strip()
+
+        # Emit routing decision for UI visibility/debugging.
+        self.events.emit(
+            "chat_route",
+            f"mode={mode} conf={decision.get('confidence')}",
+            metadata={"decision": decision, "origin": origin},
+        )
+
+        if decision.get("reason") in ("router_exception", "router_no_result"):
+            # Router failures should be visible, but should not prevent a normal chat reply.
+            self.events.emit(
+                EVENT_ERROR,
+                (decision.get("reply") or "Router failed")[:200],
+                metadata={
+                    "error": (decision.get("reply") or "Router failed")[:5000],
+                    "origin": origin,
+                    "stage": "router",
+                },
+            )
+            chat_result = await self.chat(user_message)
+            reply = (chat_result.get("reply") or "").strip()
+            self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
+            return {
+                "status": "completed" if reply else "failed",
+                "route": "chat",
+                "reply": reply or (decision.get("reply") or "Router failed"),
+                "decision": decision,
+            }
+
+        if mode == "execute":
+            task_desc = (decision.get("task_description") or "").strip()
+            if not task_desc:
+                # Router said execute but didn't give a task description: treat as ask.
+                reply = (decision.get("reply") or "").strip() or "What exactly should I do?"
+                self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
+                return {
+                    "status": "needs_input",
+                    "route": "ask",
+                    "reply": reply,
+                    "decision": decision,
+                }
+
+            asyncio.create_task(self.run_task(task_desc, origin=origin))
+            reply = (decision.get("reply") or "").strip() or "Starting now."
+            self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
+            return {
+                "status": "queued",
+                "route": "task",
+                "queued": task_desc[:200],
+                "reply": reply,
+                "decision": decision,
+            }
+
+        if mode == "ask":
+            reply = (decision.get("reply") or "").strip()
+            if not reply:
+                q = (decision.get("question") or "").strip()
+                reply = q or "I need one detail to proceed. What should I assume?"
+            self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
+            return {
+                "status": "needs_input",
+                "route": "ask",
+                "reply": reply,
+                "choices": decision.get("choices") or [],
+                "decision": decision,
+            }
+
+        # reply
+        reply = (decision.get("reply") or "").strip()
+        if not reply:
+            # If router failed to produce a reply, fall back to the normal chat model.
+            chat_result = await self.chat(user_message)
+            reply = (chat_result.get("reply") or "").strip()
+        self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
+        return {
+            "status": "completed",
+            "route": "chat",
+            "reply": reply,
+            "decision": decision,
+        }
 
     async def _cleanup_containers(self) -> None:
         """Stop and remove all active containers."""
@@ -916,6 +1474,7 @@ Turns: {budget_status['turns']}
             ],
             "containers": len(self._active_containers),
             "session_id": self._session_id,
+            "preflight": self.get_preflight_status(),
         }
 
     def should_use_pipeline(self, task_description: str) -> bool:
@@ -948,6 +1507,18 @@ Turns: {budget_status['turns']}
             "cost_usd": result.total_cost_usd,
             "turns": result.total_turns,
             "session_id": None,
+            "plan": result.plan,
+            "review": result.review,
+            "subtask_count": len(result.subtask_results),
+            "subtasks": [
+                {
+                    "id": s.subtask_id,
+                    "status": s.status,
+                    "output": s.output[:240],
+                    "files_changed": s.files_changed[:20],
+                }
+                for s in result.subtask_results[:100]
+            ],
             "output": f"Pipeline {result.status}. "
                       f"Subtasks: {len(result.subtask_results)}. "
                       f"Cost: ${result.total_cost_usd:.2f}",

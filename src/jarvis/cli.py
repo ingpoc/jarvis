@@ -38,6 +38,7 @@ from rich.table import Table
 
 from jarvis.budget import BudgetController
 from jarvis.config import JARVIS_HOME, JarvisConfig, ensure_jarvis_home
+from jarvis.context_files import should_use_project_jarvis
 from jarvis.memory import MemoryStore, generate_jarvis_md
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.container_templates import detect_template, list_templates as list_all_templates, get_template
@@ -168,6 +169,7 @@ def status():
     """Show Jarvis status: trust, budget, active tasks."""
     ensure_jarvis_home()
     orchestrator = JarvisOrchestrator()
+    _run_async(orchestrator.run_model_preflight(live_check=False))
     status_data = _run_async(orchestrator.get_status())
 
     # Trust panel
@@ -188,6 +190,20 @@ def status():
     budget_table.add_row("Turns", budget["turns"])
     console.print(Panel(budget_table, title="Budget", border_style="green"))
 
+    # Preflight panel
+    preflight = status_data.get("preflight", {}) or {}
+    ready = bool(preflight.get("ready", False))
+    errors = preflight.get("errors", []) or []
+    warnings = preflight.get("warnings", []) or []
+    provider = preflight.get("provider", {}) or {}
+    preflight_table = Table(show_header=False, box=None)
+    preflight_table.add_row("Ready", "[green]yes[/]" if ready else "[red]no[/]")
+    preflight_table.add_row("Token present", "yes" if provider.get("token_present") else "no")
+    preflight_table.add_row("Base URL", provider.get("base_url") or "(default)")
+    preflight_table.add_row("Errors", ", ".join(errors) if errors else "-")
+    preflight_table.add_row("Warnings", ", ".join(warnings) if warnings else "-")
+    console.print(Panel(preflight_table, title="Preflight", border_style=("green" if ready else "red")))
+
     # Recent tasks
     if status_data["recent_tasks"]:
         task_table = Table(title="Recent Tasks")
@@ -196,7 +212,7 @@ def status():
         task_table.add_column("Status")
         task_table.add_column("Cost")
         for t in status_data["recent_tasks"]:
-            color = {"completed": "green", "failed": "red", "in_progress": "blue"}.get(
+            color = {"completed": "green", "failed": "red", "cancelled": "yellow", "in_progress": "blue"}.get(
                 t["status"], "white"
             )
             task_table.add_row(t["id"], t["description"][:60], f"[{color}]{t['status']}[/]", t["cost"])
@@ -536,24 +552,30 @@ def init():
     cfg.save()
 
     trust_status = TrustEngine().status(str(project_path))
-    jarvis_md_path = project_path / "JARVIS.md"
-    if not jarvis_md_path.exists():
-        content = generate_jarvis_md(project_path, {
-            "project_name": project_name,
-            "project_type": project_type,
-            "project_path": str(project_path),
-            "test_runner": test_runner,
-            "package_manager": package_manager,
-            "container_image": container_image,
-            "cpus": cfg.container.default_cpus,
-            "memory": cfg.container.default_memory,
-            "trust_tier": trust_status["tier"],
-            "trust_tier_name": trust_status["tier_name"],
-        })
-        jarvis_md_path.write_text(content)
-        console.print(f"\n  Created [bold]JARVIS.md[/]")
+    if should_use_project_jarvis(project_path):
+        jarvis_md_path = project_path / "JARVIS.md"
+        legacy_path = project_path / "Jarvis.md"
+        if not jarvis_md_path.exists() and legacy_path.exists():
+            jarvis_md_path = legacy_path
+        if not jarvis_md_path.exists():
+            content = generate_jarvis_md(project_path, {
+                "project_name": project_name,
+                "project_type": project_type,
+                "project_path": str(project_path),
+                "test_runner": test_runner,
+                "package_manager": package_manager,
+                "container_image": container_image,
+                "cpus": cfg.container.default_cpus,
+                "memory": cfg.container.default_memory,
+                "trust_tier": trust_status["tier"],
+                "trust_tier_name": trust_status["tier_name"],
+            })
+            jarvis_md_path.write_text(content)
+            console.print(f"\n  Created [bold]{jarvis_md_path.name}[/]")
+        else:
+            console.print(f"\n  [dim]{jarvis_md_path.name} already exists[/]")
     else:
-        console.print(f"\n  [dim]JARVIS.md already exists[/]")
+        console.print("\n  [dim]Skipping project JARVIS.md for Jarvis core repo[/]")
 
     console.print(f"\n[bold green]Ready.[/] Trust: T{trust_status['tier']}. "
                   f"Try: jarvis \"describe this codebase\"\n")

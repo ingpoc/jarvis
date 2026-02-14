@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
 import signal
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
+from urllib import parse, request
 
 from jarvis.config import JarvisConfig, ensure_jarvis_home
 from jarvis.notifications import set_slack_bot, set_voice_client
@@ -50,6 +54,33 @@ class JarvisDaemon:
         )
         await self._ws_server.start()
 
+        # Provider/model preflight (fail-fast when configured strict).
+        live_check = os.environ.get("JARVIS_PREFLIGHT_LIVE", "0") == "1"
+        strict = os.environ.get("JARVIS_PREFLIGHT_STRICT", "1") == "1"
+        preflight = await self.orchestrator.run_model_preflight(
+            live_check=live_check,
+            timeout_seconds=int(os.environ.get("JARVIS_PREFLIGHT_TIMEOUT_SECS", "25")),
+        )
+        if preflight.get("ready"):
+            self.events.emit(
+                "preflight_ok",
+                "Model/provider preflight passed",
+                metadata={"live_check": live_check, "warnings": preflight.get("warnings", [])},
+            )
+        else:
+            self.events.emit(
+                "preflight_failed",
+                "Model/provider preflight failed",
+                metadata={
+                    "errors": preflight.get("errors", []),
+                    "warnings": preflight.get("warnings", []),
+                    "live_check": live_check,
+                },
+            )
+            logger.error("Startup preflight failed: %s", preflight.get("errors", []))
+            if strict:
+                raise RuntimeError(f"Startup preflight failed: {preflight.get('errors', [])}")
+
         # Slack bot (optional)
         if self.config.slack.enabled and self.config.slack.bot_token:
             try:
@@ -59,6 +90,7 @@ class JarvisDaemon:
                     bot_token=self.config.slack.bot_token,
                     app_token=self.config.slack.app_token,
                     default_channel=self.config.slack.default_channel,
+                    research_channel=self.config.slack.research_channel,
                     event_collector=self.events,
                     orchestrator=self.orchestrator,
                 )
@@ -150,11 +182,16 @@ class JarvisDaemon:
             logger.warning("Slack bot task exited unexpectedly")
 
     def _start_idle_loop_if_enabled(self) -> None:
+        # Always recover stale tasks on daemon start, even if idle research is disabled.
+        self._normalize_stale_in_progress_tasks()
+        # Idle research is opt-in. This prevents unintended Slack/channel spam.
+        # To enable: set JARVIS_ENABLE_IDLE_AUTONOMY=1 *and* config.research.enabled=true.
+        if os.environ.get("JARVIS_ENABLE_IDLE_AUTONOMY", "0") != "1":
+            logger.info("Idle autonomy loop disabled (set JARVIS_ENABLE_IDLE_AUTONOMY=1 to enable)")
+            return
         if not self.config.research.enabled:
             logger.info("Idle autonomy loop disabled by config")
             return
-        # Recover stale tasks immediately on daemon start so idle autonomy isn't blocked.
-        self._normalize_stale_in_progress_tasks()
         if self._idle_loop_task and not self._idle_loop_task.done():
             return
         self._idle_loop_task = asyncio.create_task(self._idle_autonomy_loop())
@@ -174,24 +211,78 @@ class JarvisDaemon:
                     return
                 if not self._should_run_idle_task():
                     continue
-                prompt = self._build_idle_research_prompt()
+                selected_sources = self._select_idle_sources()
+                if not selected_sources:
+                    self.events.emit(
+                        "idle_autonomy_skip",
+                        "Idle research skipped: all configured sources recently researched",
+                        metadata={"topic": self.config.research.topic},
+                    )
+                    self._mark_idle_run()
+                    continue
+                prompt = self._build_idle_research_prompt(selected_sources)
                 self.events.emit(
                     "idle_autonomy_start",
                     "Jarvis started autonomous idle self-improvement task",
-                    metadata={"topic": self.config.research.topic},
+                    metadata={
+                        "topic": self.config.research.topic,
+                        "sources": selected_sources,
+                        "slack_notify": False,
+                        "origin": "idle_research",
+                    },
                 )
-                await self.orchestrator.run_task(prompt)
+                result = await self.orchestrator.run_task(
+                    prompt,
+                    origin="idle_research",
+                    emit_notifications=False,
+                )
                 self._mark_idle_run()
+                summary = (result.get("output") or "").strip()[:2000]
+                summary_lower = summary.lower()
+                applied = result.get("status") == "completed" and (
+                    "~/.codex/rules" in summary_lower or "agents.md" in summary_lower
+                )
+                for source in selected_sources:
+                    self.orchestrator.memory.record_idle_research(
+                        url=source,
+                        topic=self.config.research.topic,
+                        conclusion=(summary or result.get("status", "unknown"))[:1200],
+                        evidence=summary[:2000],
+                        applied=applied,
+                        commit_sha=None,
+                    )
+                if self._slack_bot:
+                    msg = (
+                        "*Jarvis Idle Research Summary*\n"
+                        f"- Topic: {self.config.research.topic}\n"
+                        f"- Sources: {len(selected_sources)}\n"
+                        f"- Status: {result.get('status')}\n"
+                        f"- Conclusion: {(summary or 'No summary returned')[:2500]}"
+                    )
+                    await self._slack_bot.send_message(
+                        msg,
+                        channel=self.config.slack.research_channel,
+                    )
                 self.events.emit(
                     "idle_autonomy_complete",
                     "Jarvis completed autonomous idle self-improvement task",
-                    metadata={"topic": self.config.research.topic},
+                    metadata={
+                        "topic": self.config.research.topic,
+                        "sources": selected_sources,
+                        "status": result.get("status"),
+                        "slack_notify": False,
+                        "origin": "idle_research",
+                    },
                 )
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.exception("Idle autonomy loop error: %s", e)
-                self.events.emit("idle_autonomy_error", str(e)[:200], metadata={"error": str(e)})
+                self.events.emit(
+                    "idle_autonomy_error",
+                    str(e)[:200],
+                    metadata={"error": str(e), "slack_notify": False, "origin": "idle_research"},
+                )
 
     def _should_run_idle_task(self) -> bool:
         now = time.time()
@@ -216,45 +307,131 @@ class JarvisDaemon:
 
     def _normalize_stale_in_progress_tasks(self) -> None:
         """Unblock idle autonomy by failing abandoned in-progress tasks."""
-        stale_after_seconds = 60 * 60  # 1 hour
-        now = time.time()
-        in_progress = self.orchestrator.memory.list_tasks(
-            self.orchestrator.project_path, status="in_progress"
+        stale_after_seconds = int(os.environ.get("JARVIS_STALE_TASK_SECS", str(60 * 60)))
+        if stale_after_seconds <= 0:
+            return
+        recovered = self.orchestrator.memory.recover_stale_in_progress_tasks(
+            project_path=self.orchestrator.project_path,
+            stale_after_seconds=stale_after_seconds,
+            reason="Auto-marked stale by idle autonomy scheduler",
         )
-        for task in in_progress:
-            if (now - task.updated_at) < stale_after_seconds:
-                continue
-            self.orchestrator.memory.update_task(
-                task.id,
-                status="failed",
-                result=(task.result or "")[:4500] + "\n\n[Auto-marked stale by idle autonomy scheduler]",
-            )
+        for task_id in recovered:
             self.events.emit(
                 "task_stale_recovered",
-                f"Auto-recovered stale in-progress task: {task.id}",
-                task_id=task.id,
-                metadata={"description": task.description[:200]},
+                f"Auto-recovered stale in-progress task: {task_id}",
+                task_id=task_id,
+                metadata={"project": self.orchestrator.project_path},
             )
 
     def _mark_idle_run(self) -> None:
         self._last_idle_run_ts = time.time()
         self._idle_runs_today += 1
 
-    def _build_idle_research_prompt(self) -> str:
+    def _load_bookmark_urls(self) -> list[str]:
+        path = Path(self.config.research.bookmarks_file).expanduser()
+        urls: list[str] = []
+        if path.exists():
+            for raw in path.read_text().splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("http://") or line.startswith("https://"):
+                    urls.append(line)
+
+        # Optional: live X bookmark API ingestion is disabled by default.
+        # Enable only with explicit opt-in.
+        if self.config.research.enable_x_bookmarks_api:
+            x_urls = self._load_x_bookmark_urls()
+            for url in x_urls:
+                if url not in urls:
+                    urls.append(url)
+        return urls
+
+    def _load_x_bookmark_urls(self) -> list[str]:
+        if not self.config.research.enable_x_bookmarks_api:
+            return []
+        token = os.environ.get("X_BOOKMARKS_ACCESS_TOKEN", "").strip()
+        user_id = os.environ.get("X_BOOKMARKS_USER_ID", "").strip()
+        if not token or not user_id:
+            return []
+        try:
+            max_results = int(os.environ.get("JARVIS_X_BOOKMARKS_MAX_RESULTS", "50"))
+        except ValueError:
+            max_results = 50
+        max_results = max(5, min(max_results, 100))
+
+        params = {
+            "max_results": str(max_results),
+            "tweet.fields": "entities",
+            "expansions": "attachments.media_keys",
+        }
+        url = (
+            f"https://api.x.com/2/users/{user_id}/bookmarks?"
+            f"{parse.urlencode(params)}"
+        )
+        req = request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "jarvis-idle-research/1.0",
+            },
+            method="GET",
+        )
+        try:
+            with request.urlopen(req, timeout=12) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        except Exception as exc:
+            logger.warning("Failed to fetch X bookmarks: %s", exc)
+            return []
+
+        urls: list[str] = []
+        for item in (payload.get("data") or []):
+            entities = (item.get("entities") or {}) if isinstance(item, dict) else {}
+            for u in (entities.get("urls") or []):
+                expanded = str(u.get("expanded_url") or "").strip()
+                if expanded.startswith(("http://", "https://")) and expanded not in urls:
+                    urls.append(expanded)
+        return urls
+
+    def _select_idle_sources(self) -> list[str]:
+        configured = list(self.config.research.source_urls or [])
+        conversation_sources = self.orchestrator.memory.get_pending_research_sources(
+            min_days_before_repeat=int(self.config.research.min_days_before_repeat),
+            limit=200,
+        )
+        bookmarks = self._load_bookmark_urls()
+        all_sources = []
+        seen = set()
+        for url in conversation_sources + configured + bookmarks:
+            if url in seen:
+                continue
+            seen.add(url)
+            all_sources.append(url)
+
+        recent = self.orchestrator.memory.recent_research_urls(
+            days=int(self.config.research.min_days_before_repeat)
+        )
+        fresh = [u for u in all_sources if u not in recent]
+        if not fresh:
+            return []
+        return fresh[: max(1, int(self.config.research.max_sources_per_run))]
+
+    def _build_idle_research_prompt(self, sources: list[str]) -> str:
         topic = self.config.research.topic
-        sources = self.config.research.source_urls or []
         sources_text = "\n".join(f"- {url}" for url in sources)
         return (
             "You are running an autonomous self-improvement cycle for Jarvis while user-idle.\n"
             "Objective: improve Jarvis architecture, reliability, and autonomous software engineering performance.\n"
             f"Priority research topic: {topic}\n"
-            "Research current posts/articles/repos (including @bcherny and Claude Code resources), extract concrete techniques,\n"
-            "propose implementation-ready improvements for Jarvis, and apply safe, local improvements if clearly beneficial.\n"
-            "Prioritized sources to study in this cycle:\n"
+            "Use only the listed sources for this cycle (do not re-research old items not listed).\n"
+            "If strong evidence supports improvement, update global rules in ~/.codex/rules and the current repo AGENTS.md.\n"
+            "Do not create or modify JARVIS.md in Jarvis core repo; reserve project JARVIS.md for external target projects.\n"
+            "Keep markdown concise, actionable, and git-trackable. Do not spam channels.\n"
+            "Prioritized sources for this cycle:\n"
             f"{sources_text}\n"
             "If a source is inaccessible, continue with remaining sources and report that explicitly.\n"
             "Always report explicit errors; never hide failures.\n"
-            "At the end, summarize: discoveries, recommended changes, what was changed, and cite URLs used."
+            "At the end, summarize: discoveries, recommended workflow updates, what was changed, and URLs used."
         )
 
 

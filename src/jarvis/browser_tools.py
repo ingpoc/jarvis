@@ -15,10 +15,22 @@ Container workflow:
 
 import asyncio
 import json
-import os
-from pathlib import Path
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
+
+from jarvis.container_tools import _get_container_status, _run_container_cmd
+
+
+async def _container_exec(container_id: str, command: str, timeout: int = 120) -> dict:
+    """Execute a shell command in a running container."""
+    status = await _get_container_status(container_id)
+    if status != "running":
+        return {
+            "exit_code": 125,
+            "stdout": "",
+            "stderr": f"container is not running (status={status})",
+        }
+    return await _run_container_cmd("exec", container_id, "sh", "-c", command, timeout=timeout)
 
 
 # --- Setup Tools ---
@@ -35,30 +47,37 @@ async def browser_setup(args: dict) -> dict:
     browsers = args.get("browsers", "chromium")
 
     commands = [
-        "npm init -y 2>/dev/null",
-        "npm install playwright @playwright/test",
-        f"npx playwright install --with-deps {browsers}",
+        (
+            # Browser tools are designed to run in node-based containers.
+            "if ! command -v node >/dev/null 2>&1; then "
+            "echo 'Node.js 18+ required. Start container with image node:22 and rerun browser_setup.'; "
+            "exit 1; "
+            "fi; "
+            "if [ \"$(node -v | sed 's/^v//' | cut -d. -f1)\" -lt 18 ]; then "
+            "echo \"Node.js version $(node -v) is too old. Use image node:22.\"; "
+            "exit 1; "
+            "fi",
+            30,
+        ),
+        ("mkdir -p /tmp/jarvis-browser && cd /tmp/jarvis-browser && npm init -y", 120),
+        ("cd /tmp/jarvis-browser && npm install --no-audit --no-fund playwright @playwright/test", 300),
+        (f"cd /tmp/jarvis-browser && npx playwright install --with-deps {browsers}", 600),
     ]
 
     results = []
-    for cmd in commands:
-        proc = await asyncio.create_subprocess_exec(
-            "container", "exec", container_id, "sh", "-c", cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+    for cmd, timeout in commands:
+        exec_result = await _container_exec(container_id, cmd, timeout=timeout)
         results.append({
             "command": cmd,
-            "exit_code": proc.returncode,
-            "output": stdout.decode()[-500:],
-            "error": stderr.decode()[-500:] if proc.returncode != 0 else "",
+            "exit_code": exec_result["exit_code"],
+            "output": exec_result["stdout"][-500:],
+            "error": exec_result["stderr"][-500:] if exec_result["exit_code"] != 0 else "",
         })
-        if proc.returncode != 0:
+        if exec_result["exit_code"] != 0:
             return {"content": [{"type": "text", "text": json.dumps({
                 "status": "failed",
                 "step": cmd,
-                "error": stderr.decode()[-500:],
+                "error": (exec_result["stderr"] or exec_result["stdout"])[-1200:],
             }, indent=2)}]}
 
     return {"content": [{"type": "text", "text": json.dumps({
@@ -87,13 +106,13 @@ async def browser_test_run(args: dict) -> dict:
         f"--workers={workers} --reporter=json 2>&1 | tail -100"
     )
 
-    proc = await asyncio.create_subprocess_exec(
-        "container", "exec", container_id, "sh", "-c", cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
-    output = stdout.decode()[-5000:]
+    exec_result = await _container_exec(container_id, cmd, timeout=300)
+    output = exec_result["stdout"][-5000:]
+    if exec_result["exit_code"] == 125:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "status": "failed",
+            "error": exec_result["stderr"],
+        }, indent=2)}]}
 
     # Try to parse JSON test results
     try:
@@ -177,20 +196,23 @@ const {{ chromium }} = require('playwright');
 """
 
     # Write script to container and execute
-    proc = await asyncio.create_subprocess_exec(
-        "container", "exec", container_id, "sh", "-c",
+    exec_result = await _container_exec(
+        container_id,
         f"cat > /tmp/navigate.js << 'SCRIPT_EOF'\n{script}\nSCRIPT_EOF\nnode /tmp/navigate.js",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        timeout=60,
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-    output = stdout.decode().strip()
+    output = exec_result["stdout"].strip()
+    if exec_result["exit_code"] == 125:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "status": "failed",
+            "error": exec_result["stderr"],
+        }, indent=2)}]}
 
     try:
         result = json.loads(output)
         return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
     except json.JSONDecodeError:
-        return {"content": [{"type": "text", "text": f"Raw output: {output[-2000:]}\nStderr: {stderr.decode()[-1000:]}"}]}
+        return {"content": [{"type": "text", "text": f"Raw output: {output[-2000:]}\nStderr: {exec_result['stderr'][-1000:]}"}]}
 
 
 @tool(
@@ -253,14 +275,17 @@ const {{ chromium }} = require('playwright');
 }})();
 """
 
-    proc = await asyncio.create_subprocess_exec(
-        "container", "exec", container_id, "sh", "-c",
+    exec_result = await _container_exec(
+        container_id,
         f"cat > /tmp/interact.js << 'SCRIPT_EOF'\n{script}\nSCRIPT_EOF\nnode /tmp/interact.js",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        timeout=60,
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-    output = stdout.decode().strip()
+    output = exec_result["stdout"].strip()
+    if exec_result["exit_code"] == 125:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "status": "failed",
+            "error": exec_result["stderr"],
+        }, indent=2)}]}
 
     try:
         result = json.loads(output)
@@ -293,13 +318,13 @@ async def browser_api_test(args: dict) -> dict:
 
     cmd = " ".join(curl_parts)
 
-    proc = await asyncio.create_subprocess_exec(
-        "container", "exec", container_id, "sh", "-c", cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-    output = stdout.decode().strip()
+    exec_result = await _container_exec(container_id, cmd, timeout=30)
+    output = exec_result["stdout"].strip()
+    if exec_result["exit_code"] == 125:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "status": "failed",
+            "error": exec_result["stderr"],
+        }, indent=2)}]}
 
     # Parse response body and status code
     lines = output.rsplit("\n", 1)
@@ -439,20 +464,23 @@ const {{ chromium }} = require('playwright');
 }})();
 """
 
-    proc = await asyncio.create_subprocess_exec(
-        "container", "exec", container_id, "sh", "-c",
+    exec_result = await _container_exec(
+        container_id,
         f"cat > /tmp/wallet_test.js << 'SCRIPT_EOF'\n{script}\nSCRIPT_EOF\nnode /tmp/wallet_test.js",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        timeout=60,
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-    output = stdout.decode().strip()
+    output = exec_result["stdout"].strip()
+    if exec_result["exit_code"] == 125:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "status": "failed",
+            "error": exec_result["stderr"],
+        }, indent=2)}]}
 
     try:
         result = json.loads(output)
         return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
     except json.JSONDecodeError:
-        return {"content": [{"type": "text", "text": f"Output: {output[-2000:]}\nStderr: {stderr.decode()[-500:]}"}]}
+        return {"content": [{"type": "text", "text": f"Output: {output[-2000:]}\nStderr: {exec_result['stderr'][-500:]}"}]}
 
 
 # --- Server factory ---

@@ -9,6 +9,7 @@ JARVIS_HOME = Path.home() / ".jarvis"
 JARVIS_DB = JARVIS_HOME / "jarvis.db"
 JARVIS_CONFIG = JARVIS_HOME / "config.json"
 JARVIS_LOGS = JARVIS_HOME / "logs"
+DEFAULT_WORKSPACE_ROOT = "/Users/gurusharan/Documents/remote-claude/Jarvisworkspace"
 
 
 @dataclass
@@ -56,6 +57,7 @@ class SlackConfig:
     bot_token: str = ""
     app_token: str = ""
     default_channel: str = "#jarvis"
+    research_channel: str = "#jarvisresearch"
     enabled: bool = False
 
 
@@ -74,10 +76,15 @@ class VoiceConfig:
 class ResearchConfig:
     """Autonomous idle research settings."""
 
-    enabled: bool = True
+    # Opt-in: keep disabled by default to avoid unexpected background execution/spam.
+    enabled: bool = False
     topic: str = "@bcherny Claude Code workflow optimization and autonomous dev systems"
     interval_minutes: int = 30
     max_runs_per_day: int = 48
+    max_sources_per_run: int = 3
+    min_days_before_repeat: int = 14
+    bookmarks_file: str = "~/.jarvis/x-bookmarks.txt"
+    enable_x_bookmarks_api: bool = False
     source_urls: list[str] = field(default_factory=lambda: [
         "https://www.anthropic.com/engineering",
         "https://foundationcapital.com/context-graphs-ais-trillion-dollar-opportunity/",
@@ -95,6 +102,7 @@ class JarvisConfig:
     slack: SlackConfig = field(default_factory=SlackConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     research: ResearchConfig = field(default_factory=ResearchConfig)
+    workspace_root: str = DEFAULT_WORKSPACE_ROOT
     trust_tier: int = 1  # Default T1 (Assistant)
 
     @classmethod
@@ -127,6 +135,8 @@ class JarvisConfig:
                     setattr(config.research, k, v)
             if "trust_tier" in data:
                 config.trust_tier = data["trust_tier"]
+            if "workspace_root" in data:
+                config.workspace_root = data["workspace_root"]
 
         # Env var overrides for tokens
         slack_bot = os.environ.get("JARVIS_SLACK_BOT_TOKEN")
@@ -142,6 +152,9 @@ class JarvisConfig:
             config.voice.api_key = voice_key
         if voice_agent:
             config.voice.agent_id = voice_agent
+        workspace_root = os.environ.get("JARVIS_WORKSPACE")
+        if workspace_root:
+            config.workspace_root = workspace_root
 
         # Env var overrides (supports GLM 4.7 / z.ai proxy)
         opus_model = os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL")
@@ -186,6 +199,7 @@ class JarvisConfig:
                 "bot_token": self.slack.bot_token,
                 "app_token": self.slack.app_token,
                 "default_channel": self.slack.default_channel,
+                "research_channel": self.slack.research_channel,
                 "enabled": self.slack.enabled,
             },
             "voice": {
@@ -200,8 +214,13 @@ class JarvisConfig:
                 "topic": self.research.topic,
                 "interval_minutes": self.research.interval_minutes,
                 "max_runs_per_day": self.research.max_runs_per_day,
+                "max_sources_per_run": self.research.max_sources_per_run,
+                "min_days_before_repeat": self.research.min_days_before_repeat,
+                "bookmarks_file": self.research.bookmarks_file,
+                "enable_x_bookmarks_api": self.research.enable_x_bookmarks_api,
                 "source_urls": self.research.source_urls,
             },
+            "workspace_root": self.workspace_root,
             "trust_tier": self.trust_tier,
         }
         JARVIS_CONFIG.write_text(json.dumps(data, indent=2))

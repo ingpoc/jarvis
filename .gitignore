@@ -61,3 +61,14 @@ uv.lock
 # ChromaDB local data
 chroma/
 .claude/chroma/
+
+# Repo-tracked agent folders (keep structure, ignore runtime contents)
+.jarvis/*
+!.jarvis/.gitkeep
+!.jarvis/README.md
+.codex/*
+!.codex/.gitkeep
+!.codex/README.md
+
+# Local Claude/Codex ephemeral worktrees (never commit)
+.claude/worktrees/

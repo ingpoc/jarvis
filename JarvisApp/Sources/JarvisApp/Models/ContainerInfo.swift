@@ -40,4 +40,12 @@ struct TaskProgress: Identifiable, Codable {
 
 struct ContainersResponse: Codable {
     let containers: [ContainerInfo]
+    let error: String?
+    let rawOutput: String?
+
+    enum CodingKeys: String, CodingKey {
+        case containers
+        case error
+        case rawOutput = "raw_output"
+    }
 }
