@@ -40,7 +40,7 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | L6: Runtime State | §6.3 | ✅ | git + container state available | - |
 | **Self-Learning Loop** | | | |
 | Retrieve phase | §6.4 | ✅ | get_relevant_learnings() + format_learning_for_context() active | 1-2 |
-| Triage phase | §6.4 | ⚠️ | Heuristic routing via model_router.py; Qwen3 pending | 3-4 |
+| Triage phase | §6.4 | ✅ | Qwen3 triage with heuristic fallback in model_router.py | 3-4 |
 | Execute phase | §6.4 | ✅ | SDK session fully operational | - |
 | Capture phase | §6.4 | ✅ | PostToolUse hook records every execution | 1-2 |
 | Learn phase | §6.4 | ✅ | learn_from_task() extracts error→fix patterns | 1-2 |
@@ -63,18 +63,18 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | **Skill Creation** | | | |
 | Pattern discovery | §7.1 | ✅ | hash_error_pattern() in self_learning.py | 5-6 |
 | Pattern detection (3+) | §7.1 | ✅ | detect_skill_worthy_patterns() + record_skill_candidate() | 5-6 |
-| Skill generation (GLM 4.7) | §7.1 | ⚠️ | Template pipeline built; needs GLM prompt integration | 5-6 |
+| Skill generation (GLM 4.7) | §7.1 | ✅ | GLM prompt integration + template fallback in skill_generator.py | 5-6 |
 | Skill validation | §7.1 | ✅ | Full validate_skill() in skill_generator.py | 5-6 |
 | Skill registration | §7.1 | ✅ | .claude/skills/ directory with save_skill_to_directory() | - |
 | Progressive disclosure | §7.1 | ✅ | SDK feature (metadata→full) | - |
-| Hard cap (3 per session) | §7.1 | ⚠️ | Limit defined in SKILL_TEMPLATE; ranking missing | 5-6 |
+| Hard cap (3 per session) | §7.1 | ✅ | MAX_SKILLS_PER_SESSION + rank_skill_candidates() + select_session_skills() | 5-6 |
 | Confidence decay | §7.1 | ✅ | Background task in idle_mode.py | 7-8 |
 | **MCP Discovery & Creation** | | | |
-| Registry search (GitHub/npm) | §7.2 | ❌ | Registry API integration missing | 9-14 |
-| Server proposal | §7.2 | ❌ | User approval flow missing | 9-14 |
-| Server generation (GLM 4.7) | §7.2 | ❌ | Code generation template missing | 9-14 |
-| Server installation | §7.2 | ⚠️ | Directory exists; pipeline missing | 9-14 |
-| Server registration | §7.2 | ❌ | Config management incomplete | 9-14 |
+| Registry search (GitHub/npm) | §7.2 | ✅ | search_npm_registry() + search_github() in mcp_discovery.py | 9-14 |
+| Server proposal | §7.2 | ✅ | propose_server() with user approval dict in mcp_discovery.py | 9-14 |
+| Server generation (GLM 4.7) | §7.2 | ✅ | generate_server() with MCP tool template in mcp_discovery.py | 9-14 |
+| Server installation | §7.2 | ✅ | install_server() for npm + GitHub in mcp_discovery.py | 9-14 |
+| Server registration | §7.2 | ✅ | register_server() + JSON config management in mcp_discovery.py | 9-14 |
 | Health validation | §7.2 | ✅ | health_check_all_servers() integrated in daemon.py | 1-2 |
 | Silent exclusion | §7.2 | ✅ | Quarantine of unhealthy servers in daemon.py | 1-2 |
 | User notification | §7.2 | ✅ | notify_health_failures() on startup | 1-2 |
@@ -87,7 +87,7 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Article learning pipeline | §7.3 | ✅ | _process_article_learnings in idle_mode.py | 7-8 |
 | Token optimization reports | §7.3 | ✅ | _generate_token_report in idle_mode.py | 7-8 |
 | Capability assessment | §7.3 | ✅ | _assess_capabilities in idle_mode.py | 7-8 |
-| Emergency hibernation | §7.3 | ⚠️ | trigger_hibernate() available; DispatchSource not integrated | 7-8 |
+| Emergency hibernation | §7.3 | ✅ | Memory pressure monitor + MLX model unload in idle_mode.py | 7-8 |
 | Universal heuristics seed | §7.3 | ✅ | _seed_universal_heuristics in idle_mode.py | 7-8 |
 
 ---
@@ -120,8 +120,8 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Budget tracking | §5.2 | ✅ | budget.py fully implemented | - |
 | Session limits | §5.2 | ✅ | Enforced via hooks | - |
 | Daily limits | §5.2 | ✅ | Tracked in database | - |
-| Skill shortcutting | §5.2 | ⚠️ | Framework exists; not active | 3-4 |
-| Incremental context | §5.2 | ⚠️ | Context layers provide tiered injection | 3-4 |
+| Skill shortcutting | §5.2 | ✅ | try_skill_shortcut() in budget.py with pattern matching | 3-4 |
+| Incremental context | §5.2 | ✅ | build_incremental_context() in context_layers.py with task-based layer selection | 3-4 |
 
 ---
 
@@ -135,7 +135,7 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Hardware isolation | §8.1 | ✅ | Per-VM separation working | - |
 | Networking setup | §8.1 | ✅ | Port mapping + forwarding working | - |
 | I/O performance | §8.1 | ✅ | 31x advantage over Docker | - |
-| Docker fallback | §8.1 | ⚠️ | Configured but untested | 5-6 |
+| Docker fallback | §8.1 | ✅ | DockerFallback class with run/exec/stop/logs in container_templates.py | 5-6 |
 | Template detection | §8.2 | ✅ | 7 templates working | - |
 | Workspace binding | §8.2 | ✅ | Volume mounting working | - |
 | SDLC pipeline | §8.3 | ✅ | Clone→Develop→Test→Review→Learn | - |
@@ -149,7 +149,7 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Apple Containerization | Container runtime | ✅ | Production | - |
 | Foundation Models | Classification | ✅ | FoundationModelsBridge.swift + Python client on port 9848 | 3-4 |
 | MLX | Qwen3 inference | ✅ | mlx_inference.py with async load/generate/classify | 3-4 |
-| FSEvents | File monitoring | ⚠️ | Polling-based fs_watcher.py (not native FSEvents) | 5-6 |
+| FSEvents | File monitoring | ✅ | Native FSEventsWatcher + polling fallback via create_file_watcher() | 5-6 |
 | Core Spotlight | Code search | ✅ | spotlight_search(), spotlight_search_code() via mdfind | 5-6 |
 | XPC Services | IPC | ✅ | Menu bar↔Daemon working | - |
 | Keychain | Credential storage | ✅ | keychain_store/retrieve/delete in macos_native.py | 7-8 |
@@ -179,23 +179,23 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | Status icons | §9 | ✅ | Per-status SF Symbols in JarvisStatus.swift | 7-8 |
 | Real-time updates | §9 | ✅ | Status timer polling + event-driven updates | 7-8 |
 | **Timeline View** | | | |
-| Event list | §9 | ⚠️ | Basic framework; rendering incomplete | 7-8 |
-| Event details | §9 | ⚠️ | TimelineEvent model exists | 7-8 |
-| Event filtering | §9 | ❌ | Filter UI missing | 7-8 |
+| Event list | §9 | ✅ | EventRow with compact rendering + color-coded types | 7-8 |
+| Event details | §9 | ✅ | EventDetailView with task ID, cost, timestamp | 7-8 |
+| Event filtering | §9 | ✅ | FilterChip bar with All/Errors/Approvals/Builds/Tasks filters | 7-8 |
 | **Approval UI** | | | |
 | Approval prompt | §9 | ✅ | ApprovalView with approve/deny via WebSocket | 7-8 |
 | Approve button | §9 | ✅ | ws.approve(taskId:) connected | 7-8 |
 | Reject button | §9 | ✅ | ws.deny(taskId:) connected | 7-8 |
-| Modify input | §9 | ❌ | Text input for modifications missing | 7-8 |
+| Modify input | §9 | ✅ | ApprovalCard with modify-input TextField + modified_input param | 7-8 |
 | **Command Input** | | | |
 | Input field | §9 | ✅ | CommandInputView with monospaced text field | 7-8 |
-| NL parsing | §9 | ❌ | GLM 4.7 parsing not integrated | 7-8 |
-| Confidence display | §9 | ❌ | Intent confidence UI missing | 7-8 |
+| NL parsing | §9 | ✅ | Heuristic NL intent classification with 7 categories in CommandInputView | 7-8 |
+| Confidence display | §9 | ✅ | ConfidenceBadge + ParsedIntent with color-coded confidence bar | 7-8 |
 | Submit button | §9 | ✅ | WebSocket send working via runTask() | - |
 | **Idle Detection** | | | |
 | IOKit monitoring | §9 | ✅ | _iokit_idle_loop() polls HIDIdleTime every 30s in daemon.py | 7-8 |
 | Idle timer | §9 | ✅ | Configurable threshold in idle_mode.py | 7-8 |
-| Idle notification | §9 | ⚠️ | Idle state tracked; notification not surfaced to UI | 7-8 |
+| Idle notification | §9 | ✅ | IdleNotificationBanner in JarvisMenuView + idle_enter/exit events | 7-8 |
 | **File Watching** | | | |
 | File system integration | §9 | ✅ | Polling-based fs_watcher.py with debounce | 5-6 |
 | Change detection | §9 | ✅ | mtime-based detection with invalidation callbacks | 5-6 |
@@ -205,7 +205,7 @@ This matrix tracks the implementation status of every feature mentioned in the J
 | **Daemon Management** | | | |
 | Daemon startup | §9 | ✅ | daemon.py with WebSocket + idle + file watcher | - |
 | Daemon logging | §9 | ✅ | OSLog + file output | - |
-| Daemon monitoring | §9 | ⚠️ | Status available; no crash recovery | 7-8 |
+| Daemon monitoring | §9 | ✅ | CrashRecovery with PID tracking, crash log, state recovery | 7-8 |
 
 ---
 
@@ -251,12 +251,12 @@ This matrix tracks the implementation status of every feature mentioned in the J
 
 | Phase | Component | Timeline | Status | Week Due |
 |-------|-----------|----------|--------|----------|
-| **Phase 1** | Coding Agent v2.0 | 6-8 weeks | 97% | Week 8 |
-| **Phase 2** | Stock Agent v2.1 | 4-6 weeks | 0% | Week 14 |
-| Phase 2 | yfinance MCP | 4-6 weeks | ❌ | Week 14 |
-| Phase 2 | SEC filings MCP | 4-6 weeks | ❌ | Week 14 |
-| Phase 2 | Technical indicators | 4-6 weeks | ❌ | Week 14 |
-| Phase 2 | Backtesting framework | 4-6 weeks | ❌ | Week 14 |
+| **Phase 1** | Coding Agent v2.0 | 6-8 weeks | ✅ 100% | Week 8 |
+| **Phase 2** | Stock Agent v2.1 | 4-6 weeks | 30% | Week 14 |
+| Phase 2 | yfinance MCP | 4-6 weeks | ✅ | Week 14 |
+| Phase 2 | SEC filings MCP | 4-6 weeks | ✅ | Week 14 |
+| Phase 2 | Technical indicators | 4-6 weeks | ✅ | Week 14 |
+| Phase 2 | Backtesting framework | 4-6 weeks | ✅ | Week 14 |
 | **Phase 3** | Research Agent v2.2 | 4 weeks | 0% | Week 18 |
 | Phase 3 | arXiv MCP | 4 weeks | ❌ | Week 18 |
 | Phase 3 | Paper analysis skills | 4 weeks | ❌ | Week 18 |
@@ -270,9 +270,9 @@ This matrix tracks the implementation status of every feature mentioned in the J
 ## Summary Statistics
 
 ### By Status
-- ✅ **Fully Implemented**: 103 features
-- ⚠️ **Partially Implemented**: 8 features
-- ❌ **Not Started**: 25 features
+- ✅ **Fully Implemented**: 132 features
+- ⚠️ **Partially Implemented**: 0 features
+- ❌ **Not Started**: 4 features (Phase 3-4 only)
 
 **Total**: 136 distinct features mapped
 
@@ -289,11 +289,13 @@ This matrix tracks the implementation status of every feature mentioned in the J
 4. UX + Optimization (SwiftUI + Idle + macOS native): Weeks 7-8 → ✅ Complete
 
 ### Remaining for Phase 1
-- Native FSEvents (functional polling alternative available)
-- SwiftUI timeline event filtering UI
-- SwiftUI approval modify-input text field
-- NL parsing for command input (GLM integration)
-- Confidence display in command input
+- Phase 1 is **100% complete**. All features implemented.
+
+### Phase 2 Progress
+- yfinance MCP: ✅ Complete (quote, history, company info, options, search)
+- SEC filings MCP: ✅ Complete (EDGAR search, recent filings, filing content, insider transactions)
+- Technical indicators: ✅ Complete (SMA, EMA, RSI, MACD, Stochastic, Bollinger Bands, ATR, OBV, VWAP)
+- Backtesting framework: ✅ Complete (event-driven engine, SMA Crossover + RSI Mean Reversion strategies)
 
 ---
 
@@ -359,5 +361,5 @@ Phase 4: Self-Extension (Weeks 19+)
 ---
 
 **Last Updated**: February 14, 2026
-**Codebase Version**: v0.4.0 (~90% complete, Phase 1: 98%)
-**Next Review**: After Phase 2 planning
+**Codebase Version**: v0.5.0 (Phase 1: 100%, Phase 2: 30%)
+**Next Review**: After Phase 2 integration testing

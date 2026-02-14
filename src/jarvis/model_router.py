@@ -1,10 +1,11 @@
 """Model routing: 3-tier intelligence system for optimal cost/latency/quality.
 
 Tier 1: Qwen3 4B (Local MLX) - Fast, cheap, private
-  - Task classification
+  - Task classification and triage
   - Context pre-filtering (file selection)
   - Simple queries that fit in 4K context
   - Offline fallback
+  - Error summarization
 
 Tier 2: GLM 4.7 (Cloud API) - Powerful, 200K context, thinking mode
   - Complex coding tasks
@@ -19,7 +20,7 @@ Tier 3: Foundation Models (macOS) - Ultra-fast classification
 
 Router Logic:
 1. Use Foundation Models for quick classification (<100ms)
-2. Use Qwen3 for simple tasks and context filtering (200-500ms)
+2. Use Qwen3 for triage, simple tasks, and context filtering (200-500ms)
 3. Use GLM 4.7 for everything else
 4. Fallback: GLM always available if local models fail
 """
@@ -39,6 +40,25 @@ class ModelTier(Enum):
     GLM_CLOUD = "glm-4.7"      # Cloud API (Claude)
 
 
+class TaskComplexity(Enum):
+    """Task complexity classification from triage."""
+    TRIVIAL = "trivial"       # Typo fix, comment add, simple rename
+    SIMPLE = "simple"         # Single-file change, small bug fix
+    MODERATE = "moderate"     # Multi-file change, feature addition
+    COMPLEX = "complex"       # Architecture change, refactoring
+    UNKNOWN = "unknown"       # Could not classify
+
+
+@dataclass
+class TriageResult:
+    """Result of Qwen3 task triage."""
+    complexity: TaskComplexity
+    suggested_files: list[str]
+    estimated_tokens: int
+    confidence: float
+    reasoning: str
+
+
 @dataclass
 class RoutingDecision:
     """Model routing decision with reasoning."""
@@ -48,6 +68,7 @@ class RoutingDecision:
     context_filter: list[str] | None = None  # Files to include (if pre-filtered)
     estimated_tokens: int = 0
     estimated_cost_usd: float = 0.0
+    triage: TriageResult | None = None
 
 
 class ModelRouter:
@@ -56,6 +77,9 @@ class ModelRouter:
     On Apple Silicon with MLX installed, automatically loads Qwen3 4B
     for local inference. On macOS with JarvisApp running, connects to
     Foundation Models for ultra-fast classification.
+
+    Enhanced with Qwen3 triage: before routing to cloud, Qwen3 analyzes
+    the task to determine complexity and pre-filter context.
     """
 
     def __init__(self):
@@ -67,6 +91,7 @@ class ModelRouter:
             "qwen3": 0,
             "glm": 0,
             "fallback": 0,
+            "triage_hits": 0,
         }
 
         # MLX engine (lazy-loaded)
@@ -120,6 +145,90 @@ class ModelRouter:
         )
         return result
 
+    async def triage_task(
+        self,
+        task_description: str,
+        context_files: list[str] | None = None,
+    ) -> TriageResult:
+        """Use Qwen3 to triage a task before routing.
+
+        Classifies task complexity and suggests relevant files.
+        Falls back to heuristic triage if Qwen3 is unavailable.
+        """
+        # Try Qwen3-based triage
+        if self.qwen3_available and self._mlx_engine and self._mlx_engine.loaded:
+            try:
+                classification = await self._mlx_engine.classify_task(task_description)
+                complexity_map = {
+                    "trivial": TaskComplexity.TRIVIAL,
+                    "simple": TaskComplexity.SIMPLE,
+                    "moderate": TaskComplexity.MODERATE,
+                    "complex": TaskComplexity.COMPLEX,
+                }
+                complexity = complexity_map.get(
+                    classification.get("complexity", "unknown"),
+                    TaskComplexity.UNKNOWN,
+                )
+
+                # Filter context files
+                suggested_files = context_files or []
+                if context_files and len(context_files) > 3:
+                    suggested_files = await self._mlx_filter_context(
+                        task_description, context_files
+                    )
+
+                self._routing_stats["triage_hits"] += 1
+                return TriageResult(
+                    complexity=complexity,
+                    suggested_files=suggested_files,
+                    estimated_tokens=len(suggested_files) * 1000,
+                    confidence=classification.get("confidence", 0.5),
+                    reasoning=classification.get("reasoning", "Qwen3 triage"),
+                )
+            except Exception as e:
+                logger.debug(f"Qwen3 triage failed, using heuristic: {e}")
+
+        # Heuristic fallback triage
+        return self._heuristic_triage(task_description, context_files)
+
+    def _heuristic_triage(
+        self,
+        task_description: str,
+        context_files: list[str] | None = None,
+    ) -> TriageResult:
+        """Heuristic-based task triage fallback."""
+        task_lower = task_description.lower()
+
+        trivial_keywords = ["fix typo", "add comment", "update string", "format"]
+        simple_keywords = ["rename", "lint", "quick fix", "simple change", "small bug"]
+        complex_keywords = [
+            "refactor", "redesign", "architecture", "implement feature",
+            "build", "create new", "full stack", "end to end", "migrate",
+        ]
+
+        if any(kw in task_lower for kw in trivial_keywords):
+            complexity = TaskComplexity.TRIVIAL
+        elif any(kw in task_lower for kw in simple_keywords):
+            complexity = TaskComplexity.SIMPLE
+        elif any(kw in task_lower for kw in complex_keywords):
+            complexity = TaskComplexity.COMPLEX
+        elif context_files and len(context_files) > 5:
+            complexity = TaskComplexity.MODERATE
+        else:
+            complexity = TaskComplexity.SIMPLE
+
+        suggested = self._heuristic_filter_context(
+            task_description, context_files or []
+        )
+
+        return TriageResult(
+            complexity=complexity,
+            suggested_files=suggested,
+            estimated_tokens=len(suggested) * 1000,
+            confidence=0.4,
+            reasoning="Heuristic triage (Qwen3 unavailable)",
+        )
+
     async def route_task(
         self,
         task_description: str,
@@ -128,6 +237,9 @@ class ModelRouter:
         offline_mode: bool = False,
     ) -> RoutingDecision:
         """Route a task to the appropriate model tier.
+
+        Enhanced with Qwen3 triage: tasks are pre-classified before
+        routing to determine the optimal model tier.
 
         Args:
             task_description: Natural language task description
@@ -138,6 +250,9 @@ class ModelRouter:
         Returns:
             RoutingDecision with tier, model, and reasoning
         """
+        # Step 1: Triage the task
+        triage = await self.triage_task(task_description, context_files)
+
         # Tier 3: Foundation Models for classification tasks
         if self._is_classification_task(task_description):
             if self.foundation_available and self._foundation_client:
@@ -153,29 +268,29 @@ class ModelRouter:
                                f"({classification['latency_ms']:.0f}ms)",
                         estimated_tokens=0,
                         estimated_cost_usd=0.0,
+                        triage=triage,
                     )
                 except Exception as e:
                     logger.debug(f"Foundation Models fallthrough: {e}")
 
-        # Tier 1: Qwen3 for simple tasks
-        if self._is_simple_task(task_description, context_files):
+        # Tier 1: Qwen3 for trivial/simple tasks (determined by triage)
+        if triage.complexity in (TaskComplexity.TRIVIAL, TaskComplexity.SIMPLE):
             if self.qwen3_available and self._mlx_engine:
                 try:
-                    filtered_files = await self._mlx_filter_context(
-                        task_description, context_files or []
-                    )
                     self._routing_stats["qwen3"] += 1
-                    token_savings = len(context_files or []) - len(filtered_files or [])
+                    token_savings = len(context_files or []) - len(triage.suggested_files)
                     self._token_savings_total += token_savings * 1000
 
                     return RoutingDecision(
                         tier=ModelTier.QWEN3_LOCAL,
                         model="qwen3-4b-mlx",
-                        reason=f"Simple task, local execution. Filtered "
-                               f"{len(context_files or [])} → {len(filtered_files or [])} files",
-                        context_filter=filtered_files,
-                        estimated_tokens=len(filtered_files or []) * 1000,
+                        reason=f"Triage: {triage.complexity.value} task. "
+                               f"Filtered {len(context_files or [])} → "
+                               f"{len(triage.suggested_files)} files",
+                        context_filter=triage.suggested_files,
+                        estimated_tokens=triage.estimated_tokens,
                         estimated_cost_usd=0.0,
+                        triage=triage,
                     )
                 except Exception as e:
                     logger.debug(f"Qwen3 fallthrough: {e}")
@@ -183,17 +298,15 @@ class ModelRouter:
         # Offline mode: must use local models
         if offline_mode:
             if self.qwen3_available and self._mlx_engine:
-                filtered_files = await self._mlx_filter_context(
-                    task_description, context_files or []
-                )
                 self._routing_stats["qwen3"] += 1
                 return RoutingDecision(
                     tier=ModelTier.QWEN3_LOCAL,
                     model="qwen3-4b-mlx",
                     reason="Offline mode: routing to local Qwen3 model",
-                    context_filter=filtered_files,
-                    estimated_tokens=len(filtered_files or []) * 1000,
+                    context_filter=triage.suggested_files,
+                    estimated_tokens=triage.estimated_tokens,
                     estimated_cost_usd=0.0,
+                    triage=triage,
                 )
             else:
                 self._routing_stats["fallback"] += 1
@@ -203,16 +316,24 @@ class ModelRouter:
                     reason="Offline mode: no local models available, task cannot be executed offline",
                     estimated_tokens=0,
                     estimated_cost_usd=0.0,
+                    triage=triage,
                 )
 
-        # Tier 2: Cloud API for complex tasks
+        # Tier 2: Cloud API for moderate/complex tasks
         self._routing_stats["glm"] += 1
+
+        # Use triage-filtered context for cloud too (save tokens)
+        filtered = triage.suggested_files if triage.suggested_files else context_files
+
         return RoutingDecision(
             tier=ModelTier.GLM_CLOUD,
             model="claude-sonnet-4.5",
-            reason="Complex task requiring full context and 200K window",
-            estimated_tokens=len(context_files or []) * 1000,
-            estimated_cost_usd=0.015 * len(context_files or []),
+            reason=f"Triage: {triage.complexity.value} task, routing to cloud. "
+                   f"Context: {len(filtered or [])} files",
+            context_filter=filtered,
+            estimated_tokens=len(filtered or []) * 1000,
+            estimated_cost_usd=0.015 * len(filtered or []),
+            triage=triage,
         )
 
     def _is_classification_task(self, task_description: str) -> bool:
@@ -223,29 +344,6 @@ class ModelRouter:
         ]
         task_lower = task_description.lower()
         return any(keyword in task_lower for keyword in classification_keywords)
-
-    def _is_simple_task(self, task_description: str, context_files: list[str] | None) -> bool:
-        """Check if task is simple enough for Qwen3 4B (4K context limit)."""
-        if context_files and len(context_files) > 3:
-            return False
-
-        simple_keywords = [
-            "fix typo", "add comment", "rename", "format", "lint",
-            "simple change", "quick fix", "update string",
-        ]
-        complex_keywords = [
-            "refactor", "redesign", "architecture", "implement feature",
-            "build", "create new", "full stack", "end to end",
-        ]
-
-        task_lower = task_description.lower()
-
-        if any(keyword in task_lower for keyword in simple_keywords):
-            return True
-        if any(keyword in task_lower for keyword in complex_keywords):
-            return False
-
-        return len(context_files or []) <= 2
 
     async def _mlx_filter_context(
         self, task_description: str, context_files: list[str]
@@ -296,6 +394,7 @@ class ModelRouter:
             "qwen3_pct": (self._routing_stats["qwen3"] / total * 100) if total else 0,
             "glm_pct": (self._routing_stats["glm"] / total * 100) if total else 0,
             "fallback_pct": (self._routing_stats["fallback"] / total * 100) if total else 0,
+            "triage_hits": self._routing_stats["triage_hits"],
             "token_savings_total": self._token_savings_total,
             "qwen3_available": self.qwen3_available,
             "foundation_available": self.foundation_available,

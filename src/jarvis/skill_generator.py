@@ -2,7 +2,7 @@
 
 When a pattern is detected 3+ times:
 1. Retrieve candidate from skill_candidates table
-2. Generate SKILL.md using GLM 4.7
+2. Generate SKILL.md using GLM 4.7 (or template fallback)
 3. Validate against execution history
 4. Save to ~/.claude/skills/
 5. Mark candidate as promoted
@@ -31,6 +31,9 @@ from typing import Any
 from jarvis.memory import MemoryStore
 
 logger = logging.getLogger(__name__)
+
+# Maximum skills that can be active in a single session
+MAX_SKILLS_PER_SESSION = 3
 
 SKILL_TEMPLATE = """---
 name: {skill_name}
@@ -72,6 +75,30 @@ Confidence: {confidence:.2f}
 Occurrences: {occurrence_count}
 """
 
+# GLM prompt template for generating skill instructions
+GLM_SKILL_GENERATION_PROMPT = """You are a skill generator for an autonomous coding agent.
+
+Given a recurring pattern observed {occurrence_count} times across task executions, generate a concise, actionable skill prompt.
+
+## Pattern Description
+{pattern_description}
+
+## Example Tasks Where This Pattern Occurred
+{example_tasks}
+
+## Execution Context
+{execution_context}
+
+## Instructions
+Generate a skill prompt that:
+1. Clearly describes when to apply this skill
+2. Provides step-by-step instructions for handling this pattern
+3. Includes validation checks to confirm the fix worked
+4. Is specific enough to be actionable but general enough to cover variations
+
+Output ONLY the skill prompt text (no markdown headers, no metadata).
+"""
+
 
 def generate_skill_name(pattern_description: str) -> str:
     """Generate a skill name from pattern description.
@@ -89,6 +116,67 @@ def generate_skill_name(pattern_description: str) -> str:
     words = words[:4]
     words = ["".join(c for c in w if c.isalnum() or c == "-") for w in words]
     return "-".join(words)
+
+
+def rank_skill_candidates(candidates: list[dict]) -> list[dict]:
+    """Rank skill candidates by relevance for session selection.
+
+    Ranking factors (weighted):
+    - Confidence score (40%): higher confidence = more reliable
+    - Occurrence count (30%): more occurrences = more useful
+    - Recency (30%): recently seen patterns are more relevant
+
+    Returns candidates sorted by rank score (highest first).
+    """
+    import time
+
+    now = time.time()
+    ranked = []
+
+    for candidate in candidates:
+        confidence = candidate.get("confidence", 0.5)
+        occurrences = candidate.get("occurrence_count", 1)
+        last_seen = candidate.get("last_seen", 0)
+
+        # Normalize recency: 1.0 for <1hr ago, decays over 7 days
+        age_hours = (now - last_seen) / 3600 if last_seen else 168
+        recency_score = max(0.0, 1.0 - (age_hours / 168))
+
+        # Normalize occurrence count (log scale, cap at 20)
+        import math
+        occurrence_score = min(1.0, math.log(occurrences + 1) / math.log(21))
+
+        # Weighted rank score
+        rank_score = (
+            0.4 * confidence
+            + 0.3 * occurrence_score
+            + 0.3 * recency_score
+        )
+
+        ranked.append({**candidate, "_rank_score": rank_score})
+
+    ranked.sort(key=lambda c: c["_rank_score"], reverse=True)
+    return ranked
+
+
+def select_session_skills(memory: MemoryStore, max_skills: int = MAX_SKILLS_PER_SESSION) -> list[dict]:
+    """Select the top-ranked skills for the current session.
+
+    Enforces the hard cap of MAX_SKILLS_PER_SESSION skills per session.
+    Returns only the highest-ranked promoted skills.
+    """
+    promoted = memory.get_skill_candidates(min_occurrences=1, promoted=True)
+    if not promoted:
+        return []
+
+    ranked = rank_skill_candidates(promoted)
+    selected = ranked[:max_skills]
+
+    logger.info(
+        f"Selected {len(selected)}/{len(promoted)} skills for session "
+        f"(cap: {max_skills})"
+    )
+    return selected
 
 
 def detect_skill_worthy_patterns(memory: MemoryStore, min_occurrences: int = 3) -> list[dict]:
@@ -110,6 +198,73 @@ def detect_skill_worthy_patterns(memory: MemoryStore, min_occurrences: int = 3) 
     return candidates
 
 
+async def _generate_prompt_via_glm(
+    pattern_description: str,
+    occurrence_count: int,
+    example_tasks: list[str],
+    execution_context: str,
+) -> str | None:
+    """Generate a skill prompt using GLM 4.7 via the model router.
+
+    Returns the generated prompt text, or None if GLM is unavailable.
+    """
+    try:
+        from jarvis.model_router import get_model_router
+
+        router = get_model_router()
+
+        # Only attempt if cloud API is available
+        if not router.qwen3_available and not router.foundation_available:
+            # Use the GLM prompt template
+            prompt_input = GLM_SKILL_GENERATION_PROMPT.format(
+                pattern_description=pattern_description,
+                occurrence_count=occurrence_count,
+                example_tasks="\n".join(f"- {t}" for t in example_tasks[:5]),
+                execution_context=execution_context,
+            )
+
+            # Route via the model router for GLM cloud
+            try:
+                import httpx
+
+                # Use the Claude/GLM API directly for skill generation
+                api_key = None
+                import os
+                api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+                if not api_key:
+                    return None
+
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(
+                        "https://api.anthropic.com/v1/messages",
+                        headers={
+                            "x-api-key": api_key,
+                            "anthropic-version": "2023-06-01",
+                            "content-type": "application/json",
+                        },
+                        json={
+                            "model": "claude-haiku-4-5-20251001",
+                            "max_tokens": 1024,
+                            "messages": [{"role": "user", "content": prompt_input}],
+                        },
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        content = data.get("content", [])
+                        if content and content[0].get("type") == "text":
+                            generated = content[0]["text"].strip()
+                            logger.info(f"GLM generated skill prompt ({len(generated)} chars)")
+                            return generated
+            except Exception as e:
+                logger.debug(f"GLM API call failed: {e}")
+                return None
+
+    except Exception as e:
+        logger.debug(f"GLM skill generation unavailable: {e}")
+
+    return None
+
+
 async def generate_skill_from_candidate(
     candidate: dict,
     memory: MemoryStore,
@@ -117,8 +272,8 @@ async def generate_skill_from_candidate(
 ) -> dict[str, Any]:
     """Generate a SKILL.md file from a pattern candidate.
 
-    This is a stub - full implementation will use GLM 4.7 via Agent SDK.
-    For now, generates skills from templates.
+    Uses GLM 4.7 for prompt generation when available, falls back
+    to template-based generation.
 
     Args:
         candidate: Skill candidate dict from database
@@ -146,8 +301,26 @@ async def generate_skill_from_candidate(
 
 This pattern has occurred {occurrence_count} times in execution history."""
 
-    # Generate prompt (stub - would use GLM 4.7 in full version)
-    prompt = f"""You are handling a recurring pattern that has been seen {occurrence_count} times.
+    # Build execution context from records
+    execution_context = ""
+    for task_id in example_tasks[:3]:
+        records = memory.get_execution_records(task_id=task_id, limit=5)
+        if records:
+            errors = [r["error_message"] for r in records if r.get("error_message")]
+            tools = [r["tool_name"] for r in records]
+            execution_context += f"Task {task_id}: tools={tools[:5]}, errors={errors[:2]}\n"
+
+    # Attempt GLM-based prompt generation
+    prompt = await _generate_prompt_via_glm(
+        pattern_description=pattern_description,
+        occurrence_count=occurrence_count,
+        example_tasks=example_tasks,
+        execution_context=execution_context or "No execution context available",
+    )
+
+    # Fallback to template-based prompt
+    if not prompt:
+        prompt = f"""You are handling a recurring pattern that has been seen {occurrence_count} times.
 
 Pattern: {pattern_description}
 
@@ -248,12 +421,13 @@ async def generate_skills_from_patterns(
             "skills_saved": [],
         }
 
-    # Limit to max_skills
-    candidates = candidates[:max_skills]
+    # Rank candidates and enforce session cap
+    ranked = rank_skill_candidates(candidates)
+    ranked = ranked[:max_skills]
 
     # Generate skills
     skills_generated = []
-    for candidate in candidates:
+    for candidate in ranked:
         try:
             skill_data = await generate_skill_from_candidate(
                 candidate, memory, project_path

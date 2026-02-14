@@ -11,6 +11,15 @@ struct JarvisMenuView: View {
 
             Divider()
 
+            // Idle notification banner
+            if ws.status.isIdle && ws.idleInfo != nil {
+                IdleNotificationBanner(status: ws.status, idleInfo: ws.idleInfo!)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+
+                Divider()
+            }
+
             // Command input
             CommandInputView()
                 .padding(.horizontal, 16)
@@ -91,5 +100,51 @@ struct JarvisMenuView: View {
         .onAppear {
             ws.connect()
         }
+    }
+}
+
+// MARK: - Idle Notification Banner
+
+struct IdleNotificationBanner: View {
+    let status: JarvisStatus
+    let idleInfo: IdleInfo
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: status.iconName)
+                .font(.caption)
+                .foregroundStyle(status.color)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(status.label)
+                    .font(.caption)
+                    .fontWeight(.medium)
+
+                if let taskCount = idleInfo.backgroundTasks, taskCount > 0 {
+                    Text("\(taskCount) background task\(taskCount == 1 ? "" : "s") running")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if status == .hibernated {
+                    Text("System hibernated — memory pressure detected")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("No pending work — monitoring for changes")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            // Idle state indicator dot
+            Circle()
+                .fill(status.color)
+                .frame(width: 8, height: 8)
+                .opacity(status == .idleProcessing ? 1.0 : 0.5)
+        }
+        .padding(8)
+        .background(status.color.opacity(0.08))
+        .cornerRadius(8)
     }
 }

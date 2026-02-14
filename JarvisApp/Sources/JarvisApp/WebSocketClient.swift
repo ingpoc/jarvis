@@ -9,6 +9,7 @@ final class WebSocketClient {
     var pendingApprovals: [TimelineEvent] = []
     var trustInfo: TrustInfo?
     var budgetInfo: BudgetInfo?
+    var idleInfo: IdleInfo?
     var currentFeature: String?
     var currentSession: String?
     var lastError: String?
@@ -137,6 +138,14 @@ final class WebSocketClient {
             status = .error
         case "approval_needed":
             status = .waitingApproval
+        case "idle_enter":
+            status = .idleProcessing
+        case "idle_exit":
+            status = .idle
+        case "hibernate_enter":
+            status = .hibernated
+        case "hibernate_exit":
+            status = .idle
         default:
             break
         }
@@ -150,6 +159,7 @@ final class WebSocketClient {
                 status = resp.status
                 trustInfo = resp.trust
                 budgetInfo = resp.budget
+                idleInfo = resp.idleInfo
                 currentFeature = resp.currentFeature
                 currentSession = resp.currentSession
             }

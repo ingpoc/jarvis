@@ -83,6 +83,7 @@ class IdleModeProcessor:
         self._running = False
         self._loop_task: asyncio.Task | None = None
         self._state_callbacks: list[Callable] = []
+        self._memory_pressure_task: asyncio.Task | None = None
 
         # Register default background tasks
         self._register_default_tasks()
@@ -160,6 +161,48 @@ class IdleModeProcessor:
         self._state = IdleState.HIBERNATED
         self._notify_state_change(old_state, IdleState.HIBERNATED)
         logger.info("Entering hibernation mode")
+
+    async def _monitor_memory_pressure(self) -> None:
+        """Monitor system memory pressure and trigger hibernation if critical.
+
+        Integrates with macOS memory pressure APIs via macos_native module.
+        Polls every 60 seconds when idle, every 30 seconds when active.
+        """
+        while self._running:
+            try:
+                poll_interval = 30 if self._state == IdleState.ACTIVE else 60
+
+                try:
+                    from jarvis.macos_native import get_memory_pressure
+                    pressure = get_memory_pressure()
+                    if pressure and pressure.get("should_hibernate"):
+                        logger.warning(
+                            f"Memory pressure CRITICAL: {pressure.get('free_mb', '?')}MB free "
+                            f"— triggering emergency hibernation"
+                        )
+                        self.trigger_hibernate()
+
+                        # Unload MLX model to free memory
+                        try:
+                            from jarvis.model_router import get_model_router
+                            router = get_model_router()
+                            await router.shutdown()
+                            logger.info("MLX model unloaded due to memory pressure")
+                        except Exception as e:
+                            logger.debug(f"Model unload on hibernation failed: {e}")
+
+                except ImportError:
+                    pass  # Not on macOS
+                except Exception as e:
+                    logger.debug(f"Memory pressure check error: {e}")
+
+                await asyncio.sleep(poll_interval)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Memory pressure monitor error: {e}")
+                await asyncio.sleep(60)
 
     def _notify_state_change(self, old: IdleState, new: IdleState) -> None:
         """Notify state change callbacks."""
@@ -475,6 +518,7 @@ class IdleModeProcessor:
             return
         self._running = True
         self._loop_task = asyncio.create_task(self._process_loop())
+        self._memory_pressure_task = asyncio.create_task(self._monitor_memory_pressure())
         logger.info("Idle mode processor started")
 
     async def stop(self) -> None:
@@ -487,6 +531,13 @@ class IdleModeProcessor:
             except asyncio.CancelledError:
                 pass
             self._loop_task = None
+        if self._memory_pressure_task:
+            self._memory_pressure_task.cancel()
+            try:
+                await self._memory_pressure_task
+            except asyncio.CancelledError:
+                pass
+            self._memory_pressure_task = None
         logger.info("Idle mode processor stopped")
 
     def get_stats(self) -> dict[str, Any]:

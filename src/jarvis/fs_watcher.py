@@ -17,6 +17,28 @@ from typing import Any
 
 from jarvis.memory import MemoryStore
 
+# Try to import macOS FSEvents via pyobjc
+try:
+    from Foundation import NSObject
+    from FSEvents import (
+        FSEventStreamCreate,
+        FSEventStreamScheduleWithRunLoop,
+        FSEventStreamStart,
+        FSEventStreamStop,
+        FSEventStreamInvalidate,
+        FSEventStreamRelease,
+        kFSEventStreamEventFlagItemCreated,
+        kFSEventStreamEventFlagItemRemoved,
+        kFSEventStreamEventFlagItemModified,
+        kFSEventStreamEventFlagItemRenamed,
+        kFSEventStreamCreateFlagFileEvents,
+        kFSEventStreamCreateFlagNoDefer,
+    )
+    from CoreFoundation import CFRunLoopGetCurrent, CFRunLoopRun, kCFRunLoopDefaultMode
+    HAS_FSEVENTS = True
+except ImportError:
+    HAS_FSEVENTS = False
+
 logger = logging.getLogger(__name__)
 
 # Default debounce window in seconds to coalesce rapid changes
@@ -66,6 +88,130 @@ class FileSnapshot:
         self.path = path
         self.mtime = mtime
         self.content_hash = content_hash
+
+
+class FSEventsWatcher:
+    """Native macOS FSEvents-based file watcher.
+
+    Uses the macOS FSEvents API for efficient, low-latency file change
+    detection. Falls back to polling if FSEvents is unavailable.
+    """
+
+    def __init__(
+        self,
+        project_path: str,
+        memory: MemoryStore,
+        debounce: float = DEBOUNCE_SECONDS,
+    ):
+        self.project_path = Path(project_path)
+        self.memory = memory
+        self.debounce = debounce
+        self._running = False
+        self._thread = None
+        self._pending_changes: dict[str, float] = {}
+        self._change_callbacks: list = []
+        self._stream = None
+
+    def _fsevents_callback(self, stream, client_info, num_events, event_paths, event_flags, event_ids):
+        """FSEvents callback: receives file change events from the OS."""
+        import time
+        now = time.time()
+        for i in range(num_events):
+            path = event_paths[i]
+            if isinstance(path, bytes):
+                path = path.decode("utf-8")
+            rel_path = os.path.relpath(path, str(self.project_path))
+            p = Path(rel_path)
+            if _should_watch(Path(path)):
+                self._pending_changes[rel_path] = now
+
+    def _run_loop(self):
+        """Run the CFRunLoop for FSEvents (runs in a background thread)."""
+        context = None
+        paths = [str(self.project_path)]
+        self._stream = FSEventStreamCreate(
+            None,
+            self._fsevents_callback,
+            context,
+            paths,
+            0,  # since_when (now)
+            self.debounce,
+            kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer,
+        )
+        FSEventStreamScheduleWithRunLoop(
+            self._stream, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode
+        )
+        FSEventStreamStart(self._stream)
+        logger.info(f"FSEvents watcher active for {self.project_path}")
+        CFRunLoopRun()
+
+    async def start(self) -> None:
+        """Start the FSEvents watcher in a background thread."""
+        if self._running:
+            return
+        self._running = True
+        import threading
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+        # Start async processing loop
+        asyncio.create_task(self._process_changes_loop())
+
+    async def _process_changes_loop(self) -> None:
+        """Process debounced FSEvents changes."""
+        while self._running:
+            try:
+                await asyncio.sleep(self.debounce)
+                if not self._pending_changes:
+                    continue
+
+                import time
+                now = time.time()
+                ready = [
+                    p for p, t in self._pending_changes.items()
+                    if now - t >= self.debounce
+                ]
+                for p in ready:
+                    self._pending_changes.pop(p, None)
+
+                if ready:
+                    for callback in self._change_callbacks:
+                        try:
+                            callback(ready)
+                        except Exception as e:
+                            logger.warning(f"FSEvents change callback error: {e}")
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"FSEvents change processing error: {e}")
+                await asyncio.sleep(5)
+
+    async def stop(self) -> None:
+        """Stop the FSEvents watcher."""
+        self._running = False
+        if self._stream:
+            try:
+                FSEventStreamStop(self._stream)
+                FSEventStreamInvalidate(self._stream)
+                FSEventStreamRelease(self._stream)
+            except Exception:
+                pass
+        self._stream = None
+        logger.info("FSEvents watcher stopped")
+
+    def add_change_callback(self, callback) -> None:
+        """Register a callback for file changes."""
+        if callback not in self._change_callbacks:
+            self._change_callbacks.append(callback)
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get watcher statistics."""
+        return {
+            "project_path": str(self.project_path),
+            "backend": "fsevents",
+            "pending_changes": len(self._pending_changes),
+            "running": self._running,
+        }
 
 
 class FileSystemWatcher:
@@ -265,3 +411,30 @@ class FileSystemWatcher:
             "running": self._running,
             "poll_interval": self.poll_interval,
         }
+
+
+def create_file_watcher(
+    project_path: str,
+    memory: MemoryStore,
+    poll_interval: float = 30.0,
+    debounce: float = DEBOUNCE_SECONDS,
+) -> FileSystemWatcher | FSEventsWatcher:
+    """Create the best available file watcher for the platform.
+
+    Uses native FSEvents on macOS if available, falls back to polling.
+    """
+    if HAS_FSEVENTS:
+        logger.info("Using native FSEvents file watcher")
+        return FSEventsWatcher(
+            project_path=project_path,
+            memory=memory,
+            debounce=debounce,
+        )
+    else:
+        logger.info("Using polling-based file watcher (FSEvents unavailable)")
+        return FileSystemWatcher(
+            project_path=project_path,
+            memory=memory,
+            poll_interval=poll_interval,
+            debounce=debounce,
+        )
