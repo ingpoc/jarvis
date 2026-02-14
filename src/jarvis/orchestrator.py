@@ -48,6 +48,56 @@ from jarvis.notifications import (
 from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
 from jarvis.agents import MultiAgentPipeline
+from jarvis.model_router import get_model_router
+from jarvis.self_learning import learn_from_task, get_relevant_learnings, format_learning_for_context
+from jarvis.context_layers import build_context_layers, format_context_for_prompt
+from jarvis.universal_heuristics import auto_seed_project
+
+
+def _is_tool_error(tool_name: str, tool_response: str) -> bool:
+    """Determine if a tool response represents a real error.
+
+    Uses tool-specific heuristics to avoid false positives from responses
+    that merely mention 'error' (e.g., reading error-handling code).
+    """
+    if not isinstance(tool_response, str):
+        return False
+
+    # Read/Glob/Grep: reading code that mentions "error" is NOT an error
+    if tool_name in ("Read", "Glob", "Grep", "WebFetch", "WebSearch"):
+        return False
+
+    response_lower = tool_response.lower()
+
+    # Bash: look for common failure patterns
+    if tool_name == "Bash":
+        failure_signals = [
+            "command not found",
+            "no such file or directory",
+            "permission denied",
+            "segmentation fault",
+            "killed",
+            "npm err!",
+            "syntaxerror:",
+            "modulenotfounderror:",
+            "importerror:",
+            "typeerror:",
+            "nameerror:",
+            "valueerror:",
+            "compilation failed",
+            "build failed",
+            "test failed",
+            "tests failed",
+            "exit code",
+            "exited with",
+        ]
+        return any(sig in response_lower for sig in failure_signals)
+
+    # Edit/Write: tool-level failures (not content)
+    if tool_name in ("Edit", "Write"):
+        return "error" in response_lower and len(tool_response) < 200
+
+    return False
 
 
 class JarvisOrchestrator:
@@ -99,6 +149,28 @@ class JarvisOrchestrator:
                 f"Tasks remaining: {', '.join(last_summary['tasks_remaining'])}"
             )
 
+        # Load context layers (L1-L4) for project awareness
+        context_layers_text = ""
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                # If we're already in an async context, use cached layers
+                if hasattr(self, "_cached_context_layers") and self._cached_context_layers:
+                    context_layers_text = (
+                        "\n\n## Project Context (L1-L4)\n"
+                        + format_context_for_prompt(self._cached_context_layers, max_length=2000)
+                    )
+            except RuntimeError:
+                # No event loop running, build synchronously
+                layers = asyncio.run(build_context_layers(self.project_path, ["L1"]))
+                context_layers_text = (
+                    "\n\n## Project Context (L1)\n"
+                    + format_context_for_prompt(layers, max_length=1000)
+                )
+        except Exception:
+            pass  # Context layers are supplementary, don't block
+
         # Load learned patterns
         patterns = self.memory.get_patterns(self.project_path)
         patterns_text = ""
@@ -107,6 +179,18 @@ class JarvisOrchestrator:
                 f"- [{p['type']}] {p['pattern']} (confidence: {p['confidence']:.1f})"
                 for p in patterns[:10]
             )
+
+        # Load high-confidence learnings (error-fix patterns)
+        learnings = self.memory.get_learnings(
+            project_path=self.project_path,
+            min_confidence=0.7,
+            limit=5,
+        )
+        learnings_text = ""
+        if learnings:
+            learnings_text = "\n\n## Known Error-Fix Patterns"
+            for learning in learnings:
+                learnings_text += f"\n{format_learning_for_context(learning)}"
 
         # Decision traces section
         traces_text = ""
@@ -165,7 +249,7 @@ Turns: {budget_status['turns']}
 6. If tests pass: commit changes (if T2+)
 7. Clean up containers
 8. Report results
-{jarvis_md}{continuity}{patterns_text}"""
+{jarvis_md}{continuity}{context_layers_text}{patterns_text}{learnings_text}"""
 
     def _get_tier_capabilities(self, tier: int) -> str:
         capabilities = {
@@ -239,6 +323,9 @@ Turns: {budget_status['turns']}
 
     async def _pre_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
         """Hook: enforce trust and budget before tool execution."""
+        import time as _time
+        context["_tool_start_time"] = _time.monotonic()
+
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input", {})
 
@@ -283,9 +370,13 @@ Turns: {budget_status['turns']}
         return {}
 
     async def _post_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
-        """Hook: track container lifecycle, emit events, detect loops."""
+        """Hook: track container lifecycle, emit events, detect loops, capture execution records."""
+        import time as _time
+        hook_start = _time.monotonic()
+
         tool_name = input_data.get("tool_name", "")
         tool_response = input_data.get("tool_response", "")
+        tool_input = input_data.get("tool_input", {})
 
         # Emit tool use event
         self.events.emit(
@@ -294,6 +385,61 @@ Turns: {budget_status['turns']}
             task_id=context.get("task_id"),
             metadata={"tool": tool_name},
         )
+
+        # Capture execution record for learning
+        task_id = context.get("task_id", "unknown")
+        session_id = self._session_id or "unknown"
+
+        # Extract error information with reduced false positives.
+        # Only flag as error when there are strong signals, not just
+        # the words "error" or "exception" appearing anywhere in output.
+        error_message = None
+        exit_code = 0
+        if isinstance(tool_response, str):
+            response_lower = tool_response.lower()
+            # Bash tool: check for non-zero exit code markers
+            if tool_name == "Bash" and tool_input.get("exit_code", 0) != 0:
+                error_message = tool_response[:500]
+                exit_code = tool_input.get("exit_code", 1)
+            # Tool-level error signals: lines starting with error/traceback
+            elif any(
+                response_lower.lstrip().startswith(prefix)
+                for prefix in ("error:", "error!", "traceback ", "fatal:", "panic:")
+            ):
+                error_message = tool_response[:500]
+                exit_code = 1
+            # Explicit failure patterns (not just substring matches)
+            elif _is_tool_error(tool_name, tool_response):
+                error_message = tool_response[:500]
+                exit_code = 1
+
+        # Extract files touched (for Edit/Write/Read tools)
+        files_touched = []
+        if tool_name in ["Edit", "Write"]:
+            if isinstance(tool_input, dict) and "file_path" in tool_input:
+                files_touched.append(tool_input["file_path"])
+
+        # Calculate execution duration
+        duration_ms = ((_time.monotonic() - context.get("_tool_start_time", hook_start))
+                       * 1000) if "_tool_start_time" in context else 0.0
+
+        # Record execution
+        try:
+            self.memory.record_execution(
+                task_id=task_id,
+                session_id=session_id,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                tool_output=tool_response,
+                exit_code=exit_code,
+                files_touched=files_touched if files_touched else None,
+                error_message=error_message,
+                duration_ms=duration_ms,
+                project_path=self.project_path,
+            )
+        except Exception:
+            # Don't block on execution record failure
+            pass
 
         # Track active containers
         if "container_run" in tool_name and isinstance(tool_response, str):
@@ -335,6 +481,37 @@ Turns: {budget_status['turns']}
 
         return {}
 
+    async def _post_message_hook(self, input_data: dict, context: dict) -> dict:
+        """Hook: track token usage and costs from ResultMessage events."""
+        message_type = input_data.get("type", "")
+
+        if message_type == "result":
+            cost_usd = input_data.get("total_cost_usd", 0.0)
+            num_turns = input_data.get("num_turns", 0)
+            input_tokens = input_data.get("usage", {}).get("input_tokens", 0)
+            output_tokens = input_data.get("usage", {}).get("output_tokens", 0)
+
+            # Record token usage for analytics
+            task_id = context.get("task_id", "unknown")
+            try:
+                self.memory.record_token_usage(
+                    session_id=self._session_id or "unknown",
+                    task_id=task_id,
+                    model=self.config.models.executor,
+                    prompt_tokens=input_tokens,
+                    completion_tokens=output_tokens,
+                    cost_usd=cost_usd,
+                    project_path=self.project_path,
+                )
+            except Exception:
+                pass  # Token tracking is best-effort
+
+            # Record cost in budget controller
+            if cost_usd > 0:
+                self.budget.record_cost(cost_usd, num_turns)
+
+        return {}
+
     def _build_options(self) -> ClaudeAgentOptions:
         """Build Agent SDK options with all Jarvis integrations."""
         options = ClaudeAgentOptions(
@@ -357,6 +534,9 @@ Turns: {budget_status['turns']}
                 ],
                 "PostToolUse": [
                     HookMatcher(hooks=[self._post_tool_hook]),
+                ],
+                "PostMessage": [
+                    HookMatcher(hooks=[self._post_message_hook]),
                 ],
             },
         )
@@ -387,6 +567,19 @@ Turns: {budget_status['turns']}
         if callback:
             callback("task_started", {"id": task_id, "description": task_description})
 
+        # Seed universal heuristics on first task (idempotent)
+        try:
+            seed_result = await auto_seed_project(self.memory, self.project_path)
+            if seed_result.get("seeded", 0) > 0:
+                self.events.emit(
+                    "heuristics_seeded",
+                    f"Seeded {seed_result['seeded']} universal heuristics for {seed_result.get('languages', [])}",
+                    task_id=task_id,
+                    metadata=seed_result,
+                )
+        except Exception:
+            pass  # Seeding is best-effort
+
         # Query decision traces for precedents
         try:
             precedents = await self.tracer.query_precedents(
@@ -404,6 +597,27 @@ Turns: {budget_status['turns']}
                 )
         except Exception:
             pass  # Don't block task on trace failure
+
+        # Model routing: log routing decision for observability
+        try:
+            router = get_model_router()
+            routing = await router.route_task(
+                task_description=task_description,
+                budget_remaining_usd=self.config.budget.max_per_session_usd - self.budget._session_spent,
+            )
+            self.events.emit(
+                "model_routing",
+                f"Routed to {routing.tier.value}: {routing.reason}",
+                task_id=task_id,
+                metadata={
+                    "tier": routing.tier.value,
+                    "model": routing.model,
+                    "reason": routing.reason,
+                    "estimated_cost": routing.estimated_cost_usd,
+                },
+            )
+        except Exception:
+            pass  # Don't block task on routing failure
 
         options = self._build_options()
         result = {
@@ -491,6 +705,24 @@ Turns: {budget_status['turns']}
         except Exception:
             pass
 
+        # Self-learning: extract patterns from execution records
+        try:
+            learning_stats = await learn_from_task(
+                task_id=task_id,
+                project_path=self.project_path,
+                memory=self.memory,
+            )
+            if learning_stats["learnings_saved"] > 0:
+                self.events.emit(
+                    "learning_captured",
+                    f"Learned {learning_stats['learnings_saved']} patterns from task",
+                    task_id=task_id,
+                    metadata=learning_stats,
+                )
+        except Exception as e:
+            # Don't block task completion on learning failure
+            self.events.emit(EVENT_ERROR, f"Learning extraction failed: {e}", task_id=task_id)
+
         # Events + macOS notifications
         if result["status"] == "completed":
             self.events.emit(
@@ -531,16 +763,41 @@ Turns: {budget_status['turns']}
         self._active_containers.clear()
 
     async def get_status(self) -> dict:
-        """Get current Jarvis status."""
+        """Get current Jarvis status.
+
+        Returns a dict compatible with the SwiftUI JarvisStatusResponse.
+        """
         trust_status = self.trust.status(self.project_path)
         budget_status = self.budget.summary()
         active_tasks = self.memory.list_tasks(self.project_path, status="in_progress")
         recent_tasks = self.memory.list_tasks(self.project_path)[:5]
 
+        # Derive overall status for SwiftUI
+        if active_tasks:
+            overall_status = "building"
+        elif any(True for _ in self.memory.list_tasks(self.project_path, status="failed")):
+            overall_status = "error"
+        else:
+            overall_status = "idle"
+
         return {
+            "status": overall_status,
             "project": self.project_path,
-            "trust": trust_status,
-            "budget": budget_status,
+            "trust": {
+                "tier": trust_status["tier"],
+                "tier_name": trust_status["tier_name"],
+                "successful_tasks": trust_status["successful_tasks"],
+                "total_tasks": trust_status["total_tasks"],
+                "rollbacks": trust_status["rollbacks"],
+                "tasks_until_upgrade": trust_status["tasks_until_upgrade"],
+            },
+            "budget": {
+                "session": budget_status["session"],
+                "daily": budget_status["daily"],
+                "turns": budget_status["turns"],
+            },
+            "current_session": self._session_id,
+            "current_feature": active_tasks[0].description if active_tasks else None,
             "active_tasks": [{"id": t.id, "description": t.description} for t in active_tasks],
             "recent_tasks": [
                 {

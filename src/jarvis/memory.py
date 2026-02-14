@@ -104,6 +104,62 @@ class MemoryStore:
                 metadata_json TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS execution_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT,
+                session_id TEXT,
+                tool_name TEXT,
+                tool_input_json TEXT,
+                tool_output_json TEXT,
+                exit_code INTEGER,
+                files_touched TEXT,
+                error_message TEXT,
+                timestamp REAL,
+                duration_ms REAL,
+                project_path TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS learnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_path TEXT,
+                language TEXT,
+                error_pattern_hash TEXT,
+                error_message TEXT,
+                fix_description TEXT,
+                fix_diff TEXT,
+                confidence REAL DEFAULT 0.7,
+                occurrence_count INTEGER DEFAULT 1,
+                created_at REAL,
+                last_used REAL,
+                needs_revalidation INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS skill_candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern_hash TEXT UNIQUE,
+                pattern_description TEXT,
+                occurrence_count INTEGER DEFAULT 1,
+                first_seen REAL,
+                last_seen REAL,
+                example_tasks TEXT,
+                confidence REAL DEFAULT 0.5,
+                promoted_to_skill INTEGER DEFAULT 0,
+                project_path TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS token_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                task_id TEXT,
+                model TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                total_tokens INTEGER,
+                cost_usd REAL,
+                timestamp REAL,
+                project_path TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_timeline_ts ON timeline_events(timestamp);
             CREATE INDEX IF NOT EXISTS idx_timeline_type ON timeline_events(event_type);
             CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_path);
@@ -111,9 +167,19 @@ class MemoryStore:
             CREATE INDEX IF NOT EXISTS idx_patterns_project ON learned_patterns(project_path);
             CREATE INDEX IF NOT EXISTS idx_traces_project ON decision_traces(project_path);
             CREATE INDEX IF NOT EXISTS idx_traces_category ON decision_traces(category);
+            CREATE INDEX IF NOT EXISTS idx_execution_records_task ON execution_records(task_id);
+            CREATE INDEX IF NOT EXISTS idx_execution_records_tool ON execution_records(tool_name);
+            CREATE INDEX IF NOT EXISTS idx_learnings_project ON learnings(project_path);
+            CREATE INDEX IF NOT EXISTS idx_learnings_hash ON learnings(error_pattern_hash);
+            CREATE INDEX IF NOT EXISTS idx_skill_candidates_hash ON skill_candidates(pattern_hash);
+            CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
         """)
         conn.commit()
         conn.close()
+
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get a new database connection."""
+        return sqlite3.connect(self.db_path)
 
     # --- Task management ---
 
@@ -137,7 +203,17 @@ class MemoryStore:
         conn.close()
         return task
 
+    # Allowed columns for update_task to prevent SQL injection via kwargs keys
+    _TASK_COLUMNS = frozenset({
+        "description", "status", "project_path", "updated_at",
+        "session_id", "plan", "result", "cost_usd", "turns", "container_id",
+    })
+
     def update_task(self, task_id: str, **kwargs) -> None:
+        # Validate column names against whitelist
+        invalid_keys = set(kwargs.keys()) - self._TASK_COLUMNS
+        if invalid_keys:
+            raise ValueError(f"Invalid task columns: {invalid_keys}")
         kwargs["updated_at"] = time.time()
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [task_id]
@@ -404,6 +480,314 @@ class MemoryStore:
             "total_events": sum(r[1] for r in rows),
             "total_cost": total_cost,
         }
+
+    # --- Execution records ---
+
+    def record_execution(
+        self,
+        task_id: str,
+        session_id: str,
+        tool_name: str,
+        tool_input: dict,
+        tool_output: str | dict,
+        exit_code: int = 0,
+        files_touched: list[str] | None = None,
+        error_message: str | None = None,
+        duration_ms: float = 0.0,
+        project_path: str = "",
+    ) -> int:
+        """Record a tool execution."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.execute(
+            "INSERT INTO execution_records "
+            "(task_id, session_id, tool_name, tool_input_json, tool_output_json, "
+            "exit_code, files_touched, error_message, timestamp, duration_ms, project_path) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                task_id, session_id, tool_name,
+                json.dumps(tool_input),
+                json.dumps(tool_output) if isinstance(tool_output, dict) else tool_output,
+                exit_code,
+                json.dumps(files_touched) if files_touched else None,
+                error_message,
+                time.time(),
+                duration_ms,
+                project_path,
+            ),
+        )
+        record_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return record_id
+
+    def get_execution_records(
+        self,
+        task_id: str | None = None,
+        project_path: str | None = None,
+        limit: int = 50,
+        order: str = "ASC",
+    ) -> list[dict]:
+        """Query execution records.
+
+        Args:
+            order: "ASC" (chronological, default) or "DESC" (newest first).
+                   ASC is the default because the learning loop needs records
+                   in chronological order to detect error→fix sequences.
+        """
+        if order not in ("ASC", "DESC"):
+            order = "ASC"
+        conn = sqlite3.connect(self.db_path)
+        query = "SELECT * FROM execution_records WHERE 1=1"
+        params: list = []
+        if task_id:
+            query += " AND task_id = ?"
+            params.append(task_id)
+        if project_path:
+            query += " AND project_path = ?"
+            params.append(project_path)
+        query += f" ORDER BY timestamp {order} LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+        return [
+            {
+                "id": r[0], "task_id": r[1], "session_id": r[2], "tool_name": r[3],
+                "tool_input": json.loads(r[4]) if r[4] else {},
+                "tool_output": r[5], "exit_code": r[6],
+                "files_touched": json.loads(r[7]) if r[7] else [],
+                "error_message": r[8], "timestamp": r[9], "duration_ms": r[10],
+                "project_path": r[11],
+            }
+            for r in rows
+        ]
+
+    # --- Learnings ---
+
+    def save_learning(
+        self,
+        project_path: str,
+        language: str,
+        error_pattern_hash: str,
+        error_message: str,
+        fix_description: str,
+        fix_diff: str,
+        confidence: float = 0.7,
+    ) -> int:
+        """Save a new learning or update existing one."""
+        now = time.time()
+        conn = sqlite3.connect(self.db_path)
+
+        # Check if learning exists
+        existing = conn.execute(
+            "SELECT id, occurrence_count FROM learnings "
+            "WHERE project_path = ? AND error_pattern_hash = ?",
+            (project_path, error_pattern_hash),
+        ).fetchone()
+
+        if existing:
+            # Update occurrence count and confidence
+            new_count = existing[1] + 1
+            new_confidence = min(1.0, confidence + 0.1 * new_count)
+            conn.execute(
+                "UPDATE learnings SET occurrence_count = ?, confidence = ?, "
+                "last_used = ?, needs_revalidation = 0 WHERE id = ?",
+                (new_count, new_confidence, now, existing[0]),
+            )
+            learning_id = existing[0]
+        else:
+            # Insert new learning
+            cursor = conn.execute(
+                "INSERT INTO learnings "
+                "(project_path, language, error_pattern_hash, error_message, "
+                "fix_description, fix_diff, confidence, created_at, last_used) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (project_path, language, error_pattern_hash, error_message,
+                 fix_description, fix_diff, confidence, now, now),
+            )
+            learning_id = cursor.lastrowid
+
+        conn.commit()
+        conn.close()
+        return learning_id
+
+    def get_learnings(
+        self,
+        project_path: str | None = None,
+        error_pattern_hash: str | None = None,
+        min_confidence: float = 0.5,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Query learnings."""
+        conn = sqlite3.connect(self.db_path)
+        query = "SELECT * FROM learnings WHERE confidence >= ?"
+        params: list = [min_confidence]
+        if project_path:
+            query += " AND project_path = ?"
+            params.append(project_path)
+        if error_pattern_hash:
+            query += " AND error_pattern_hash = ?"
+            params.append(error_pattern_hash)
+        query += " ORDER BY confidence DESC, occurrence_count DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+        return [
+            {
+                "id": r[0], "project_path": r[1], "language": r[2],
+                "error_pattern_hash": r[3], "error_message": r[4],
+                "fix_description": r[5], "fix_diff": r[6], "confidence": r[7],
+                "occurrence_count": r[8], "created_at": r[9], "last_used": r[10],
+                "needs_revalidation": r[11],
+            }
+            for r in rows
+        ]
+
+    def mark_learning_for_revalidation(self, learning_id: int) -> None:
+        """Mark a learning as needing revalidation."""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "UPDATE learnings SET needs_revalidation = 1 WHERE id = ?",
+            (learning_id,),
+        )
+        conn.commit()
+        conn.close()
+
+    # --- Skill candidates ---
+
+    def record_skill_candidate(
+        self,
+        pattern_hash: str,
+        pattern_description: str,
+        example_task: str,
+        project_path: str,
+    ) -> int:
+        """Record or update a skill candidate pattern."""
+        now = time.time()
+        conn = sqlite3.connect(self.db_path)
+
+        # Check if candidate exists
+        existing = conn.execute(
+            "SELECT id, occurrence_count, example_tasks FROM skill_candidates "
+            "WHERE pattern_hash = ?",
+            (pattern_hash,),
+        ).fetchone()
+
+        if existing:
+            # Update occurrence count
+            new_count = existing[1] + 1
+            examples = json.loads(existing[2]) if existing[2] else []
+            if example_task not in examples:
+                examples.append(example_task)
+            conn.execute(
+                "UPDATE skill_candidates SET occurrence_count = ?, "
+                "last_seen = ?, example_tasks = ? WHERE id = ?",
+                (new_count, now, json.dumps(examples), existing[0]),
+            )
+            candidate_id = existing[0]
+        else:
+            # Insert new candidate
+            cursor = conn.execute(
+                "INSERT INTO skill_candidates "
+                "(pattern_hash, pattern_description, occurrence_count, "
+                "first_seen, last_seen, example_tasks, project_path) "
+                "VALUES (?, ?, 1, ?, ?, ?, ?)",
+                (pattern_hash, pattern_description, now, now,
+                 json.dumps([example_task]), project_path),
+            )
+            candidate_id = cursor.lastrowid
+
+        conn.commit()
+        conn.close()
+        return candidate_id
+
+    def get_skill_candidates(
+        self,
+        min_occurrences: int = 3,
+        promoted: bool = False,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Query skill candidates ready for promotion."""
+        conn = sqlite3.connect(self.db_path)
+        query = "SELECT * FROM skill_candidates WHERE occurrence_count >= ? AND promoted_to_skill = ?"
+        rows = conn.execute(query, (min_occurrences, 1 if promoted else 0)).fetchall()
+        conn.close()
+        return [
+            {
+                "id": r[0], "pattern_hash": r[1], "pattern_description": r[2],
+                "occurrence_count": r[3], "first_seen": r[4], "last_seen": r[5],
+                "example_tasks": json.loads(r[6]) if r[6] else [],
+                "confidence": r[7], "promoted_to_skill": r[8],
+                "project_path": r[9],
+            }
+            for r in rows
+        ]
+
+    def mark_skill_promoted(self, candidate_id: int) -> None:
+        """Mark a skill candidate as promoted."""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "UPDATE skill_candidates SET promoted_to_skill = 1 WHERE id = ?",
+            (candidate_id,),
+        )
+        conn.commit()
+        conn.close()
+
+    # --- Token usage ---
+
+    def record_token_usage(
+        self,
+        session_id: str,
+        task_id: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cost_usd: float,
+        project_path: str,
+    ) -> int:
+        """Record token usage for a model call."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.execute(
+            "INSERT INTO token_usage "
+            "(session_id, task_id, model, prompt_tokens, completion_tokens, "
+            "total_tokens, cost_usd, timestamp, project_path) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (session_id, task_id, model, prompt_tokens, completion_tokens,
+             prompt_tokens + completion_tokens, cost_usd, time.time(), project_path),
+        )
+        usage_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return usage_id
+
+    def get_token_usage(
+        self,
+        session_id: str | None = None,
+        project_path: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Query token usage records."""
+        conn = sqlite3.connect(self.db_path)
+        query = "SELECT * FROM token_usage WHERE 1=1"
+        params: list = []
+        if session_id:
+            query += " AND session_id = ?"
+            params.append(session_id)
+        if project_path:
+            query += " AND project_path = ?"
+            params.append(project_path)
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+        return [
+            {
+                "id": r[0], "session_id": r[1], "task_id": r[2], "model": r[3],
+                "prompt_tokens": r[4], "completion_tokens": r[5],
+                "total_tokens": r[6], "cost_usd": r[7], "timestamp": r[8],
+                "project_path": r[9],
+            }
+            for r in rows
+        ]
 
 
 # --- JARVIS.md template ---

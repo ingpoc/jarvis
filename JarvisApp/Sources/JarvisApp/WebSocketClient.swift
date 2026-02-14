@@ -7,23 +7,38 @@ final class WebSocketClient {
     var status: JarvisStatus = .idle
     var events: [TimelineEvent] = []
     var pendingApprovals: [TimelineEvent] = []
+    var trustInfo: TrustInfo?
+    var budgetInfo: BudgetInfo?
+    var idleInfo: IdleInfo?
+    var currentFeature: String?
+    var currentSession: String?
+    var lastError: String?
 
     private var task: URLSessionWebSocketTask?
     private var session: URLSession = .shared
     private let url = URL(string: "ws://127.0.0.1:9847")!
     private var reconnectWork: DispatchWorkItem?
+    private var statusTimer: Timer?
 
     func connect() {
         disconnect()
         task = session.webSocketTask(with: url)
         task?.resume()
         isConnected = true
+        lastError = nil
         receiveLoop()
         sendCommand(action: "get_status")
+
+        // Poll status periodically
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            self?.sendCommand(action: "get_status")
+        }
     }
 
     func disconnect() {
         reconnectWork?.cancel()
+        statusTimer?.invalidate()
+        statusTimer = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         isConnected = false
@@ -42,6 +57,20 @@ final class WebSocketClient {
         task?.send(.string(text)) { _ in }
     }
 
+    func runTask(description: String) {
+        sendCommand(action: "run_task", data: ["description": description])
+    }
+
+    func approve(taskId: String) {
+        sendCommand(action: "approve", data: ["task_id": taskId])
+        pendingApprovals.removeAll { ($0.taskId ?? "") == taskId }
+    }
+
+    func deny(taskId: String) {
+        sendCommand(action: "deny", data: ["task_id": taskId])
+        pendingApprovals.removeAll { ($0.taskId ?? "") == taskId }
+    }
+
     private func receiveLoop() {
         task?.receive { [weak self] result in
             guard let self else { return }
@@ -49,9 +78,10 @@ final class WebSocketClient {
             case .success(let message):
                 self.handleMessage(message)
                 self.receiveLoop()
-            case .failure:
+            case .failure(let error):
                 DispatchQueue.main.async {
                     self.isConnected = false
+                    self.lastError = error.localizedDescription
                     self.scheduleReconnect()
                 }
             }
@@ -97,6 +127,28 @@ final class WebSocketClient {
         if event.eventType == "approval_needed" {
             pendingApprovals.insert(event, at: 0)
         }
+
+        // Update status from events
+        switch event.eventType {
+        case "task_start":
+            status = .building
+        case "task_complete":
+            status = pendingApprovals.isEmpty ? .completed : .waitingApproval
+        case "error":
+            status = .error
+        case "approval_needed":
+            status = .waitingApproval
+        case "idle_enter":
+            status = .idleProcessing
+        case "idle_exit":
+            status = .idle
+        case "hibernate_enter":
+            status = .hibernated
+        case "hibernate_exit":
+            status = .idle
+        default:
+            break
+        }
     }
 
     private func handleResponse(_ json: [String: Any]) {
@@ -105,7 +157,14 @@ final class WebSocketClient {
             if let statusData = try? JSONSerialization.data(withJSONObject: data),
                let resp = try? JSONDecoder().decode(JarvisStatusResponse.self, from: statusData) {
                 status = resp.status
+                trustInfo = resp.trust
+                budgetInfo = resp.budget
+                idleInfo = resp.idleInfo
+                currentFeature = resp.currentFeature
+                currentSession = resp.currentSession
             }
+        } else if action == "run_task" {
+            // Task was queued
         }
     }
 
