@@ -178,6 +178,20 @@ The following items were implemented, reviewed by Codex, and promoted from
    - Daemon can start/stop the A2A server when enabled, bootstrap token, and apply a `/health` readiness gate.
    - Code: `src/jarvis/daemon.py`, `src/jarvis/a2a/server.py`, `src/jarvis/a2a/auth.py`
 
+5. **A5 SessionManager per-channel isolation (SDK lifecycle-correct)**
+   - Claude Agent SDK clients are managed per-channel with correct lifecycle: `connect()` once on creation, `disconnect()` on close.
+   - Code: `src/jarvis/session_manager.py`, `src/jarvis/orchestrator.py`
+
+6. **A6 A2A executor session isolation**
+   - A2A executor routes tasks through `JarvisOrchestrator.run_task(..., channel_id=...)` without mutating shared orchestrator channel state.
+   - Code: `src/jarvis/a2a/executor.py`, `src/jarvis/orchestrator.py`
+
+7. **A8 A2A runtime contract coverage**
+   - Runtime assertions exist for:
+     - Auth failure: POST `/` without Authorization returns 401 structured error.
+     - Host-aware `streamUrl` for JSON-RPC `message/stream`.
+   - Tests: `tests/test_a2a_evidence.py`
+
 Evidence:
 - Targeted tests live in `tests/test_a2a_evidence.py`.
 

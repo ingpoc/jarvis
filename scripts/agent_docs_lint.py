@@ -127,9 +127,14 @@ def _parse_snapshot_table(lines: list[str]) -> dict[str, str]:
         if len(cols) < 2:
             continue
         item, status = cols[0], cols[1]
-        if item:
+        if item and item != "-":
             out[item] = status
     return out
+
+
+def _has_snapshot_table(lines: list[str]) -> bool:
+    header = "| Item | Status | Latest Codex Verdict | Open Blocker IDs |"
+    return header in lines
 
 
 def _extract_item_status(lines: list[str], item_id: str) -> tuple[int, str] | None:
@@ -163,9 +168,12 @@ def lint_inflight_status_consistency(agent_root: Path) -> list[Finding]:
         return [Finding(inflight, 1, "Missing required inflight file")]
 
     lines = _read_lines(inflight)
-    snapshot = _parse_snapshot_table(lines)
-    if not snapshot:
+    if not _has_snapshot_table(lines):
         findings.append(Finding(inflight, 1, "Missing or unparsable snapshot table"))
+        return findings
+    snapshot = _parse_snapshot_table(lines)
+    # It's valid for the snapshot to be empty when there are no open items.
+    if not snapshot:
         return findings
 
     for item_id, snapshot_status in snapshot.items():
