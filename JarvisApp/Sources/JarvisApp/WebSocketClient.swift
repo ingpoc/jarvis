@@ -137,7 +137,6 @@ final class WebSocketClient: WebSocketClientProtocol {
     private let url: URL
     private var reconnectWork: DispatchWorkItem?
     private var statusTimer: Timer?
-    private var didBootstrapAfterConnect = false
 
     // Request/Response correlation
     private var pendingRequests: [String: PendingRequest] = [:]
@@ -167,13 +166,15 @@ final class WebSocketClient: WebSocketClientProtocol {
         guard connectionState != .connected else { return }
 
         updateState(.connecting)
-        didBootstrapAfterConnect = false
         reconnectWork?.cancel()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
 
         task = session.webSocketTask(with: url)
         task?.resume()
+        // URLSessionWebSocketTask doesn't provide an "on open" callback.
+        // Mark as connected once resumed so we can immediately send bootstrap requests.
+        updateState(.connected)
         lastError = nil
         receiveLoop()
         sendCommand(action: "get_status")
@@ -330,7 +331,6 @@ final class WebSocketClient: WebSocketClientProtocol {
     }
 
     private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
-        establishConnectedSession()
         let data: Data
         switch message {
         case .string(let text):
@@ -494,12 +494,6 @@ final class WebSocketClient: WebSocketClientProtocol {
         Task { @MainActor in
             delegate?.connectionStateDidChange(newState)
         }
-    }
-
-    private func establishConnectedSession() {
-        guard !didBootstrapAfterConnect else { return }
-        didBootstrapAfterConnect = true
-        updateState(.connected)
     }
 
     // MARK: - Event Management
