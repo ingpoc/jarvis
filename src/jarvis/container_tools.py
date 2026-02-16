@@ -36,17 +36,26 @@ async def _run_container_cmd(*args: str, timeout: int = 60) -> dict:
         )
     )
     if not container_bin:
-        raise FileNotFoundError(
-            "container CLI not found. Checked CONTAINER_BIN, PATH, "
-            "/opt/homebrew/bin/container, /usr/local/bin/container, /usr/bin/container"
-        )
+        return {
+            "exit_code": 127,
+            "stdout": "",
+            "stderr": (
+                "container CLI not found. Checked CONTAINER_BIN, PATH, "
+                "/opt/homebrew/bin/container, /usr/local/bin/container, /usr/bin/container. "
+                "Remediation: install the Apple container CLI (or set CONTAINER_BIN) and ensure it's "
+                "available in launchd PATH."
+            ),
+        }
 
     cmd = [container_bin, *args]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as e:
+        return {"exit_code": 127, "stdout": "", "stderr": str(e)}
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     return {
         "exit_code": proc.returncode,

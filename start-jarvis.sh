@@ -301,8 +301,14 @@ start_daemon_with_launchctl() {
     fi
     launchctl kickstart -k "$gui_domain/$DAEMON_LABEL" >/dev/null 2>&1 || true
 
-    local pid
-    pid="$(launchctl_service_pid "$DAEMON_LABEL" || true)"
+    local pid=""
+    for _ in {1..25}; do
+        pid="$(launchctl_service_pid "$DAEMON_LABEL" || true)"
+        if [ -n "${pid:-}" ]; then
+            break
+        fi
+        sleep 0.2
+    done
     if [ -n "${pid:-}" ]; then
         write_pid "$PID_DIR/daemon.pid" "$pid"
         echo "  Daemon PID: $pid"
@@ -329,8 +335,14 @@ start_menubar_with_launchctl() {
     fi
     launchctl kickstart -k "$gui_domain/$MENUBAR_LABEL" >/dev/null 2>&1 || true
 
-    local pid
-    pid="$(launchctl_service_pid "$MENUBAR_LABEL" || true)"
+    local pid=""
+    for _ in {1..25}; do
+        pid="$(launchctl_service_pid "$MENUBAR_LABEL" || true)"
+        if [ -n "${pid:-}" ]; then
+            break
+        fi
+        sleep 0.2
+    done
     if [ -n "${pid:-}" ]; then
         write_pid "$PID_DIR/menubar.pid" "$pid"
         echo "  Menu bar PID: $pid"
