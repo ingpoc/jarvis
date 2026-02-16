@@ -53,3 +53,6 @@ JarvisiOS/.build/
 
 # Local assistant workspace artifacts
 .claude/
+
+# Test artifacts
+.test/
