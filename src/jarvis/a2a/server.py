@@ -39,21 +39,34 @@ def create_a2a_app(config: JarvisConfig, orchestrator: Any = None, project_path:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         nonlocal executor
-        executor = JarvisAgentExecutor(
-            config,
-            orchestrator=orchestrator,
-            project_path=project_path,
-        )
-        logger.info(f"A2A server starting on port {config.a2a.port}")
-        if orchestrator:
-            logger.info("A2A executor wired to JarvisOrchestrator")
-        yield
-        # Cleanup
-        if executor:
-            active = executor.get_active_tasks()
-            if active:
-                logger.warning(f"Shutting down with {len(active)} active tasks")
-        logger.info("A2A server stopped")
+        try:
+            logger.info("A2A lifespan startup: initializing executor...")
+            executor = JarvisAgentExecutor(
+                config,
+                orchestrator=orchestrator,
+                project_path=project_path,
+            )
+            logger.info(f"A2A server started successfully on port {config.a2a.port}")
+            if orchestrator:
+                logger.info("A2A executor wired to JarvisOrchestrator")
+            else:
+                logger.warning("A2A executor running without orchestrator - task submission may fail")
+        except Exception as e:
+            logger.exception(f"A2A lifespan startup failed: {e}")
+            raise
+
+        try:
+            yield
+        finally:
+            # Cleanup
+            try:
+                if executor:
+                    active = executor.get_active_tasks()
+                    if active:
+                        logger.warning(f"Shutting down with {len(active)} active tasks")
+                logger.info("A2A server stopped")
+            except Exception as e:
+                logger.exception(f"A2A lifespan cleanup error: {e}")
 
     app = FastAPI(
         title="Jarvis A2A Server",

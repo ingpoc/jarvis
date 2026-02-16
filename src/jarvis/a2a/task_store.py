@@ -36,31 +36,54 @@ class A2ATaskStore:
     _lock = threading.Lock()
 
     def __init__(self, memory: MemoryStore | None = None):
+        logger.info("A2ATaskStore.__init__: starting")
         self.memory = memory or MemoryStore()
+        logger.info("A2ATaskStore.__init__: MemoryStore created")
         self._a2a_tasks: dict[str, A2ATask] = {}  # In-memory cache
         self._db_path = self.memory.db_path
+        logger.info("A2ATaskStore.__init__: db_path set")
         self._local_conn: sqlite3.Connection | None = None
         self._init_a2a_table()
-        self._load_cached_tasks()
+        logger.info("A2ATaskStore.__init__: a2a_table initialized")
+        # Load cached tasks - but don't block startup if database is slow
+        try:
+            self._load_cached_tasks()
+            logger.info("A2ATaskStore.__init__: cached tasks loaded")
+        except Exception as e:
+            logger.warning("A2ATaskStore.__init__: failed to load cached tasks (non-blocking): %s", e)
+        logger.info("A2ATaskStore.__init__: initialization complete")
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get or create a single connection for this instance."""
-        with self._lock:
-            if self._local_conn is None:
-                self._local_conn = sqlite3.connect(
-                    self._db_path,
-                    timeout=30.0,
-                    check_same_thread=False,
-                )
-                self._local_conn.execute("PRAGMA journal_mode=WAL")
-            return self._local_conn
+        """Get or create a single connection for this instance.
+
+        IMPORTANT: Caller must hold self._lock to prevent race conditions.
+        """
+        if self._local_conn is None:
+            logger.info("_get_connection: creating new sqlite3 connection to %s", self._db_path)
+            self._local_conn = sqlite3.connect(
+                self._db_path,
+                timeout=5.0,  # Reduced from 30s to avoid long hangs
+                check_same_thread=False,
+            )
+            logger.info("_get_connection: sqlite3 connection established")
+            self._local_conn.execute("PRAGMA journal_mode=WAL")
+            logger.info("_get_connection: WAL mode enabled")
+        return self._local_conn
 
     def _init_a2a_table(self) -> None:
         """Initialize A2A tasks table in database."""
-        with self._lock:
-            conn = self._get_connection()
-            conn.executescript(A2A_TASKS_TABLE)
-            conn.commit()
+        logger.info("_init_a2a_table: starting")
+        try:
+            with self._lock:
+                logger.info("_init_a2a_table: lock acquired")
+                conn = self._get_connection()
+                logger.info("_init_a2a_table: connection obtained")
+                conn.executescript(A2A_TASKS_TABLE)
+                logger.info("_init_a2a_table: script executed")
+                conn.commit()
+                logger.info("_init_a2a_table: commit successful")
+        except Exception as e:
+            logger.error("_init_a2a_table failed (non-blocking): %s", e)
 
     def _load_cached_tasks(self) -> None:
         """Load recent non-terminal tasks from database on startup."""

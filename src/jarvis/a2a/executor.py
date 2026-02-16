@@ -28,15 +28,30 @@ class JarvisAgentExecutor:
         orchestrator: Any = None,
         project_path: str | None = None,
     ):
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("JarvisAgentExecutor.__init__: starting")
+
         self.config = config
+        logger.info("JarvisAgentExecutor.__init__: config set")
+
         self.task_store = task_store or A2ATaskStore()
+        logger.info("JarvisAgentExecutor.__init__: task_store created")
+
         self.session_manager = session_manager or SessionManager.get_instance()
+        logger.info("JarvisAgentExecutor.__init__: session_manager initialized")
+
         self._orchestrator = orchestrator
         self._project_path = project_path
         self._active_tasks: dict[str, asyncio.Task] = {}
         self._task_clients: dict[str, ClaudeSDKClient] = {}
+        logger.info("JarvisAgentExecutor.__init__: getting emitter")
+
         self._emitter = get_emitter()
+        logger.info("JarvisAgentExecutor.__init__: emitter obtained")
+
         self._timeout = config.a2a.task_timeout_seconds
+        logger.info("JarvisAgentExecutor.__init__: initialization complete")
 
     def set_orchestrator(self, orchestrator: Any) -> None:
         """Set the orchestrator instance for task execution."""
