@@ -315,7 +315,6 @@ class JarvisDaemon:
 
         self._running = True
         logger.info("Jarvis daemon started")
-        self._start_idle_loop_if_enabled()
 
         # Block until stop is requested
         await self._stop_event.wait()
