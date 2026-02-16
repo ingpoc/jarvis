@@ -48,6 +48,7 @@ from jarvis.notifications import (
 from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
 from jarvis.jarvis_hooks import build_deny_response
+from jarvis.events import EventCollector, EVENT_TOOL_USE
 
 
 # --- Agent Definitions ---
@@ -233,6 +234,7 @@ class MultiAgentPipeline:
         self._loop_detector = LoopDetector(
             max_iterations=self.config.budget.max_turns_per_subtask
         )
+        self.events = EventCollector(memory=self.memory)
 
     def _build_mcp_servers(self) -> dict:
         """All MCP servers for agent use."""
@@ -315,7 +317,7 @@ class MultiAgentPipeline:
         return {}
 
     async def _post_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
-        """Hook: detect loops after tool execution."""
+        """Hook: emit timeline events, detect loops after tool execution."""
         tool_name = input_data.get("tool_name", "")
         tool_input_str = json.dumps(input_data.get("tool_input", {}))
         tool_response = input_data.get("tool_response", "")
@@ -325,6 +327,15 @@ class MultiAgentPipeline:
             error = tool_response[:1024]
 
         subtask_id = context.get("task_id", "default")
+
+        # Emit tool use event for timeline (this was missing!)
+        self.events.emit(
+            EVENT_TOOL_USE,
+            tool_name,
+            task_id=subtask_id,
+            metadata={"tool": tool_name, "input": tool_input_str[:200]}
+        )
+
         action = self._loop_detector.record_iteration(
             subtask_id, tool_name, tool_input_str, tool_output_str, error
         )
@@ -440,6 +451,7 @@ class MultiAgentPipeline:
         result = PipelineResult(task_id=task_id, status="in_progress")
         text_fragments: list[str] = []
         tool_uses: list[str] = []
+        session_id: str | None = None
 
         # Record task
         self.memory.create_task(task_id, task_description, self.project_path)
@@ -477,6 +489,7 @@ Report progress at each step."""
                     if isinstance(message, SystemMessage):
                         if message.subtype == "init":
                             session_id = message.data.get("session_id")
+                            self.events.session_id = session_id
                             if callback:
                                 callback("session_started", {"session_id": session_id})
 
