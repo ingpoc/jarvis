@@ -51,7 +51,6 @@ from jarvis.container_tools import create_container_mcp_server
 from jarvis.events import EventCollector, EVENT_TOOL_USE, EVENT_TASK_START, EVENT_TASK_COMPLETE, EVENT_ERROR
 from jarvis.git_tools import create_git_mcp_server
 from jarvis.harness import BuildHarness
-from typing import Literal, TypedDict, cast
 from jarvis.memory import MemoryStore
 from jarvis.loop_detector import LoopDetector, LoopAction, build_intervention_message
 from jarvis.notifications import (
@@ -67,16 +66,6 @@ from jarvis.agents import MultiAgentPipeline
 logger = logging.getLogger(__name__)
 _DYNAMIC_CAPS_FILE = JARVIS_HOME / "dynamic_capabilities.json"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-class MessageRouteDecision(TypedDict, total=False):
-    mode: Literal["reply", "ask", "execute"]
-    reply: str
-    question: str
-    choices: list[str]
-    task_description: str
-    confidence: float
-    reason: str
-
 
 class JarvisOrchestrator:
     """Main Jarvis orchestration engine."""
@@ -113,7 +102,6 @@ class JarvisOrchestrator:
         self.events = EventCollector(memory=self.memory)
         self._chat_lock = asyncio.Lock()
         self._chat_client: ClaudeSDKClient | None = None
-        self._router_lock = asyncio.Lock()
         self.code_orchestrator = CodeOrchestrator(
             mcp_servers={
                 "jarvis-container": self.container_server,
@@ -410,6 +398,12 @@ Turns: {budget_status['turns']}
 - You CAN: {self._get_tier_capabilities(trust_status['tier'])}
 - You CANNOT (need approval): {self._get_tier_restrictions(trust_status['tier'])}
 - NEVER: deploy to production, delete main branch, modify CI/CD without approval
+
+## Conversation Contract
+- Always interact conversationally with the user.
+- Decide yourself when to ask a clarifying question vs. execute tools.
+- Do not mention internal routing or implementation details.
+- For broad capability questions, answer directly without unnecessary tool calls.
 
 ## Working in Apple Containers
 - Each task runs in an isolated Linux VM via Apple Containers
@@ -1039,144 +1033,6 @@ Turns: {budget_status['turns']}
                 pass
             self._chat_client = None
 
-    def _build_router_options(self) -> ClaudeAgentOptions:
-        """Build a tool-less routing call.
-
-        This is the "conversation control plane": decide whether to reply, ask, or execute.
-        Tool execution happens only after an explicit router decision of mode=execute.
-        """
-        # NOTE: We intentionally do not use SDK structured-output / json-schema here.
-        # Some Anthropic-compatible proxies do not support the CLI `--json-schema` flag,
-        # which results in `ResultMessage.result=None`. Instead we require JSON in text
-        # and parse it ourselves, surfacing any failures explicitly.
-        return ClaudeAgentOptions(
-            # Do not duplicate the whole system prompt; keep it routing-specific.
-            system_prompt=(
-                "You are Jarvis (autonomous coding agent).\n"
-                "You are doing internal routing: decide what to do with the user's message.\n"
-                "Never mention routing, control planes, or that you are a router.\n\n"
-                "You MUST return a single JSON object (no markdown, no prose).\n"
-                "Keys allowed: mode, reply, question, choices, task_description, confidence, reason.\n"
-                "mode must be one of: reply | ask | execute.\n"
-                "confidence must be a number 0..1.\n\n"
-                "Modes:\n"
-                "- reply: user is asking a question or chatting; produce a direct helpful reply.\n"
-                "- ask: you are unsure or need a missing detail; ask a single concise question.\n"
-                "- execute: user is asking you to do work; produce an executable task_description.\n\n"
-                "Rules:\n"
-                "- Prefer execute when the user clearly requests work.\n"
-                "- Prefer ask when multiple interpretations exist or critical details are missing.\n"
-                "- Keep reply/ask conversational and concise.\n"
-                "- If execute, task_description must be specific and include success criteria.\n"
-                "- This system uses Apple 'container' CLI (command: container), not Docker.\n"
-            ),
-            # Disable base tools completely for routing.
-            tools=[],
-            allowed_tools=[],
-            permission_mode="default",
-            max_turns=1,
-            max_budget_usd=1.0,
-            model=self.config.models.planner,
-            cwd=self.project_path,
-        )
-
-    @staticmethod
-    def _extract_json_object(text: str) -> str:
-        """Extract a JSON object from model text.
-
-        Some models wrap JSON in markdown fences like ```json ... ```.
-        We still require the output to contain a single JSON object, but
-        we parse defensively so the router remains usable.
-        """
-        raw = (text or "").strip()
-        if not raw:
-            return ""
-
-        # Handle fenced blocks.
-        fence_prefixes = ("```json", "```JSON", "```")
-        if raw.startswith(fence_prefixes):
-            # Best-effort: drop the first fence line and the trailing fence.
-            lines = raw.splitlines()
-            if lines and lines[0].lstrip().startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].rstrip().endswith("```"):
-                lines = lines[:-1]
-            raw = "\n".join(lines).strip()
-
-        # If there's still surrounding prose, slice the first {...} object.
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            return raw[start : end + 1].strip()
-        return raw
-
-    async def _route_message(self, *, user_message: str, origin: str) -> MessageRouteDecision:
-        """Model-driven routing: reply vs ask vs execute (no heuristics)."""
-        # Include minimal continuity from last turn in this channel/session (Slack or WS).
-        prior = self.memory.get_channel_turn(origin) if origin else None
-        context_lines: list[str] = []
-        if prior:
-            context_lines.append("Prior turn (most recent):")
-            context_lines.append(f"- user: {(prior.get('last_user_message') or '')[:600]}")
-            context_lines.append(f"- assistant: {(prior.get('last_assistant_reply') or '')[:900]}")
-        context_lines.append("Current user message:")
-        context_lines.append(user_message)
-        prompt = "\n".join(context_lines).strip()
-
-        async with self._router_lock:
-            options = self._build_router_options()
-            try:
-                async with ClaudeSDKClient(options=options) as client:
-                    await client.query(prompt)
-                    text_buf: list[str] = []
-                    async for message in client.receive_response():
-                        if isinstance(message, AssistantMessage):
-                            for block in message.content:
-                                if isinstance(block, TextBlock):
-                                    text_buf.append(block.text)
-                        if isinstance(message, ResultMessage):
-                            if message.is_error:
-                                # Fail loudly with whatever diagnostics the SDK provides.
-                                # Some Anthropic-compatible proxies return an error ResultMessage
-                                # with empty assistant text; treat that as a hard router failure.
-                                err = message.result or message.structured_output or "unknown_router_error"
-                                raise RuntimeError(f"Router model error: {err}")
-
-                            # Prefer structured output when present.
-                            if message.structured_output:
-                                return cast(MessageRouteDecision, message.structured_output)
-                            if isinstance(message.result, dict):
-                                return cast(MessageRouteDecision, message.result)
-
-                            raw = "".join(text_buf).strip()
-                            if not raw and message.result is not None:
-                                raw = str(message.result).strip()
-                            if not raw:
-                                raise RuntimeError("Router returned empty output.")
-                            try:
-                                parsed = json.loads(self._extract_json_object(raw))
-                            except Exception as exc:
-                                raise RuntimeError(f"Router returned non-JSON text: {raw[:500]}") from exc
-                            if not isinstance(parsed, dict):
-                                raise RuntimeError(f"Router JSON was not an object: {type(parsed).__name__}")
-                            return cast(MessageRouteDecision, parsed)
-            except Exception as exc:
-                tb = traceback.format_exc()
-                logger.error("router failed: %s\n%s", exc, tb)
-                return {
-                    "mode": "reply",
-                    "confidence": 0.0,
-                    "reply": f"Router error: {exc}",
-                    "reason": "router_exception",
-                }
-
-        return {
-            "mode": "reply",
-            "confidence": 0.0,
-            "reply": "Router produced no result.",
-            "reason": "router_no_result",
-        }
-
     async def close(self) -> None:
         """Graceful shutdown for long-lived SDK clients."""
         await self._reset_chat_client()
@@ -1346,87 +1202,29 @@ Turns: {budget_status['turns']}
         *,
         origin: str = "message",
     ) -> dict:
-        """Conversational entrypoint: model decides whether to reply, ask, or execute."""
+        """Conversational entrypoint (single-pass).
+
+        Every user message goes directly to the chat model. The model itself
+        decides when to ask questions vs. invoke tools. This removes the extra
+        router model call and cuts latency for normal chat interactions.
+        """
         self._ingest_research_urls_from_text(user_message, source=f"chat:{origin}")
-
-        decision = await self._route_message(user_message=user_message, origin=origin)
-        mode = (decision.get("mode") or "reply").strip()
-
-        # Emit routing decision for UI visibility/debugging.
+        chat_result = await self.chat(user_message)
+        reply = (chat_result.get("reply") or "").strip()
+        status = "completed" if (chat_result.get("status") == "completed" and reply) else "failed"
+        decision = {
+            "mode": "chat",
+            "confidence": 1.0 if status == "completed" else 0.0,
+            "reason": "direct_chat_model",
+        }
         self.events.emit(
             "chat_route",
-            f"mode={mode} conf={decision.get('confidence')}",
+            f"mode=chat conf={decision['confidence']}",
             metadata={"decision": decision, "origin": origin},
         )
-
-        if decision.get("reason") in ("router_exception", "router_no_result"):
-            # Router failures should be visible, but should not prevent a normal chat reply.
-            self.events.emit(
-                EVENT_ERROR,
-                (decision.get("reply") or "Router failed")[:200],
-                metadata={
-                    "error": (decision.get("reply") or "Router failed")[:5000],
-                    "origin": origin,
-                    "stage": "router",
-                },
-            )
-            chat_result = await self.chat(user_message)
-            reply = (chat_result.get("reply") or "").strip()
-            self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
-            return {
-                "status": "completed" if reply else "failed",
-                "route": "chat",
-                "reply": reply or (decision.get("reply") or "Router failed"),
-                "decision": decision,
-            }
-
-        if mode == "execute":
-            task_desc = (decision.get("task_description") or "").strip()
-            if not task_desc:
-                # Router said execute but didn't give a task description: treat as ask.
-                reply = (decision.get("reply") or "").strip() or "What exactly should I do?"
-                self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
-                return {
-                    "status": "needs_input",
-                    "route": "ask",
-                    "reply": reply,
-                    "decision": decision,
-                }
-
-            asyncio.create_task(self.run_task(task_desc, origin=origin))
-            reply = (decision.get("reply") or "").strip() or "Starting now."
-            self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
-            return {
-                "status": "queued",
-                "route": "task",
-                "queued": task_desc[:200],
-                "reply": reply,
-                "decision": decision,
-            }
-
-        if mode == "ask":
-            reply = (decision.get("reply") or "").strip()
-            if not reply:
-                q = (decision.get("question") or "").strip()
-                reply = q or "I need one detail to proceed. What should I assume?"
-            self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
-            return {
-                "status": "needs_input",
-                "route": "ask",
-                "reply": reply,
-                "choices": decision.get("choices") or [],
-                "decision": decision,
-            }
-
-        # reply
-        reply = (decision.get("reply") or "").strip()
-        if not reply:
-            # If router failed to produce a reply, fall back to the normal chat model.
-            chat_result = await self.chat(user_message)
-            reply = (chat_result.get("reply") or "").strip()
         self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
         return {
-            "status": "completed",
+            "status": status,
             "route": "chat",
             "reply": reply,
             "decision": decision,
