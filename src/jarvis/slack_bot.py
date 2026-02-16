@@ -279,14 +279,35 @@ class JarvisSlackBot:
         logger.info("Slack chat message from %s in %s: %s", user, channel, chat_text[:120])
 
         try:
-            result = await self._orchestrator.handle_message(
-                chat_text,
-                origin=f"slack:{channel or 'unknown'}",
+            raw_timeout = os.environ.get("JARVIS_SLACK_CHAT_SYNC_TIMEOUT_SECS", "").strip()
+            try:
+                sync_timeout = float(raw_timeout) if raw_timeout else 8.0
+            except ValueError:
+                sync_timeout = 8.0
+
+            chat_task = asyncio.create_task(
+                self._orchestrator.handle_message(
+                    chat_text,
+                    origin=f"slack:{channel or 'unknown'}",
+                )
             )
-            route = result.get("route")
-            reply = (result.get("reply") or "").strip()
-            if not reply:
-                reply = "No response generated."
+
+            if sync_timeout <= 0:
+                result = await chat_task
+                reply = (result.get("reply") or "").strip() or "No response generated."
+                await say(reply[:35000], thread_ts=thread_ts)
+                return
+
+            done, _ = await asyncio.wait({chat_task}, timeout=sync_timeout)
+            if done:
+                result = await chat_task
+                reply = (result.get("reply") or "").strip() or "No response generated."
+                await say(reply[:35000], thread_ts=thread_ts)
+                return
+
+            await say("Working on it. I will reply in this thread shortly.", thread_ts=thread_ts)
+            result = await chat_task
+            reply = (result.get("reply") or "").strip() or "No response generated."
             await say(reply[:35000], thread_ts=thread_ts)
         except Exception as e:
             await say(f":x: Chat failed: {e}", thread_ts=thread_ts)

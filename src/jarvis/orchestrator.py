@@ -117,6 +117,7 @@ logger = logging.getLogger(__name__)
 _DYNAMIC_CAPS_FILE = JARVIS_HOME / "dynamic_capabilities.json"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+
 class JarvisOrchestrator:
     """Main Jarvis orchestration engine."""
 
@@ -1421,6 +1422,7 @@ Turns: {budget_status['turns']}
         chat_result = await self.chat(user_message)
         reply = (chat_result.get("reply") or "").strip()
         status = "completed" if (chat_result.get("status") == "completed" and reply) else "failed"
+        # Keep decision payload for API backward compatibility with existing clients.
         decision = {
             "mode": "chat",
             "confidence": 1.0 if status == "completed" else 0.0,

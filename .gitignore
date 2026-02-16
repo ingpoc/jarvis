@@ -41,3 +41,14 @@ env/
 
 # Swift build
 JarvisApp/.build/
+JarvisApp/.swiftpm/
+JarvisClient/.build/
+JarvisiOS/.build/
+
+# Local runtime config/secrets
+.env
+.mcp.json
+.codex/config.toml
+
+# Local assistant workspace artifacts
+.claude/

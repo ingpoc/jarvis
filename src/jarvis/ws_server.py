@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -55,9 +56,86 @@ class JarvisWSServer:
         self._clients: set = set()
         self._server = None
         self._started_at = time.time()
+        self._background_tasks: set[asyncio.Task] = set()
 
         # Register as EventCollector listener
         self._events.add_listener(self._broadcast_event)
+
+    def _track_background_task(self, task: asyncio.Task) -> None:
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _run_chat_nonblocking(
+        self,
+        *,
+        message: str,
+        origin: str,
+        request_id: str | None,
+        action: str,
+    ) -> dict:
+        """Return chat quickly; continue long-running turns in background."""
+        if not self._orchestrator:
+            return {"error": "Orchestrator not connected"}
+
+        raw_timeout = os.environ.get("JARVIS_WS_CHAT_SYNC_TIMEOUT_SECS", "").strip()
+        try:
+            sync_timeout = float(raw_timeout) if raw_timeout else 8.0
+        except ValueError:
+            sync_timeout = 8.0
+        chat_task = asyncio.create_task(
+            self._orchestrator.handle_message(message, origin=origin)
+        )
+
+        if sync_timeout <= 0:
+            return await chat_task
+
+        done, _ = await asyncio.wait({chat_task}, timeout=sync_timeout)
+        if done:
+            return await chat_task
+
+        async def _publish_when_done() -> None:
+            try:
+                result = await chat_task
+                reply = (result.get("reply") or "").strip()
+                self._events.emit(
+                    "chat_async_complete",
+                    (reply or result.get("status") or "completed")[:200],
+                    metadata={
+                        "request_id": request_id,
+                        "action": action,
+                        "origin": origin,
+                        "route": result.get("route"),
+                        "status": result.get("status"),
+                        "reply": reply[:5000],
+                        "decision": result.get("decision") or {},
+                    },
+                )
+            except Exception as exc:
+                logger.exception("Background chat failed")
+                self._events.emit(
+                    "error",
+                    f"Background chat failed: {exc}",
+                    metadata={
+                        "request_id": request_id,
+                        "action": action,
+                        "origin": origin,
+                        "error": str(exc),
+                    },
+                )
+
+        self._track_background_task(asyncio.create_task(_publish_when_done()))
+        queued = {
+            "status": "queued",
+            "route": "chat",
+            "reply": "Working on it. I will post the full response when finished.",
+            "queued": True,
+            "decision": {
+                "mode": "chat",
+                "confidence": 0.5,
+                "reason": "async_queued",
+            },
+        }
+        return queued
 
     def _resolve_client_path(self, raw_path: str) -> Path:
         """Resolve client-provided paths strictly inside Jarvis workspace."""
@@ -196,9 +274,12 @@ class JarvisWSServer:
                 if not message:
                     result = {"error": "Missing 'message'"}
                 elif self._orchestrator:
-                    result = await self._orchestrator.handle_message(
-                        message,
-                        origin=f"ws:{ws.remote_address[0]}:{ws.remote_address[1]}",
+                    origin_tag = f"ws:{ws.remote_address[0]}:{ws.remote_address[1]}"
+                    result = await self._run_chat_nonblocking(
+                        message=message,
+                        origin=origin_tag,
+                        request_id=request_id,
+                        action=action,
                     )
                 else:
                     result = {"error": "Orchestrator not connected"}
@@ -211,9 +292,11 @@ class JarvisWSServer:
                     result = {"error": "Orchestrator not connected"}
                 else:
                     origin_tag = f"ws:{ws.remote_address[0]}:{ws.remote_address[1]}"
-                    result = await self._orchestrator.handle_message(
-                        message,
+                    result = await self._run_chat_nonblocking(
+                        message=message,
                         origin=origin_tag,
+                        request_id=request_id,
+                        action=action,
                     )
                     route = result.get("route", "unknown")
                     decision = result.get("decision", {}) or {}
