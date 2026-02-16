@@ -35,7 +35,7 @@ from jarvis.decision_tracer import DecisionTracer, TraceCategory
 from jarvis.loop_detector import LoopDetector, LoopAction, build_intervention_message
 from jarvis.budget import BudgetController
 from jarvis.config import JarvisConfig
-from jarvis.container_tools import create_container_mcp_server
+from jarvis.container_tools import create_container_mcp_server, cleanup_containers
 from jarvis.git_tools import create_git_mcp_server
 from jarvis.memory import MemoryStore
 from jarvis.notifications import (
@@ -47,6 +47,7 @@ from jarvis.notifications import (
 )
 from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
+from jarvis.jarvis_hooks import build_deny_response
 
 
 # --- Agent Definitions ---
@@ -299,13 +300,7 @@ class MultiAgentPipeline:
         """Enforce budget and trust on every tool call."""
         can_continue, reason = self.budget.enforce()
         if not can_continue:
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": f"Budget limit: {reason}",
-                }
-            }
+            return build_deny_response(f"Budget limit: {reason}")
 
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input", {})
@@ -315,13 +310,7 @@ class MultiAgentPipeline:
             allowed, reason = self.trust.can_perform(self.project_path, "git_push")
             if not allowed:
                 await notify_approval_needed("", "git push")
-                return {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": reason,
-                    }
-                }
+                return build_deny_response(reason)
 
         return {}
 
@@ -587,20 +576,5 @@ Report progress at each step."""
 
     async def _cleanup_containers(self) -> None:
         """Stop and remove all active containers."""
-        for cid in self._active_containers:
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "container", "stop", cid,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await asyncio.wait_for(proc.communicate(), timeout=10)
-                proc = await asyncio.create_subprocess_exec(
-                    "container", "delete", cid,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await asyncio.wait_for(proc.communicate(), timeout=10)
-            except Exception:
-                pass
+        await cleanup_containers(self._active_containers)
         self._active_containers.clear()

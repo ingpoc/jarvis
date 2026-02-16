@@ -10,11 +10,10 @@ import os
 import signal
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 from urllib import parse, request
-
-import os
 
 from jarvis.config import JarvisConfig, ensure_jarvis_home
 from jarvis.notifications import set_slack_bot, set_voice_client
@@ -22,10 +21,7 @@ from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.ws_server import JarvisWSServer
 from jarvis.mcp_health import health_check_all_servers, filter_healthy_servers, notify_health_failures
 from jarvis.model_router import get_model_router
-
-import os
-import traceback
-from pathlib import Path
+from jarvis.a2a.server import JarvisA2AServer
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +76,6 @@ class CrashRecovery:
     @classmethod
     def log_crash(cls, error: str) -> None:
         """Log crash information for post-mortem analysis."""
-        import time
         cls.CRASH_LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(cls.CRASH_LOG, "a") as f:
             f.write(f"\n{'='*60}\n")
@@ -131,6 +126,8 @@ class JarvisDaemon:
         self.orchestrator = JarvisOrchestrator(project_path)
         self.events = self.orchestrator.events
         self._ws_server: JarvisWSServer | None = None
+        self._a2a_server: JarvisA2AServer | None = None
+        self._a2a_task: asyncio.Task | None = None
         self._remote_server = None
         self._rest_app = None
         self._rest_runner = None
@@ -221,6 +218,54 @@ class JarvisDaemon:
             except Exception as e:
                 logger.exception("Voice client failed to connect: %s", e)
 
+        # A2A server (optional - Agent-to-Agent protocol)
+        if self.config.a2a.enabled:
+            try:
+                # Bootstrap A2A token if not exists
+                from jarvis.a2a.auth import get_token_path, generate_token, write_token, read_token
+                token_file = get_token_path(self.config.a2a.token_path)
+                if not token_file.exists():
+                    new_token = generate_token()
+                    write_token(new_token, self.config.a2a.token_path)
+                    logger.info(f"Generated new A2A token at {token_file}")
+                else:
+                    logger.debug(f"A2A token found at {token_file}")
+
+                logger.info(f"Starting A2A server on port {self.config.a2a.port}")
+                self._a2a_server = JarvisA2AServer(
+                    self.config,
+                    orchestrator=self.orchestrator,
+                    project_path=self.orchestrator.project_path if self.orchestrator else None,
+                )
+                self._a2a_task = asyncio.create_task(
+                    self._a2a_server.start(),
+                    name="jarvis-a2a-server",
+                )
+
+                # Wait for A2A server to be ready (health gate)
+                a2a_ready = False
+                for attempt in range(10):
+                    await asyncio.sleep(0.5)
+                    try:
+                        import httpx
+                        async with httpx.AsyncClient() as client:
+                            resp = await client.get(
+                                f"http://localhost:{self.config.a2a.port}/health",
+                                timeout=1.0,
+                            )
+                            if resp.status_code == 200:
+                                a2a_ready = True
+                                break
+                    except Exception:
+                        pass
+
+                if a2a_ready:
+                    logger.info(f"A2A server ready on port {self.config.a2a.port}")
+                else:
+                    logger.warning("A2A server started but health check failed")
+            except Exception as e:
+                logger.exception("A2A server failed to start: %s", e)
+
         # Copy bootstrap skills on first daemon start
         try:
             from jarvis.skill_generator import copy_bootstrap_skills
@@ -261,7 +306,6 @@ class JarvisDaemon:
                 from jarvis.macos_native import keychain_retrieve
                 kc_api_key = keychain_retrieve("com.jarvis.anthropic", "api_key")
                 if kc_api_key:
-                    import os
                     os.environ.setdefault("ANTHROPIC_API_KEY", kc_api_key)
                     logger.info("Loaded API key from Keychain")
         except ImportError:
@@ -376,6 +420,20 @@ class JarvisDaemon:
                 await self._voice_client.disconnect()
             except Exception as e:
                 logger.exception("Voice client disconnect error: %s", e)
+
+        # Stop A2A server
+        if self._a2a_server:
+            logger.info("Stopping A2A server")
+            try:
+                await self._a2a_server.stop()
+            except Exception as e:
+                logger.exception("A2A server stop error: %s", e)
+            self._a2a_server = None
+        if self._a2a_task:
+            self._a2a_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._a2a_task
+            self._a2a_task = None
 
         if self._idle_loop_task:
             self._idle_loop_task.cancel()

@@ -47,7 +47,7 @@ from jarvis.context_files import (
     load_core_context,
     should_use_project_jarvis,
 )
-from jarvis.container_tools import create_container_mcp_server
+from jarvis.container_tools import create_container_mcp_server, cleanup_containers
 from jarvis.events import EventCollector, EVENT_TOOL_USE, EVENT_TASK_START, EVENT_TASK_COMPLETE, EVENT_ERROR
 from jarvis.git_tools import create_git_mcp_server
 from jarvis.harness import BuildHarness
@@ -61,11 +61,22 @@ from jarvis.notifications import (
 )
 from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
+from jarvis.jarvis_hooks import build_deny_response
+from jarvis.session_manager import SessionManager
 from jarvis.agents import MultiAgentPipeline
 from jarvis.model_router import get_model_router
 from jarvis.self_learning import learn_from_task, get_relevant_learnings, format_learning_for_context
 from jarvis.context_layers import build_context_layers, format_context_for_prompt
 from jarvis.universal_heuristics import auto_seed_project
+from typing import Any
+
+
+def _safe_json_parse(text: str, default: Any = None) -> Any:
+    """Safely parse JSON, returning default on failure."""
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return default
 
 
 def _is_tool_error(tool_name: str, tool_response: str) -> bool:
@@ -152,7 +163,9 @@ class JarvisOrchestrator:
         )
         self.events = EventCollector(memory=self.memory)
         self._chat_lock = asyncio.Lock()
-        self._chat_client: ClaudeSDKClient | None = None
+        self._chat_client: ClaudeSDKClient | None = None  # Deprecated: use SessionManager
+        self._session_manager = SessionManager.get_instance()
+        self._channel_id = "default"  # Default channel for this orchestrator
         self.code_orchestrator = CodeOrchestrator(
             mcp_servers={
                 "jarvis-container": self.container_server,
@@ -424,7 +437,6 @@ class JarvisOrchestrator:
         # Load context layers (L1-L4) for project awareness
         context_layers_text = ""
         try:
-            import asyncio
             try:
                 loop = asyncio.get_running_loop()
                 # If we're already in an async context, use cached layers
@@ -650,26 +662,14 @@ Turns: {budget_status['turns']}
         # Budget check
         can_continue, reason = self.budget.enforce()
         if not can_continue:
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": f"Budget limit: {reason}",
-                }
-            }
+            return build_deny_response(f"Budget limit: {reason}")
 
         # Trust check for container operations
         if "container" in tool_name.lower():
             action = tool_name.split("__")[-1] if "__" in tool_name else tool_name
             allowed, reason = self.trust.can_perform(self.project_path, action)
             if not allowed:
-                return {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": reason,
-                    }
-                }
+                return build_deny_response(reason)
 
         # Trust check for git push
         if tool_name == "Bash":
@@ -677,127 +677,114 @@ Turns: {budget_status['turns']}
             if "git push" in command:
                 allowed, reason = self.trust.can_perform(self.project_path, "git_push")
                 if not allowed:
-                    return {
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": reason,
-                        }
-                    }
+                    return build_deny_response(reason)
 
         return {}
 
+    def _extract_error_info(self, tool_name: str, tool_response: str, tool_input: dict) -> tuple[str | None, int]:
+        """Extract error message and exit code from tool response."""
+        if not isinstance(tool_response, str):
+            return None, 0
+
+        response_lower = tool_response.lower()
+
+        # Bash tool: check for non-zero exit code
+        if tool_name == "Bash" and tool_input.get("exit_code", 0) != 0:
+            return tool_response[:500], tool_input.get("exit_code", 1)
+
+        # Tool-level error signals: lines starting with error/traceback
+        if any(response_lower.lstrip().startswith(p) for p in ("error:", "error!", "traceback ", "fatal:", "panic:")):
+            return tool_response[:500], 1
+
+        # Explicit failure patterns
+        if _is_tool_error(tool_name, tool_response):
+            return tool_response[:500], 1
+
+        return None, 0
+
+    def _extract_files_touched(self, tool_name: str, tool_input: dict) -> list[str]:
+        """Extract files touched by Edit/Write tools."""
+        if tool_name in ["Edit", "Write"] and isinstance(tool_input, dict):
+            if "file_path" in tool_input:
+                return [tool_input["file_path"]]
+        return []
+
+    def _track_container_from_response(self, tool_name: str, tool_response: str) -> str | None:
+        """Extract container ID from container_run response if running."""
+        if "container_run" not in tool_name or not isinstance(tool_response, str):
+            return None
+        try:
+            data = json.loads(tool_response)
+            if data.get("status") == "running":
+                return data.get("container_id")
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return None
+
+    def _check_loop_detection(self, tool_name: str, tool_input: dict, tool_response: str, task_id: str) -> dict | None:
+        """Check for loops and return intervention response if needed."""
+        tool_input_str = json.dumps(tool_input)
+        tool_output_str = str(tool_response)[:5120]
+        error = tool_response[:1024] if isinstance(tool_response, str) and "error" in tool_response.lower() else None
+
+        action = self.loop_detector.record_iteration(task_id, tool_name, tool_input_str, tool_output_str, error)
+
+        if action == LoopAction.CONTINUE:
+            return None
+
+        tracker = self.loop_detector.get_tracker(task_id)
+        message = build_intervention_message(action, tracker)
+
+        if action == LoopAction.ESCALATE:
+            asyncio.create_task(notify_approval_needed(task_id, "loop_escalation"))
+
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "message": message,
+            }
+        }
+
     async def _post_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
         """Hook: track container lifecycle, emit events, detect loops, capture execution records."""
-        import time as _time
-        hook_start = _time.monotonic()
-
         tool_name = input_data.get("tool_name", "")
         tool_response = input_data.get("tool_response", "")
         tool_input = input_data.get("tool_input", {})
 
         # Emit tool use event
-        self.events.emit(
-            EVENT_TOOL_USE,
-            f"{tool_name}",
-            task_id=context.get("task_id"),
-            metadata={"tool": tool_name},
-        )
+        self.events.emit(EVENT_TOOL_USE, tool_name, task_id=context.get("task_id"), metadata={"tool": tool_name})
 
-        # Capture execution record for learning
         task_id = context.get("task_id", "unknown")
         session_id = self._session_id or "unknown"
 
-        # Extract error information with reduced false positives.
-        # Only flag as error when there are strong signals, not just
-        # the words "error" or "exception" appearing anywhere in output.
-        error_message = None
-        exit_code = 0
-        if isinstance(tool_response, str):
-            response_lower = tool_response.lower()
-            # Bash tool: check for non-zero exit code markers
-            if tool_name == "Bash" and tool_input.get("exit_code", 0) != 0:
-                error_message = tool_response[:500]
-                exit_code = tool_input.get("exit_code", 1)
-            # Tool-level error signals: lines starting with error/traceback
-            elif any(
-                response_lower.lstrip().startswith(prefix)
-                for prefix in ("error:", "error!", "traceback ", "fatal:", "panic:")
-            ):
-                error_message = tool_response[:500]
-                exit_code = 1
-            # Explicit failure patterns (not just substring matches)
-            elif _is_tool_error(tool_name, tool_response):
-                error_message = tool_response[:500]
-                exit_code = 1
+        # Extract error info and files touched
+        error_message, exit_code = self._extract_error_info(tool_name, tool_response, tool_input)
+        files_touched = self._extract_files_touched(tool_name, tool_input)
 
-        # Extract files touched (for Edit/Write/Read tools)
-        files_touched = []
-        if tool_name in ["Edit", "Write"]:
-            if isinstance(tool_input, dict) and "file_path" in tool_input:
-                files_touched.append(tool_input["file_path"])
-
-        # Calculate execution duration
-        duration_ms = ((_time.monotonic() - context.get("_tool_start_time", hook_start))
-                       * 1000) if "_tool_start_time" in context else 0.0
+        # Calculate duration
+        duration_ms = 0.0
+        if "_tool_start_time" in context:
+            duration_ms = (time.monotonic() - context["_tool_start_time"]) * 1000
 
         # Record execution
         try:
             self.memory.record_execution(
-                task_id=task_id,
-                session_id=session_id,
-                tool_name=tool_name,
-                tool_input=tool_input,
-                tool_output=tool_response,
-                exit_code=exit_code,
-                files_touched=files_touched if files_touched else None,
-                error_message=error_message,
-                duration_ms=duration_ms,
-                project_path=self.project_path,
+                task_id=task_id, session_id=session_id, tool_name=tool_name,
+                tool_input=tool_input, tool_output=tool_response, exit_code=exit_code,
+                files_touched=files_touched or None, error_message=error_message,
+                duration_ms=duration_ms, project_path=self.project_path,
             )
         except Exception:
-            # Don't block on execution record failure
             pass
 
         # Track active containers
-        if "container_run" in tool_name and isinstance(tool_response, str):
-            try:
-                data = json.loads(tool_response)
-                if data.get("status") == "running":
-                    container_id = data.get("container_id")
-                    if container_id:
-                        self._active_containers.append(container_id)
-            except (json.JSONDecodeError, TypeError):
-                pass
+        container_id = self._track_container_from_response(tool_name, tool_response)
+        if container_id:
+            self._active_containers.append(container_id)
 
         # Loop detection
-        tool_input_str = json.dumps(input_data.get("tool_input", {}))
-        tool_output_str = str(tool_response)[:5120]
-        error = None
-        if isinstance(tool_response, str) and "error" in tool_response.lower():
-            error = tool_response[:1024]
-
-        # Use task ID from context or default
-        subtask_id = context.get("task_id", "default")
-        action = self.loop_detector.record_iteration(
-            subtask_id, tool_name, tool_input_str, tool_output_str, error
-        )
-
-        if action != LoopAction.CONTINUE:
-            tracker = self.loop_detector.get_tracker(subtask_id)
-            message = build_intervention_message(action, tracker)
-
-            if action == LoopAction.ESCALATE:
-                asyncio.create_task(notify_approval_needed(subtask_id, "loop_escalation"))
-
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PostToolUse",
-                    "message": message,
-                }
-            }
-
-        return {}
+        loop_response = self._check_loop_detection(tool_name, tool_input, tool_response, task_id)
+        return loop_response if loop_response else {}
 
     async def _post_message_hook(self, input_data: dict, context: dict) -> dict:
         """Hook: track token usage and costs from ResultMessage events."""
@@ -984,16 +971,23 @@ Turns: {budget_status['turns']}
         *,
         origin: str = "user",
         emit_notifications: bool = True,
+        channel_id: str | None = None,
     ) -> dict:
         """Execute a task autonomously.
 
         Args:
             task_description: Natural language task description
             callback: Optional callback(event_type, data) for progress reporting
+            origin: Origin identifier (user, slack, a2a, etc.)
+            emit_notifications: Whether to emit notifications
+            channel_id: Optional channel ID for session isolation
 
         Returns:
             Task result dict with status, cost, session_id
         """
+        # Note: channel_id is passed through to _ensure_chat_client() for session isolation.
+        # We do NOT call set_channel() here to avoid mutating shared _channel_id state
+        # which would cause race conditions with concurrent A2A tasks.
         if origin != "idle_research":
             self._ingest_research_urls_from_text(task_description, source=f"task:{origin}")
 
@@ -1229,13 +1223,28 @@ Turns: {budget_status['turns']}
 
         return result
 
-    async def _ensure_chat_client(self) -> ClaudeSDKClient:
-        if self._chat_client is None:
-            self._chat_client = ClaudeSDKClient(options=self._build_options())
-            await self._chat_client.connect()
-        return self._chat_client
+    async def _ensure_chat_client(self, channel_id: str | None = None) -> ClaudeSDKClient:
+        """Get or create a ClaudeSDKClient for the given channel.
 
-    async def _reset_chat_client(self) -> None:
+        Args:
+            channel_id: Channel identifier for session isolation.
+                       If None, uses the orchestrator's default channel.
+        """
+        channel = channel_id or self._channel_id
+        return await self._session_manager.get_client(channel, self._build_options())
+
+    def set_channel(self, channel_id: str) -> None:
+        """Set the default channel for this orchestrator instance."""
+        self._channel_id = channel_id
+
+    async def _reset_chat_client(self, channel_id: str | None = None) -> None:
+        """Reset clients for session cleanup.
+
+        Args:
+            channel_id: If provided, reset only this channel's client.
+                       If None, reset the legacy single client only.
+        """
+        # Reset the legacy single client (deprecated)
         if self._chat_client is not None:
             try:
                 await self._chat_client.disconnect()
@@ -1243,9 +1252,14 @@ Turns: {budget_status['turns']}
                 pass
             self._chat_client = None
 
+        # Reset SessionManager channel client if specified
+        if channel_id:
+            await self._session_manager.close_client(channel_id)
+
     async def close(self) -> None:
         """Graceful shutdown for long-lived SDK clients."""
         await self._reset_chat_client()
+        # Note: SessionManager manages its own client lifecycle
 
     def get_preflight_status(self) -> dict:
         """Return last known model/provider preflight result."""
@@ -1443,22 +1457,7 @@ Turns: {budget_status['turns']}
 
     async def _cleanup_containers(self) -> None:
         """Stop and remove all active containers."""
-        for container_id in self._active_containers:
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "container", "stop", container_id,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await asyncio.wait_for(proc.communicate(), timeout=10)
-                proc = await asyncio.create_subprocess_exec(
-                    "container", "delete", container_id,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await asyncio.wait_for(proc.communicate(), timeout=10)
-            except Exception:
-                pass
+        await cleanup_containers(self._active_containers)
         self._active_containers.clear()
 
     async def get_status(self) -> dict:

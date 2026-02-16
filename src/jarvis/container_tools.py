@@ -431,6 +431,24 @@ async def container_stats(args: dict) -> dict:
     return {"content": [{"type": "text", "text": result["stdout"] or "No stats available"}]}
 
 
+# --- Container Lifecycle Utilities ---
+
+
+async def cleanup_containers(container_ids: list[str], timeout: int = 10) -> None:
+    """Stop and remove multiple containers.
+
+    Args:
+        container_ids: List of container IDs to cleanup
+        timeout: Seconds to wait for each stop/delete operation
+    """
+    for cid in container_ids:
+        try:
+            await _run_container_cmd("stop", cid, timeout=timeout)
+            await _run_container_cmd("delete", cid, timeout=timeout)
+        except Exception:
+            pass  # Best-effort cleanup
+
+
 # --- Server factory ---
 
 

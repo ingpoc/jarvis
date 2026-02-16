@@ -73,6 +73,16 @@ class VoiceConfig:
 
 
 @dataclass
+class A2AConfig:
+    """A2A protocol server settings."""
+
+    enabled: bool = True
+    port: int = 9848  # Can override with JARVIS_A2A_PORT env var
+    default_trust_tier: int = 1
+    token_path: str = ""  # Empty means ~/.jarvis/a2a_token
+
+
+@dataclass
 class KnowledgeConfig:
     """Knowledge system settings."""
 
@@ -112,6 +122,7 @@ class JarvisConfig:
     models: ModelConfig = field(default_factory=ModelConfig)
     slack: SlackConfig = field(default_factory=SlackConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
+    a2a: A2AConfig = field(default_factory=A2AConfig)
     knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
     idle: IdleConfig = field(default_factory=IdleConfig)
     resources: ResourceConfig = field(default_factory=ResourceConfig)
@@ -125,32 +136,23 @@ class JarvisConfig:
         Env vars override file config for model selection.
         """
         config = cls()
+
+        def apply_section(section_obj, data, name):
+            if name in data:
+                for k, v in data[name].items():
+                    setattr(section_obj, k, v)
+
         if JARVIS_CONFIG.exists():
             data = json.loads(JARVIS_CONFIG.read_text())
-            if "container" in data:
-                for k, v in data["container"].items():
-                    setattr(config.container, k, v)
-            if "budget" in data:
-                for k, v in data["budget"].items():
-                    setattr(config.budget, k, v)
-            if "models" in data:
-                for k, v in data["models"].items():
-                    setattr(config.models, k, v)
-            if "slack" in data:
-                for k, v in data["slack"].items():
-                    setattr(config.slack, k, v)
-            if "voice" in data:
-                for k, v in data["voice"].items():
-                    setattr(config.voice, k, v)
-            if "knowledge" in data:
-                for k, v in data["knowledge"].items():
-                    setattr(config.knowledge, k, v)
-            if "idle" in data:
-                for k, v in data["idle"].items():
-                    setattr(config.idle, k, v)
-            if "resources" in data:
-                for k, v in data["resources"].items():
-                    setattr(config.resources, k, v)
+            apply_section(config.container, data, "container")
+            apply_section(config.budget, data, "budget")
+            apply_section(config.models, data, "models")
+            apply_section(config.slack, data, "slack")
+            apply_section(config.voice, data, "voice")
+            apply_section(config.knowledge, data, "knowledge")
+            apply_section(config.idle, data, "idle")
+            apply_section(config.resources, data, "resources")
+            apply_section(config.a2a, data, "a2a")
             if "trust_tier" in data:
                 config.trust_tier = data["trust_tier"]
             if "workspace_root" in data:
@@ -186,6 +188,14 @@ class JarvisConfig:
             config.models.reviewer = sonnet_model
         if haiku_model:
             config.models.quick = haiku_model
+
+        # A2A env var overrides
+        a2a_port = os.environ.get("JARVIS_A2A_PORT")
+        if a2a_port:
+            config.a2a.port = int(a2a_port)
+        a2a_enabled = os.environ.get("JARVIS_A2A_ENABLED")
+        if a2a_enabled:
+            config.a2a.enabled = a2a_enabled.lower() in ("true", "1", "yes")
 
         return config
 
@@ -245,6 +255,12 @@ class JarvisConfig:
                 "qwen3_memory_mb": self.resources.qwen3_memory_mb,
                 "container_memory_mb": self.resources.container_memory_mb,
                 "max_concurrent_containers": self.resources.max_concurrent_containers,
+            },
+            "a2a": {
+                "enabled": self.a2a.enabled,
+                "port": self.a2a.port,
+                "default_trust_tier": self.a2a.default_trust_tier,
+                "token_path": self.a2a.token_path,
             },
             "trust_tier": self.trust_tier,
         }
