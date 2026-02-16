@@ -32,8 +32,18 @@ After startup or daemon lifecycle changes:
 - Confirm menu bar process is running and connected.
 
 ## Scope Routing (Jarvis)
-- Jarvis-core implementation policy stays in this repo (`AGENTS.md`, `ROADMAP.md`).
+- Jarvis-core implementation policy stays in this repo (`AGENTS.md`, `.agent/*`).
 - `JARVIS.md` is only for non-core target repos where Jarvis executes user tasks.
+
+## Harness Governance (.agent)
+- `.agent/ARCHITECTURE.md` contains stable, agreed/approved decisions only (no in-flight chatter).
+- `.agent/inflight-communication/ANALYSIS_IMPROVEMENT.md` contains open items only.
+- Promotion rule:
+  - when an item is `APPROVED`, remove it from inflight and add the stable outcome to `.agent/ARCHITECTURE.md`.
+- Progressive disclosure is mandatory:
+  - keep stable docs short; keep churn in inflight.
+- Any change touching `.agent/*` must keep governance lint green:
+  - `python3 scripts/agent_docs_lint.py`
 
 ## Trace Requirement
 Use global Context Graph workflow from:
