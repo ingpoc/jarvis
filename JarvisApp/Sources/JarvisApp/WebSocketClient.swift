@@ -117,17 +117,18 @@ final class WebSocketClient: WebSocketClientProtocol {
     var status: JarvisStatus = .idle
     var events: [TimelineEvent] = []
     var pendingApprovals: [TimelineEvent] = []
-    var containers: [ContainerInfo] = []
-    var availableTools: [String] = []
-    var activeTasks: [TaskProgress] = []
-    var isLoading = false
+    var trustInfo: TrustInfo?
+    var budgetInfo: BudgetInfo?
+    var idleInfo: IdleInfo?
+    var currentFeature: String?
+    var currentSession: String?
     var lastError: String?
 
     private var task: URLSessionWebSocketTask?
     private let session: URLSession = .shared
     private let url: URL
     private var reconnectWork: DispatchWorkItem?
-    private var didBootstrapAfterConnect = false
+    private var statusTimer: Timer?
 
     // Request/Response correlation
     private var pendingRequests: [String: PendingRequest] = [:]
@@ -164,21 +165,22 @@ final class WebSocketClient: WebSocketClientProtocol {
 
         task = session.webSocketTask(with: url)
         task?.resume()
-
+        isConnected = true
+        lastError = nil
         receiveLoop()
-        task?.sendPing { [weak self] error in
-            guard let self else { return }
-            if let error {
-                self.handleConnectionError(error)
-                return
-            }
-            self.establishConnectedSession()
+        sendCommand(action: "get_status")
+
+        // Poll status periodically
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            self?.sendCommand(action: "get_status")
         }
     }
 
     func disconnect() {
         updateState(.disconnected)
         reconnectWork?.cancel()
+        statusTimer?.invalidate()
+        statusTimer = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
 
@@ -287,7 +289,19 @@ final class WebSocketClient: WebSocketClientProtocol {
         }
     }
 
-    // MARK: - Receive Loop
+    func runTask(description: String) {
+        sendCommand(action: "run_task", data: ["description": description])
+    }
+
+    func approve(taskId: String) {
+        sendCommand(action: "approve", data: ["task_id": taskId])
+        pendingApprovals.removeAll { ($0.taskId ?? "") == taskId }
+    }
+
+    func deny(taskId: String) {
+        sendCommand(action: "deny", data: ["task_id": taskId])
+        pendingApprovals.removeAll { ($0.taskId ?? "") == taskId }
+    }
 
     private func receiveLoop() {
         task?.receive { [weak self] result in
@@ -298,12 +312,11 @@ final class WebSocketClient: WebSocketClientProtocol {
                 self.handleMessage(message)
                 self.receiveLoop()
             case .failure(let error):
-                let ns = error as NSError
-                self.logger.error(
-                    "WebSocket receive error domain=\(ns.domain, privacy: .public) code=\(ns.code, privacy: .public) desc=\(ns.localizedDescription, privacy: .public)"
-                )
-                print("WebSocket receive error domain=\(ns.domain) code=\(ns.code) desc=\(ns.localizedDescription)")
-                self.handleConnectionError(error)
+                DispatchQueue.main.async {
+                    self.isConnected = false
+                    self.lastError = error.localizedDescription
+                    self.scheduleReconnect()
+                }
             }
         }
     }
@@ -369,6 +382,28 @@ final class WebSocketClient: WebSocketClientProtocol {
             logger.error("Failed to decode TimelineEvent: \(error.localizedDescription)")
             lastError = "Invalid event data from server"
         }
+
+        // Update status from events
+        switch event.eventType {
+        case "task_start":
+            status = .building
+        case "task_complete":
+            status = pendingApprovals.isEmpty ? .completed : .waitingApproval
+        case "error":
+            status = .error
+        case "approval_needed":
+            status = .waitingApproval
+        case "idle_enter":
+            status = .idleProcessing
+        case "idle_exit":
+            status = .idle
+        case "hibernate_enter":
+            status = .hibernated
+        case "hibernate_exit":
+            status = .idle
+        default:
+            break
+        }
     }
 
     private func handleResponse(_ json: [String: Any]) {
@@ -406,67 +441,14 @@ final class WebSocketClient: WebSocketClientProtocol {
                let statusData = try? JSONSerialization.data(withJSONObject: data),
                let resp = try? JSONDecoder().decode(JarvisStatusResponse.self, from: statusData) {
                 status = resp.status
+                trustInfo = resp.trust
+                budgetInfo = resp.budget
+                idleInfo = resp.idleInfo
+                currentFeature = resp.currentFeature
+                currentSession = resp.currentSession
             }
-        case "get_containers":
-            if let data = json["data"] as? [String: Any],
-               let containersData = try? JSONSerialization.data(withJSONObject: data),
-               let resp = try? JSONDecoder().decode(ContainersResponse.self, from: containersData) {
-                containers = resp.containers
-                if let err = resp.error, !err.isEmpty {
-                    lastError = err
-                }
-
-                // Index containers in Spotlight
-                Task { @MainActor in
-                    for container in resp.containers {
-                        SpotlightService.shared.indexContainer(container)
-                    }
-                }
-            }
-        case "get_available_tools":
-            if let data = json["data"] as? [String: Any],
-               let tools = data["tools"] as? [String] {
-                availableTools = tools
-            }
-        default:
-            break
-        }
-    }
-
-    // MARK: - State Management
-
-    private func updateState(_ state: ConnectionState) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.connectionState = state
-            if state == .connected {
-                self.lastError = nil
-            }
-            Task { @MainActor in
-                self.delegate?.connectionStateDidChange(state)
-            }
-        }
-    }
-
-    private func handleConnectionError(_ error: Error) {
-        let ns = error as NSError
-        print("handleConnectionError domain=\(ns.domain) code=\(ns.code) desc=\(ns.localizedDescription)")
-        didBootstrapAfterConnect = false
-        updateState(.disconnected)
-        lastError = "Connection error: \(error.localizedDescription)"
-        scheduleReconnect()
-    }
-
-    private func establishConnectedSession() {
-        if connectionState != .connected {
-            updateState(.connected)
-        }
-        guard !didBootstrapAfterConnect else { return }
-        didBootstrapAfterConnect = true
-        Task {
-            try? await sendWithoutResponse(action: "get_status", data: nil)
-            try? await sendWithoutResponse(action: "get_available_tools", data: nil)
-            try? await sendWithoutResponse(action: "get_containers", data: nil)
+        } else if action == "run_task" {
+            // Task was queued
         }
     }
 

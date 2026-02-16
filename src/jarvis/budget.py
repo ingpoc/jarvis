@@ -2,6 +2,9 @@
 
 Enforces per-session and per-day limits. Tracks costs via
 Agent SDK ResultMessage.total_cost_usd.
+
+Includes skill shortcutting: when a matching skill exists for a task,
+bypass the cloud model and apply the skill directly, saving tokens.
 """
 
 import json
@@ -24,6 +27,7 @@ class BudgetStatus:
     day_limit_usd: float
     session_turns: int
     max_turns: int
+    skills_shortcut_savings_usd: float = 0.0
 
     @property
     def session_remaining(self) -> float:
@@ -43,7 +47,11 @@ class BudgetStatus:
 
 
 class BudgetController:
-    """Tracks and enforces spending limits."""
+    """Tracks and enforces spending limits.
+
+    Enhanced with skill shortcutting: tracks savings from skill-based
+    task resolution that bypasses cloud model calls.
+    """
 
     def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or JARVIS_DB
@@ -51,6 +59,8 @@ class BudgetController:
         self._session_id = f"session-{int(time.time())}"
         self._session_spent = 0.0
         self._session_turns = 0
+        self._skill_shortcut_savings = 0.0
+        self._skill_shortcuts_count = 0
         self._init_db()
 
     def _init_db(self) -> None:
@@ -91,6 +101,66 @@ class BudgetController:
         conn.commit()
         conn.close()
 
+    def record_skill_shortcut(self, estimated_savings_usd: float = 0.02) -> None:
+        """Record a skill shortcut that avoided a cloud model call.
+
+        Args:
+            estimated_savings_usd: Estimated cost that was saved by using
+                                   a skill instead of a cloud API call.
+        """
+        self._skill_shortcut_savings += estimated_savings_usd
+        self._skill_shortcuts_count += 1
+
+    def try_skill_shortcut(
+        self,
+        task_description: str,
+        memory=None,
+    ) -> dict | None:
+        """Attempt to shortcut a task using a matching skill.
+
+        Checks if a promoted skill matches the task description. If so,
+        returns the skill data for direct application, avoiding a cloud
+        model call.
+
+        Args:
+            task_description: The task to check
+            memory: MemoryStore instance for skill lookup
+
+        Returns:
+            dict with skill info if shortcut possible, None otherwise
+        """
+        if memory is None:
+            return None
+
+        try:
+            from jarvis.skill_generator import select_session_skills
+
+            session_skills = select_session_skills(memory)
+            if not session_skills:
+                return None
+
+            task_lower = task_description.lower()
+
+            for skill in session_skills:
+                pattern_desc = skill.get("pattern_description", "").lower()
+                # Check if the task matches the skill's pattern
+                pattern_words = set(pattern_desc.split())
+                task_words = set(task_lower.split())
+                overlap = pattern_words & task_words
+                # Require at least 40% word overlap for a match
+                if len(pattern_words) > 0 and len(overlap) / len(pattern_words) >= 0.4:
+                    self.record_skill_shortcut()
+                    return {
+                        "skill_name": skill.get("pattern_description", ""),
+                        "pattern_hash": skill.get("pattern_hash", ""),
+                        "confidence": skill.get("confidence", 0.5),
+                        "shortcut": True,
+                    }
+        except Exception:
+            pass
+
+        return None
+
     def get_day_spent(self) -> float:
         """Get total spent today."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -111,6 +181,7 @@ class BudgetController:
             day_limit_usd=self.config.max_per_day_usd,
             session_turns=self._session_turns,
             max_turns=self.config.max_turns_per_task,
+            skills_shortcut_savings_usd=self._skill_shortcut_savings,
         )
 
     def enforce(self) -> tuple[bool, str]:
@@ -143,4 +214,6 @@ class BudgetController:
             "daily": f"${status.day_spent_usd:.2f} / ${status.day_limit_usd:.2f}",
             "turns": f"{status.session_turns} / {status.max_turns}",
             "can_continue": status.can_continue,
+            "skill_shortcuts": self._skill_shortcuts_count,
+            "skill_savings_usd": f"${self._skill_shortcut_savings:.2f}",
         }

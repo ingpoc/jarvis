@@ -73,23 +73,34 @@ class VoiceConfig:
 
 
 @dataclass
-class ResearchConfig:
-    """Autonomous idle research settings."""
+class KnowledgeConfig:
+    """Knowledge system settings."""
 
-    # Opt-in: keep disabled by default to avoid unexpected background execution/spam.
-    enabled: bool = False
-    topic: str = "@bcherny Claude Code workflow optimization and autonomous dev systems"
-    interval_minutes: int = 30
-    max_runs_per_day: int = 48
-    max_sources_per_run: int = 3
-    min_days_before_repeat: int = 14
-    bookmarks_file: str = "~/.jarvis/x-bookmarks.txt"
-    enable_x_bookmarks_api: bool = False
-    source_urls: list[str] = field(default_factory=lambda: [
-        "https://www.anthropic.com/engineering",
-        "https://foundationcapital.com/context-graphs-ais-trillion-dollar-opportunity/",
-        "https://openai.com/index/inside-our-in-house-data-agent/",
-    ])
+    enable_learning: bool = True
+    enable_skill_generation: bool = True
+    skill_generation_threshold: int = 3  # Minimum pattern occurrences
+    context_pre_filtering: bool = True
+    context_reduction_target: float = 0.7  # 70% reduction target
+
+
+@dataclass
+class IdleConfig:
+    """Idle mode processing settings."""
+
+    idle_threshold_minutes: float = 10.0
+    enable_background_processing: bool = True
+    skill_generation_batch_size: int = 5
+    file_watcher_poll_interval: float = 30.0
+    file_watcher_debounce: float = 5.0
+
+
+@dataclass
+class ResourceConfig:
+    """Resource management settings (24GB Mac Mini budget)."""
+
+    qwen3_memory_mb: int = 3000
+    container_memory_mb: int = 1500
+    max_concurrent_containers: int = 2
 
 
 @dataclass
@@ -101,8 +112,9 @@ class JarvisConfig:
     models: ModelConfig = field(default_factory=ModelConfig)
     slack: SlackConfig = field(default_factory=SlackConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
-    research: ResearchConfig = field(default_factory=ResearchConfig)
-    workspace_root: str = DEFAULT_WORKSPACE_ROOT
+    knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
+    idle: IdleConfig = field(default_factory=IdleConfig)
+    resources: ResourceConfig = field(default_factory=ResourceConfig)
     trust_tier: int = 1  # Default T1 (Assistant)
 
     @classmethod
@@ -130,9 +142,15 @@ class JarvisConfig:
             if "voice" in data:
                 for k, v in data["voice"].items():
                     setattr(config.voice, k, v)
-            if "research" in data:
-                for k, v in data["research"].items():
-                    setattr(config.research, k, v)
+            if "knowledge" in data:
+                for k, v in data["knowledge"].items():
+                    setattr(config.knowledge, k, v)
+            if "idle" in data:
+                for k, v in data["idle"].items():
+                    setattr(config.idle, k, v)
+            if "resources" in data:
+                for k, v in data["resources"].items():
+                    setattr(config.resources, k, v)
             if "trust_tier" in data:
                 config.trust_tier = data["trust_tier"]
             if "workspace_root" in data:
@@ -209,18 +227,25 @@ class JarvisConfig:
                 "auto_call_on_error": self.voice.auto_call_on_error,
                 "auto_call_on_approval": self.voice.auto_call_on_approval,
             },
-            "research": {
-                "enabled": self.research.enabled,
-                "topic": self.research.topic,
-                "interval_minutes": self.research.interval_minutes,
-                "max_runs_per_day": self.research.max_runs_per_day,
-                "max_sources_per_run": self.research.max_sources_per_run,
-                "min_days_before_repeat": self.research.min_days_before_repeat,
-                "bookmarks_file": self.research.bookmarks_file,
-                "enable_x_bookmarks_api": self.research.enable_x_bookmarks_api,
-                "source_urls": self.research.source_urls,
+            "knowledge": {
+                "enable_learning": self.knowledge.enable_learning,
+                "enable_skill_generation": self.knowledge.enable_skill_generation,
+                "skill_generation_threshold": self.knowledge.skill_generation_threshold,
+                "context_pre_filtering": self.knowledge.context_pre_filtering,
+                "context_reduction_target": self.knowledge.context_reduction_target,
             },
-            "workspace_root": self.workspace_root,
+            "idle": {
+                "idle_threshold_minutes": self.idle.idle_threshold_minutes,
+                "enable_background_processing": self.idle.enable_background_processing,
+                "skill_generation_batch_size": self.idle.skill_generation_batch_size,
+                "file_watcher_poll_interval": self.idle.file_watcher_poll_interval,
+                "file_watcher_debounce": self.idle.file_watcher_debounce,
+            },
+            "resources": {
+                "qwen3_memory_mb": self.resources.qwen3_memory_mb,
+                "container_memory_mb": self.resources.container_memory_mb,
+                "max_concurrent_containers": self.resources.max_concurrent_containers,
+            },
             "trust_tier": self.trust_tier,
         }
         JARVIS_CONFIG.write_text(json.dumps(data, indent=2))

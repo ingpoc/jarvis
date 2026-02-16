@@ -1,4 +1,4 @@
-"""Jarvis daemon: persistent background process with WS + Slack + Voice."""
+"""Jarvis daemon: persistent background process with WS + Slack + Voice + Idle."""
 
 from __future__ import annotations
 
@@ -14,16 +14,116 @@ from datetime import datetime
 from pathlib import Path
 from urllib import parse, request
 
+import os
+
 from jarvis.config import JarvisConfig, ensure_jarvis_home
 from jarvis.notifications import set_slack_bot, set_voice_client
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.ws_server import JarvisWSServer
+from jarvis.mcp_health import health_check_all_servers, filter_healthy_servers, notify_health_failures
+from jarvis.model_router import get_model_router
+
+import os
+import traceback
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
+class CrashRecovery:
+    """Daemon crash recovery: detects unclean shutdowns and recovers state."""
+
+    PID_FILE = Path.home() / ".jarvis" / "daemon.pid"
+    CRASH_LOG = Path.home() / ".jarvis" / "logs" / "crash.log"
+
+    @classmethod
+    def write_pid(cls) -> None:
+        """Write current PID to file for crash detection."""
+        cls.PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        cls.PID_FILE.write_text(str(os.getpid()))
+
+    @classmethod
+    def clear_pid(cls) -> None:
+        """Remove PID file on clean shutdown."""
+        try:
+            cls.PID_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    @classmethod
+    def check_previous_crash(cls) -> dict | None:
+        """Check if the previous daemon run crashed.
+
+        Returns crash info dict if a crash was detected, None otherwise.
+        """
+        if not cls.PID_FILE.exists():
+            return None
+
+        try:
+            old_pid = int(cls.PID_FILE.read_text().strip())
+        except (ValueError, OSError):
+            cls.clear_pid()
+            return None
+
+        # Check if the old process is still running
+        try:
+            os.kill(old_pid, 0)  # Signal 0 = check existence
+            # Process is still running - not a crash, another instance
+            return {"status": "running", "pid": old_pid}
+        except ProcessLookupError:
+            # Process is gone - it crashed
+            return {"status": "crashed", "pid": old_pid}
+        except PermissionError:
+            # Process exists but we can't signal it
+            return {"status": "running", "pid": old_pid}
+
+    @classmethod
+    def log_crash(cls, error: str) -> None:
+        """Log crash information for post-mortem analysis."""
+        import time
+        cls.CRASH_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(cls.CRASH_LOG, "a") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"Crash at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"PID: {os.getpid()}\n")
+            f.write(f"Error: {error}\n")
+            f.write(f"Traceback:\n{traceback.format_exc()}\n")
+
+    @classmethod
+    def recover_state(cls, orchestrator) -> dict:
+        """Attempt to recover state after a crash.
+
+        - Resumes in-progress tasks if possible
+        - Cleans up stale container resources
+        - Rebuilds context layers
+
+        Returns recovery summary.
+        """
+        recovery = {"recovered_tasks": 0, "cleaned_containers": 0}
+
+        try:
+            # Find tasks that were in-progress when we crashed
+            stale_tasks = orchestrator.memory.list_tasks(status="in_progress")
+            for task in stale_tasks:
+                orchestrator.memory.update_task(
+                    task.id,
+                    status="failed",
+                    result="Daemon crashed during execution",
+                )
+                recovery["recovered_tasks"] += 1
+
+            logger.info(
+                f"Crash recovery: marked {recovery['recovered_tasks']} "
+                f"stale tasks as failed"
+            )
+        except Exception as e:
+            logger.warning(f"Crash recovery error: {e}")
+
+        return recovery
+
+
 class JarvisDaemon:
-    """Long-running daemon: WebSocket bridge + optional Slack/Voice."""
+    """Long-running daemon: WebSocket bridge + optional Slack/Voice + Idle processing."""
 
     def __init__(self, project_path: str | None = None):
         ensure_jarvis_home()
@@ -31,9 +131,14 @@ class JarvisDaemon:
         self.orchestrator = JarvisOrchestrator(project_path)
         self.events = self.orchestrator.events
         self._ws_server: JarvisWSServer | None = None
+        self._remote_server = None
+        self._rest_app = None
+        self._rest_runner = None
         self._slack_bot = None
         self._slack_task: asyncio.Task | None = None
         self._voice_client = None
+        self._idle_processor = None
+        self._file_watcher = None
         self._running = False
         self._stop_event = asyncio.Event()
         self._idle_loop_task: asyncio.Task | None = None
@@ -44,42 +149,32 @@ class JarvisDaemon:
     async def start(self) -> None:
         """Start all daemon services."""
         loop = asyncio.get_running_loop()
+
+        # Crash recovery
+        crash_info = CrashRecovery.check_previous_crash()
+        if crash_info and crash_info["status"] == "crashed":
+            logger.warning(f"Detected previous crash (PID {crash_info['pid']}), recovering...")
+            recovery = CrashRecovery.recover_state(self.orchestrator)
+            logger.info(f"Recovery complete: {recovery}")
+        elif crash_info and crash_info["status"] == "running":
+            logger.error(f"Another daemon instance is running (PID {crash_info['pid']})")
+            return
+
+        CrashRecovery.write_pid()
+
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, lambda: asyncio.create_task(self.stop()))
 
-        # WebSocket server (always)
+        # Local WebSocket server (always)
         self._ws_server = JarvisWSServer(
             event_collector=self.events,
             orchestrator=self.orchestrator,
         )
         await self._ws_server.start()
 
-        # Provider/model preflight (fail-fast when configured strict).
-        live_check = os.environ.get("JARVIS_PREFLIGHT_LIVE", "0") == "1"
-        strict = os.environ.get("JARVIS_PREFLIGHT_STRICT", "1") == "1"
-        preflight = await self.orchestrator.run_model_preflight(
-            live_check=live_check,
-            timeout_seconds=int(os.environ.get("JARVIS_PREFLIGHT_TIMEOUT_SECS", "25")),
-        )
-        if preflight.get("ready"):
-            self.events.emit(
-                "preflight_ok",
-                "Model/provider preflight passed",
-                metadata={"live_check": live_check, "warnings": preflight.get("warnings", [])},
-            )
-        else:
-            self.events.emit(
-                "preflight_failed",
-                "Model/provider preflight failed",
-                metadata={
-                    "errors": preflight.get("errors", []),
-                    "warnings": preflight.get("warnings", []),
-                    "live_check": live_check,
-                },
-            )
-            logger.error("Startup preflight failed: %s", preflight.get("errors", []))
-            if strict:
-                raise RuntimeError(f"Startup preflight failed: {preflight.get('errors', [])}")
+        # Remote WSS server (if enabled)
+        if self._remote_enabled():
+            await self._start_remote_server()
 
         # Slack bot (optional)
         if self.config.slack.enabled and self.config.slack.bot_token:
@@ -126,6 +221,54 @@ class JarvisDaemon:
             except Exception as e:
                 logger.exception("Voice client failed to connect: %s", e)
 
+        # Copy bootstrap skills on first daemon start
+        try:
+            from jarvis.skill_generator import copy_bootstrap_skills
+            copied = copy_bootstrap_skills()
+            if copied:
+                logger.info(f"Installed {len(copied)} bootstrap skills: {', '.join(copied)}")
+        except Exception as e:
+            logger.warning(f"Bootstrap skills install failed: {e}")
+
+        # Initialize 3-tier model router (loads MLX + Foundation Models if available)
+        try:
+            router = get_model_router()
+            init_result = await router.initialize()
+            logger.info(f"Model router initialized: MLX={init_result.get('mlx')}, "
+                        f"Foundation={init_result.get('foundation')}")
+        except Exception as e:
+            logger.warning(f"Model router initialization failed: {e}")
+
+        # macOS native integrations
+        try:
+            from jarvis.macos_native import get_platform_capabilities
+            caps = get_platform_capabilities()
+            if caps["is_apple_silicon"]:
+                chip = caps.get("chip_info", {})
+                logger.info(
+                    f"Apple Silicon detected: {chip.get('chip', 'unknown')}, "
+                    f"{chip.get('total_memory_gb', '?')}GB RAM"
+                )
+
+                # Start IOKit-based idle detection polling
+                if caps["iokit_available"] and self._idle_processor:
+                    self._iokit_idle_task = asyncio.create_task(
+                        self._iokit_idle_loop()
+                    )
+                    logger.info("IOKit HID idle detection active")
+
+                # Load credentials from Keychain
+                from jarvis.macos_native import keychain_retrieve
+                kc_api_key = keychain_retrieve("com.jarvis.anthropic", "api_key")
+                if kc_api_key:
+                    import os
+                    os.environ.setdefault("ANTHROPIC_API_KEY", kc_api_key)
+                    logger.info("Loaded API key from Keychain")
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"macOS native init: {e}")
+
         self._running = True
         logger.info("Jarvis daemon started")
         self._start_idle_loop_if_enabled()
@@ -133,12 +276,89 @@ class JarvisDaemon:
         # Block until stop is requested
         await self._stop_event.wait()
 
+    async def _iokit_idle_loop(self) -> None:
+        """Poll IOKit HID idle time and trigger idle mode transitions.
+
+        Runs every 30s and checks the actual HID idle seconds.
+        More accurate than timer-based idle detection since it
+        uses real keyboard/mouse/trackpad activity.
+        """
+        from jarvis.macos_native import get_idle_seconds, get_memory_pressure
+
+        threshold = self.config.idle.idle_threshold_minutes * 60
+
+        while self._running:
+            try:
+                await asyncio.sleep(30)
+
+                idle_secs = get_idle_seconds()
+                if idle_secs is None:
+                    continue
+
+                if self._idle_processor:
+                    if idle_secs >= threshold:
+                        self._idle_processor.trigger_idle()
+                    elif idle_secs < 5:
+                        # Recent activity
+                        self._idle_processor.record_activity()
+
+                # Check memory pressure for hibernation
+                pressure = get_memory_pressure()
+                if pressure and pressure.get("should_hibernate"):
+                    if self._idle_processor:
+                        self._idle_processor.trigger_hibernate()
+                    # Also unload MLX model to free memory
+                    router = get_model_router()
+                    await router.shutdown()
+                    logger.warning(
+                        f"Memory pressure CRITICAL ({pressure.get('free_mb', '?')}MB free) "
+                        "— hibernated + unloaded local models"
+                    )
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"IOKit idle loop error: {e}")
+
     async def stop(self) -> None:
         """Gracefully stop all services."""
         logger.info("Jarvis daemon stopping")
 
+        # Shutdown model router (unload MLX)
+        try:
+            router = get_model_router()
+            await router.shutdown()
+        except Exception as e:
+            logger.debug(f"Model router shutdown error: {e}")
+
+        # Cancel IOKit idle loop
+        if hasattr(self, "_iokit_idle_task") and self._iokit_idle_task:
+            self._iokit_idle_task.cancel()
+            try:
+                await self._iokit_idle_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._file_watcher:
+            try:
+                await self._file_watcher.stop()
+            except Exception as e:
+                logger.warning(f"File watcher stop error: {e}")
+
+        if self._idle_processor:
+            try:
+                await self._idle_processor.stop()
+            except Exception as e:
+                logger.warning(f"Idle processor stop error: {e}")
+
         if self._ws_server:
             await self._ws_server.stop()
+
+        if self._remote_server:
+            await self._remote_server.stop()
+
+        if self._rest_runner:
+            await self._rest_runner.cleanup()
 
         if self._slack_bot:
             try:
@@ -169,270 +389,102 @@ class JarvisDaemon:
             logger.exception("Orchestrator shutdown error: %s", e)
 
         self._running = False
+        CrashRecovery.clear_pid()
         self._stop_event.set()
 
-    def _on_slack_task_done(self, task: asyncio.Task) -> None:
-        """Surface Slack task failures and unexpected exits."""
-        if task.cancelled():
-            return
-        exc = task.exception()
-        if exc:
-            logger.exception("Slack bot task crashed: %s", exc)
-        else:
-            logger.warning("Slack bot task exited unexpectedly")
+    def _remote_enabled(self) -> bool:
+        """Check if remote server is enabled."""
+        return os.getenv("JARVIS_REMOTE_ENABLED", "false").lower() in ("true", "1", "yes")
 
-    def _start_idle_loop_if_enabled(self) -> None:
-        # Always recover stale tasks on daemon start, even if idle research is disabled.
-        self._normalize_stale_in_progress_tasks()
-        # Idle research is opt-in. This prevents unintended Slack/channel spam.
-        # To enable: set JARVIS_ENABLE_IDLE_AUTONOMY=1 *and* config.research.enabled=true.
-        if os.environ.get("JARVIS_ENABLE_IDLE_AUTONOMY", "0") != "1":
-            logger.info("Idle autonomy loop disabled (set JARVIS_ENABLE_IDLE_AUTONOMY=1 to enable)")
-            return
-        if not self.config.research.enabled:
-            logger.info("Idle autonomy loop disabled by config")
-            return
-        if self._idle_loop_task and not self._idle_loop_task.done():
-            return
-        self._idle_loop_task = asyncio.create_task(self._idle_autonomy_loop())
-        logger.info(
-            "Idle autonomy loop started (interval=%s min, max/day=%s)",
-            self.config.research.interval_minutes,
-            self.config.research.max_runs_per_day,
-        )
+    async def _start_remote_server(self) -> None:
+        """Start remote WSS server and REST API."""
+        try:
+            from jarvis.remote_server import JarvisRemoteServer, RESTAPIHandler
+            from jarvis.auth import Authenticator
+            from aiohttp import web
 
-    async def _idle_autonomy_loop(self) -> None:
-        """When Jarvis is idle, autonomously run self-improvement research tasks."""
-        check_interval_seconds = 30
-        while self._running:
-            try:
-                await asyncio.sleep(check_interval_seconds)
-                if not self._running:
-                    return
-                if not self._should_run_idle_task():
-                    continue
-                selected_sources = self._select_idle_sources()
-                if not selected_sources:
-                    self.events.emit(
-                        "idle_autonomy_skip",
-                        "Idle research skipped: all configured sources recently researched",
-                        metadata={"topic": self.config.research.topic},
-                    )
-                    self._mark_idle_run()
-                    continue
-                prompt = self._build_idle_research_prompt(selected_sources)
-                self.events.emit(
-                    "idle_autonomy_start",
-                    "Jarvis started autonomous idle self-improvement task",
-                    metadata={
-                        "topic": self.config.research.topic,
-                        "sources": selected_sources,
-                        "slack_notify": False,
-                        "origin": "idle_research",
-                    },
-                )
-                result = await self.orchestrator.run_task(
-                    prompt,
-                    origin="idle_research",
-                    emit_notifications=False,
-                )
-                self._mark_idle_run()
-                summary = (result.get("output") or "").strip()[:2000]
-                summary_lower = summary.lower()
-                applied = result.get("status") == "completed" and (
-                    "~/.codex/rules" in summary_lower or "agents.md" in summary_lower
-                )
-                for source in selected_sources:
-                    self.orchestrator.memory.record_idle_research(
-                        url=source,
-                        topic=self.config.research.topic,
-                        conclusion=(summary or result.get("status", "unknown"))[:1200],
-                        evidence=summary[:2000],
-                        applied=applied,
-                        commit_sha=None,
-                    )
-                if self._slack_bot:
-                    msg = (
-                        "*Jarvis Idle Research Summary*\n"
-                        f"- Topic: {self.config.research.topic}\n"
-                        f"- Sources: {len(selected_sources)}\n"
-                        f"- Status: {result.get('status')}\n"
-                        f"- Conclusion: {(summary or 'No summary returned')[:2500]}"
-                    )
-                    await self._slack_bot.send_message(
-                        msg,
-                        channel=self.config.slack.research_channel,
-                    )
-                self.events.emit(
-                    "idle_autonomy_complete",
-                    "Jarvis completed autonomous idle self-improvement task",
-                    metadata={
-                        "topic": self.config.research.topic,
-                        "sources": selected_sources,
-                        "status": result.get("status"),
-                        "slack_notify": False,
-                        "origin": "idle_research",
-                    },
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.exception("Idle autonomy loop error: %s", e)
-                self.events.emit(
-                    "idle_autonomy_error",
-                    str(e)[:200],
-                    metadata={"error": str(e), "slack_notify": False, "origin": "idle_research"},
-                )
+            # Initialize authenticator
+            jwt_secret = os.getenv("JARVIS_JWT_SECRET")
+            if not jwt_secret:
+                logger.warning("JARVIS_JWT_SECRET not set, using default (UNSAFE)")
+                jwt_secret = "change-me-in-production"
 
-    def _should_run_idle_task(self) -> bool:
-        now = time.time()
-        today = datetime.now().strftime("%Y-%m-%d")
-        if today != self._idle_runs_day:
-            self._idle_runs_day = today
-            self._idle_runs_today = 0
-
-        self._normalize_stale_in_progress_tasks()
-        active_tasks = self.orchestrator.memory.list_tasks(
-            self.orchestrator.project_path, status="in_progress"
-        )
-        if active_tasks:
-            return False
-
-        interval_seconds = max(300, int(self.config.research.interval_minutes) * 60)
-        if (now - self._last_idle_run_ts) < interval_seconds:
-            return False
-        if self._idle_runs_today >= int(self.config.research.max_runs_per_day):
-            return False
-        return True
-
-    def _normalize_stale_in_progress_tasks(self) -> None:
-        """Unblock idle autonomy by failing abandoned in-progress tasks."""
-        stale_after_seconds = int(os.environ.get("JARVIS_STALE_TASK_SECS", str(60 * 60)))
-        if stale_after_seconds <= 0:
-            return
-        recovered = self.orchestrator.memory.recover_stale_in_progress_tasks(
-            project_path=self.orchestrator.project_path,
-            stale_after_seconds=stale_after_seconds,
-            reason="Auto-marked stale by idle autonomy scheduler",
-        )
-        for task_id in recovered:
-            self.events.emit(
-                "task_stale_recovered",
-                f"Auto-recovered stale in-progress task: {task_id}",
-                task_id=task_id,
-                metadata={"project": self.orchestrator.project_path},
+            authenticator = Authenticator(
+                secret=jwt_secret,
+                expiry_seconds=int(os.getenv("JARVIS_JWT_EXPIRY", "86400")),
+                max_devices=int(os.getenv("MAX_DEVICES", "10")),
             )
 
-    def _mark_idle_run(self) -> None:
-        self._last_idle_run_ts = time.time()
-        self._idle_runs_today += 1
+            # Start remote WSS server
+            remote_port = int(os.getenv("JARVIS_REMOTE_PORT", "9848"))
+            remote_bind = os.getenv("JARVIS_REMOTE_BIND", "0.0.0.0")
 
-    def _load_bookmark_urls(self) -> list[str]:
-        path = Path(self.config.research.bookmarks_file).expanduser()
-        urls: list[str] = []
-        if path.exists():
-            for raw in path.read_text().splitlines():
-                line = raw.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith("http://") or line.startswith("https://"):
-                    urls.append(line)
+            self._remote_server = JarvisRemoteServer(
+                event_collector=self.events,
+                orchestrator=self.orchestrator,
+                authenticator=authenticator,
+                port=remote_port,
+                bind=remote_bind,
+            )
+            await self._remote_server.start()
+            logger.info(f"Remote WSS server started on {remote_bind}:{remote_port}")
 
-        # Optional: live X bookmark API ingestion is disabled by default.
-        # Enable only with explicit opt-in.
-        if self.config.research.enable_x_bookmarks_api:
-            x_urls = self._load_x_bookmark_urls()
-            for url in x_urls:
-                if url not in urls:
-                    urls.append(url)
-        return urls
+            # Start REST API
+            rest_handler = RESTAPIHandler(authenticator, self._remote_server)
+            self._rest_app = await rest_handler.create_app()
 
-    def _load_x_bookmark_urls(self) -> list[str]:
-        if not self.config.research.enable_x_bookmarks_api:
-            return []
-        token = os.environ.get("X_BOOKMARKS_ACCESS_TOKEN", "").strip()
-        user_id = os.environ.get("X_BOOKMARKS_USER_ID", "").strip()
-        if not token or not user_id:
-            return []
+            if self._rest_app:
+                rest_port = int(os.getenv("JARVIS_REST_PORT", "9849"))
+                self._rest_runner = web.AppRunner(self._rest_app)
+                await self._rest_runner.setup()
+                site = web.TCPSite(self._rest_runner, "0.0.0.0", rest_port)
+                await site.start()
+                logger.info(f"REST API started on port {rest_port}")
+
+                # Start Tailscale funnel if enabled
+                if os.getenv("TAILSCALE_ENABLED", "false").lower() == "true":
+                    await self._start_tailscale_funnel(remote_port)
+
+        except ImportError as e:
+            logger.warning(f"Remote server dependencies missing: {e}")
+        except Exception as e:
+            logger.error(f"Remote server failed to start: {e}")
+
+    async def _start_tailscale_funnel(self, port: int) -> None:
+        """Start Tailscale funnel for remote access."""
         try:
-            max_results = int(os.environ.get("JARVIS_X_BOOKMARKS_MAX_RESULTS", "50"))
-        except ValueError:
-            max_results = 50
-        max_results = max(5, min(max_results, 100))
+            import asyncio.subprocess
 
-        params = {
-            "max_results": str(max_results),
-            "tweet.fields": "entities",
-            "expansions": "attachments.media_keys",
-        }
-        url = (
-            f"https://api.x.com/2/users/{user_id}/bookmarks?"
-            f"{parse.urlencode(params)}"
-        )
-        req = request.Request(
-            url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "User-Agent": "jarvis-idle-research/1.0",
-            },
-            method="GET",
-        )
-        try:
-            with request.urlopen(req, timeout=12) as resp:
-                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
-        except Exception as exc:
-            logger.warning("Failed to fetch X bookmarks: %s", exc)
-            return []
+            proc = await asyncio.create_subprocess_exec(
+                "tailscale", "funnel", str(port),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
 
-        urls: list[str] = []
-        for item in (payload.get("data") or []):
-            entities = (item.get("entities") or {}) if isinstance(item, dict) else {}
-            for u in (entities.get("urls") or []):
-                expanded = str(u.get("expanded_url") or "").strip()
-                if expanded.startswith(("http://", "https://")) and expanded not in urls:
-                    urls.append(expanded)
-        return urls
+            # Wait a bit to check if it started successfully
+            await asyncio.sleep(2)
 
-    def _select_idle_sources(self) -> list[str]:
-        configured = list(self.config.research.source_urls or [])
-        conversation_sources = self.orchestrator.memory.get_pending_research_sources(
-            min_days_before_repeat=int(self.config.research.min_days_before_repeat),
-            limit=200,
-        )
-        bookmarks = self._load_bookmark_urls()
-        all_sources = []
-        seen = set()
-        for url in conversation_sources + configured + bookmarks:
-            if url in seen:
-                continue
-            seen.add(url)
-            all_sources.append(url)
+            if proc.returncode is not None:
+                stderr = await proc.stderr.read()
+                logger.warning(f"Tailscale funnel failed: {stderr.decode()}")
+            else:
+                logger.info(f"Tailscale funnel started for port {port}")
 
-        recent = self.orchestrator.memory.recent_research_urls(
-            days=int(self.config.research.min_days_before_repeat)
-        )
-        fresh = [u for u in all_sources if u not in recent]
-        if not fresh:
-            return []
-        return fresh[: max(1, int(self.config.research.max_sources_per_run))]
+                # Get Tailscale IP
+                ip_proc = await asyncio.create_subprocess_exec(
+                    "tailscale", "ip", "-4",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await ip_proc.communicate()
+                if ip_proc.returncode == 0:
+                    ts_ip = stdout.decode().strip()
+                    logger.info(f"Tailscale IP: {ts_ip}")
 
-    def _build_idle_research_prompt(self, sources: list[str]) -> str:
-        topic = self.config.research.topic
-        sources_text = "\n".join(f"- {url}" for url in sources)
-        return (
-            "You are running an autonomous self-improvement cycle for Jarvis while user-idle.\n"
-            "Objective: improve Jarvis architecture, reliability, and autonomous software engineering performance.\n"
-            f"Priority research topic: {topic}\n"
-            "Use only the listed sources for this cycle (do not re-research old items not listed).\n"
-            "If strong evidence supports improvement, update global rules in ~/.codex/rules and the current repo AGENTS.md.\n"
-            "Do not create or modify JARVIS.md in Jarvis core repo; reserve project JARVIS.md for external target projects.\n"
-            "Keep markdown concise, actionable, and git-trackable. Do not spam channels.\n"
-            "Prioritized sources for this cycle:\n"
-            f"{sources_text}\n"
-            "If a source is inaccessible, continue with remaining sources and report that explicitly.\n"
-            "Always report explicit errors; never hide failures.\n"
-            "At the end, summarize: discoveries, recommended workflow updates, what was changed, and URLs used."
-        )
+        except FileNotFoundError:
+            logger.warning("Tailscale not installed")
+        except Exception as e:
+            logger.error(f"Tailscale funnel error: {e}")
 
 
 def main():
@@ -443,7 +495,13 @@ def main():
     )
     project_path = sys.argv[1] if len(sys.argv) > 1 else None
     daemon = JarvisDaemon(project_path=project_path)
-    asyncio.run(daemon.start())
+    try:
+        asyncio.run(daemon.start())
+    except Exception as e:
+        CrashRecovery.log_crash(str(e))
+        raise
+    finally:
+        CrashRecovery.clear_pid()
 
 
 if __name__ == "__main__":

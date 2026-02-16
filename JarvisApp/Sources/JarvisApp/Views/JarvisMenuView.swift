@@ -57,13 +57,39 @@ struct JarvisMenuView: View {
 
             Divider()
 
-            // Pending Approvals Section
-            if !webSocket.pendingApprovals.isEmpty {
-                Text("Pending Approvals")
-                    .font(.headline)
+            // Idle notification banner
+            if ws.status.isIdle && ws.idleInfo != nil {
+                IdleNotificationBanner(status: ws.status, idleInfo: ws.idleInfo!)
                     .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 4)
+                    .padding(.vertical, 6)
+
+                Divider()
+            }
+
+            // Command input
+            CommandInputView()
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+
+            Divider()
+
+            // Pending approvals section
+            if !ws.pendingApprovals.isEmpty {
+                HStack {
+                    Text("Pending Approvals")
+                        .font(.headline)
+                    Spacer()
+                    Text("\(ws.pendingApprovals.count)")
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(.orange.opacity(0.2))
+                        .cornerRadius(10)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
 
                 ApprovalView()
                     .padding(.horizontal, 16)
@@ -72,28 +98,20 @@ struct JarvisMenuView: View {
                 Divider()
             }
 
-            // Content Views
-            switch selectedView {
-            case .timeline:
+            // Timeline section
+            HStack {
                 Text("Timeline")
                     .font(.headline)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 4)
-
-                TimelineView()
-                    .frame(maxHeight: 300)
-
-            case .commandCenter:
-                CommandCenterView()
-                    .frame(maxHeight: 380)
-
-            case .quickActions:
-                Text("Quick Actions")
-                    .font(.headline)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 4)
+                Spacer()
+                if !ws.events.isEmpty {
+                    Text("\(ws.events.count) events")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
 
                 QuickActionsGrid()
                     .frame(maxHeight: 300)
@@ -101,40 +119,27 @@ struct JarvisMenuView: View {
 
             Divider()
 
-            // Footer Actions
+            // Bottom bar
             HStack {
-                Button("Refresh") {
-                    Task {
-                        await refreshAll()
-                    }
+                Button(action: {
+                    ws.sendCommand(action: "get_status")
+                    ws.sendCommand(action: "get_timeline")
+                }) {
+                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered)
-                .keyboardShortcut("r", modifiers: [.command, .shift])
-
-                Text("Cmd+Shift+J to toggle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .controlSize(.small)
+                .controlSize(.small)
 
                 Spacer()
 
-                Button("Open Full App") {
-                    NSApp.setActivationPolicy(.regular)
-                    NSApplication.shared.activate(ignoringOtherApps: true)
-                    openWindow(id: "full-app")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        NSApp.activate(ignoringOtherApps: true)
-                        (NSApp.windows.first { $0.title == "Jarvis" } ?? NSApp.keyWindow)?.makeKeyAndOrderFront(nil)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-
-                Button("Quit") {
+                Button(action: {
                     NSApplication.shared.terminate(nil)
+                }) {
+                    Label("Quit", systemImage: "power")
                 }
                 .buttonStyle(.bordered)
                 .tint(.red)
-                .keyboardShortcut("q", modifiers: [.command])
+                .controlSize(.small)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -240,5 +245,51 @@ struct JarvisMenuView: View {
         } catch {
             ErrorHandler.shared.handle(error, context: "processDroppedFile")
         }
+    }
+}
+
+// MARK: - Idle Notification Banner
+
+struct IdleNotificationBanner: View {
+    let status: JarvisStatus
+    let idleInfo: IdleInfo
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: status.iconName)
+                .font(.caption)
+                .foregroundStyle(status.color)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(status.label)
+                    .font(.caption)
+                    .fontWeight(.medium)
+
+                if let taskCount = idleInfo.backgroundTasks, taskCount > 0 {
+                    Text("\(taskCount) background task\(taskCount == 1 ? "" : "s") running")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if status == .hibernated {
+                    Text("System hibernated — memory pressure detected")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("No pending work — monitoring for changes")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            // Idle state indicator dot
+            Circle()
+                .fill(status.color)
+                .frame(width: 8, height: 8)
+                .opacity(status == .idleProcessing ? 1.0 : 0.5)
+        }
+        .padding(8)
+        .background(status.color.opacity(0.08))
+        .cornerRadius(8)
     }
 }

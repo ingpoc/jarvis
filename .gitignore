@@ -24,7 +24,7 @@ wheels/
 venv/
 ENV/
 env/
-.venv
+.venv/
 
 # IDE
 .vscode/
@@ -39,36 +39,5 @@ env/
 # Logs
 *.log
 
-# Environment & config
-.env
-.mcp.json
-
-# Swift
-.build/
-*.xcodeproj/xcuserdata/
-*.xcworkspace/xcuserdata/
-Package.resolved
-.swiftpm/
-*.xcbuild/
-DerivedData/
-
-# Node
-node_modules/
-
-# uv
-uv.lock
-
-# ChromaDB local data
-chroma/
-.claude/chroma/
-
-# Repo-tracked agent folders (keep structure, ignore runtime contents)
-.jarvis/*
-!.jarvis/.gitkeep
-!.jarvis/README.md
-.codex/*
-!.codex/.gitkeep
-!.codex/README.md
-
-# Local Claude/Codex ephemeral worktrees (never commit)
-.claude/worktrees/
+# Swift build
+JarvisApp/.build/
