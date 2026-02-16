@@ -104,3 +104,14 @@ For each failing check, capture:
 - relevant log snippet
 - timestamp
 
+## Results (Latest Local Run)
+
+Date: 2026-02-16
+
+- `swift build --package-path JarvisApp`: PASS
+- `swift test --package-path JarvisApp`: PASS (37 tests)
+- `bash ./start-jarvis.sh`: PASS (daemon + menu bar started)
+- Daemon WS port listening: PASS (`lsof -iTCP:9847 -sTCP:LISTEN`)
+
+Notes:
+- Some end-to-end API checks (WS/A2A HTTP) require running the client from the host environment (outside this tool sandbox), e.g. `curl` to `127.0.0.1:9848` and a WS client for `ws://127.0.0.1:9847`.

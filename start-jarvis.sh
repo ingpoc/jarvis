@@ -349,6 +349,12 @@ echo -e "${BLUE}=== Jarvis Startup ===${NC}"
 echo ""
 
 mkdir -p "$PID_DIR" "$LOG_DIR"
+
+# Add a clear separator so stale build/log output from previous runs doesn't
+# look like it's from the current startup.
+startup_stamp="===== STARTUP $(date '+%Y-%m-%d %H:%M:%S') ====="
+printf "\n%s\n" "$startup_stamp" >> "$LOG_DIR/daemon.log" 2>/dev/null || true
+printf "\n%s\n" "$startup_stamp" >> "$LOG_DIR/menubar.log" 2>/dev/null || true
 if [ -e "$LOCK_FILE" ]; then
     existing_lock_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
     if [ -n "$existing_lock_pid" ] && is_pid_alive "$existing_lock_pid"; then
