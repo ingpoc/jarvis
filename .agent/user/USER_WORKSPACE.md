@@ -1,7 +1,7 @@
 # USER_WORKSPACE.md (Distilled)
 
 Last updated: 2026-02-16
-Purpose: Concise blueprint for making Jarvis a continuous learning engine, aligned with `.agent/ANALYSIS.md`.
+Purpose: Concise blueprint for making Jarvis a continuous learning engine, aligned with `.agent/ARCHITECTURE.md`.
 
 ## 1) Target Outcome
 
@@ -186,7 +186,7 @@ Applied to Jarvis:
 
 2. Keep instructions compact and navigable:
    - avoid oversized static prompts/docs as primary control mechanism.
-   - implication: keep `.agent/ANALYSIS.md` concise, route detail through structured files and retrieval.
+  - implication: keep `.agent/ARCHITECTURE.md` concise, route detail through structured files and retrieval.
 
 3. Increase agent legibility of system state:
    - agent should see clear diagnostics and progress signals.

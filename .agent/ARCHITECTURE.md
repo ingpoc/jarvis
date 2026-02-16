@@ -1,4 +1,4 @@
-# ANALYSIS.md
+# ARCHITECTURE.md
 
 Last updated: 2026-02-16
 Source of truth: mutually agreed architecture between Agent A and Agent B.
@@ -294,35 +294,45 @@ Both agents agree:
 
 ## Open Question Resolutions (Promoted)
 
-These were open questions in `ANALYSIS_IMPROVEMENT.md` and are now promoted as accepted decisions.
+These were open questions in `.agent/inflight-communication/ANALYSIS_IMPROVEMENT.md` and are now promoted as accepted decisions.
 
 ### 1) A2A port policy
+
 Decision:
+
 1. Use default fixed port `9848`.
 2. Support override via `JARVIS_A2A_PORT`.
 3. AgentCard endpoint URL must reflect the effective runtime port.
 
 ### 2) A2A auth bootstrap
+
 Decision:
+
 1. Auto-generate bearer token on first run.
 2. Store in `~/.jarvis/a2a_token` with strict file permissions.
 3. Allow override through `JARVIS_A2A_TOKEN`.
 4. Return explicit 401/403 on auth failure with structured error metadata.
 
 ### 3) Default trust tier for A2A callers
+
 Decision:
+
 1. Default A2A caller trust tier is T1.
 2. Allow per-caller overrides via `a2a.caller_tiers`.
 3. Denials must include explicit required-tier reason.
 
 ### 4) Multi-workspace strategy
+
 Decision:
+
 1. Use explicit `contextId -> workspace` mapping as primary mechanism.
 2. If mapping is missing, use deterministic instance default workspace fallback.
 3. Keep auto-discovery disabled by default.
 
 ### 5) Session forking policy
+
 Decision:
+
 1. Do not enable `fork_session` by default in v1.
 2. Allow explicit opt-in for exploratory/speculative requests.
 3. When used, include fork lineage in trace metadata.
@@ -330,7 +340,9 @@ Decision:
 ## Continuous Learning Engine Decisions (Promoted from USER_WORKSPACE)
 
 ### Learning Pipeline (Required)
+
 Jarvis continuous learning loop must follow:
+
 1. Capture: task/tool/result events with correlation ids.
 2. Reflect: derive root-cause/prevention patterns from failures and high-signal successes.
 3. Store: persist typed patterns (not raw prompt transcripts).
@@ -339,7 +351,9 @@ Jarvis continuous learning loop must follow:
 6. Validate: measure outcome deltas and update pattern confidence.
 
 ### Pattern Schema (Required Fields)
+
 Each pattern record must include:
+
 1. `pattern_id`
 2. `type`: `failure | success | heuristic | research`
 3. `scope`: `global | project | task-class`
@@ -351,26 +365,36 @@ Each pattern record must include:
 9. `status`: `active | deprecated | rejected`
 
 ### Research Adoption Policy
+
 1. Research inputs are deduped and structured before use.
 2. No automatic adoption of research claims.
 3. Promotion requires eval/experiment evidence and confidence threshold.
 4. Low-confidence patterns stay inactive.
 
 ### Progressive Disclosure Policy
+
 1. Inject metadata-first, then only top relevant patterns.
 2. Enforce cap on injected patterns/research items.
 3. Avoid bulk memory dumps into prompts.
 
 ### Configuration Decisions (Required)
+
 Add/standardize config groups:
+
 1. `learning.*` (enablement, confidence thresholds, decay/deprecation policy)
 2. `context.*` (progressive disclosure limits and relevance thresholds)
 3. `runtime.*` (memory guard and long-task streaming expectations)
 4. `a2a.*` (already agreed: port/auth/caller tier/context workspace mapping)
 
 ### Priority Alignment
+
 Before advanced reflection/research workers:
+
 1. fix cancellation/state correctness
 2. ensure A2A contract reliability
 3. ensure session isolation
 4. then scale continuous-learning features
+
+## Implementation And Review Tracking
+
+Implementation/review status is tracked in `.agent/inflight-communication/ANALYSIS_IMPROVEMENT.md` to keep this document focused on agreed/approved architecture decisions.

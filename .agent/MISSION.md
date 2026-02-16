@@ -44,8 +44,8 @@ Build Jarvis into a mac-native, continuously learning, highly autonomous, and RA
 
 ## Non-Negotiables
 
-1. `ANALYSIS.md` contains only agreed architecture decisions.
-2. `ANALYSIS_IMPROVEMENT.md` contains only unresolved items.
+1. `.agent/ARCHITECTURE.md` contains only agreed/approved architecture decisions.
+2. `.agent/inflight-communication/ANALYSIS_IMPROVEMENT.md` contains in-flight implementation/review tracking and unresolved items.
 3. OpenClaw integration is configuration-first and protocol-correct.
 4. Jarvis remains the execution engine; OpenClaw remains the orchestrator.
 5. Continuous learning cannot bypass trust/budget/policy gates.

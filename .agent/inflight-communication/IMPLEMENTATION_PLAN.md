@@ -1,7 +1,7 @@
 # IMPLEMENTATION_PLAN.md
 
 Last updated: 2026-02-16
-Source architecture: `.agent/ANALYSIS.md`
+Source architecture: `.agent/ARCHITECTURE.md`
 
 ## 1. Goal
 
@@ -28,7 +28,7 @@ Gate to exit:
 
 Objectives:
 1. Add native A2A server support to Jarvis.
-2. Implement contract methods required by `ANALYSIS.md`.
+2. Implement contract methods required by `.agent/ARCHITECTURE.md`.
 
 Deliverables:
 1. AgentCard endpoint.
@@ -182,9 +182,9 @@ Gate to exit:
 
 1. Each phase requires:
    - decision trace stored in Context Graph
-   - update to `.agent/ANALYSIS.md` if architecture shifts
+   - update to `.agent/ARCHITECTURE.md` if architecture shifts
 2. Unresolved items:
-   - keep in `.agent/ANALYSIS_IMPROVEMENT.md` only
+   - keep in `.agent/inflight-communication/ANALYSIS_IMPROVEMENT.md` only
 3. No silent fallback additions.
 
 ## 6. Immediate Next Actions

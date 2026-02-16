@@ -49,6 +49,7 @@ JarvisiOS/.build/
 .env
 .mcp.json
 .codex/config.toml
+.agent/comms_config.json
 
 # Local assistant workspace artifacts
 .claude/
