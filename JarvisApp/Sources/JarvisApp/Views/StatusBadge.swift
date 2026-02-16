@@ -6,17 +6,17 @@ struct StatusBadge: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                Image(systemName: ws.status.iconName)
+                Image(systemName: webSocket.status.iconName)
                     .font(.title2)
-                    .foregroundStyle(ws.status.color)
-                    .symbolEffect(.pulse, isActive: ws.status == .building)
+                    .foregroundStyle(webSocket.status.color)
+                    .symbolEffect(.pulse, isActive: webSocket.status == .building)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(ws.status.label)
+                    Text(webSocket.status.label)
                         .font(.title3)
                         .fontWeight(.medium)
 
-                    if let feature = ws.currentFeature {
+                    if let feature = webSocket.currentFeature {
                         Text(feature)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -26,7 +26,7 @@ struct StatusBadge: View {
 
                 Spacer()
 
-                if ws.isConnected {
+                if webSocket.isConnected {
                     Circle()
                         .fill(.green)
                         .frame(width: 8, height: 8)
@@ -43,9 +43,9 @@ struct StatusBadge: View {
             }
 
             // Trust and Budget row
-            if ws.trustInfo != nil || ws.budgetInfo != nil {
+            if webSocket.trustInfo != nil || webSocket.budgetInfo != nil {
                 HStack(spacing: 16) {
-                    if let trust = ws.trustInfo, let tier = trust.tier {
+                    if let trust = webSocket.trustInfo, let tier = trust.tier {
                         HStack(spacing: 4) {
                             Image(systemName: "shield.fill")
                                 .font(.caption2)
@@ -61,7 +61,7 @@ struct StatusBadge: View {
                         }
                     }
 
-                    if let budget = ws.budgetInfo, let session = budget.session {
+                    if let budget = webSocket.budgetInfo, let session = budget.session {
                         HStack(spacing: 4) {
                             Image(systemName: "dollarsign.circle")
                                 .font(.caption2)

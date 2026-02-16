@@ -69,7 +69,7 @@ struct CommandInputCard: View {
                     Button(action: executeCommand) {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 20))
-                            .foregroundStyle(.accentColor)
+                            .foregroundStyle(Color.accentColor)
                     }
                     .buttonStyle(.plain)
                 }

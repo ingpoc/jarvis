@@ -105,6 +105,10 @@ private struct PendingRequest {
 // Empty type for fire-and-forget requests
 private struct EmptyResponse: Decodable {}
 
+private struct AvailableToolsResponse: Decodable {
+    let tools: [String]
+}
+
 // MARK: - WebSocket Client Implementation
 
 @Observable
@@ -117,6 +121,10 @@ final class WebSocketClient: WebSocketClientProtocol {
     var status: JarvisStatus = .idle
     var events: [TimelineEvent] = []
     var pendingApprovals: [TimelineEvent] = []
+    var containers: [ContainerInfo] = []
+    var availableTools: [String] = []
+    var activeTasks: [TaskProgress] = []
+    var isLoading = false
     var trustInfo: TrustInfo?
     var budgetInfo: BudgetInfo?
     var idleInfo: IdleInfo?
@@ -129,6 +137,7 @@ final class WebSocketClient: WebSocketClientProtocol {
     private let url: URL
     private var reconnectWork: DispatchWorkItem?
     private var statusTimer: Timer?
+    private var didBootstrapAfterConnect = false
 
     // Request/Response correlation
     private var pendingRequests: [String: PendingRequest] = [:]
@@ -165,7 +174,6 @@ final class WebSocketClient: WebSocketClientProtocol {
 
         task = session.webSocketTask(with: url)
         task?.resume()
-        isConnected = true
         lastError = nil
         receiveLoop()
         sendCommand(action: "get_status")
@@ -313,7 +321,7 @@ final class WebSocketClient: WebSocketClientProtocol {
                 self.receiveLoop()
             case .failure(let error):
                 DispatchQueue.main.async {
-                    self.isConnected = false
+                    self.updateState(.disconnected)
                     self.lastError = error.localizedDescription
                     self.scheduleReconnect()
                 }
@@ -376,33 +384,33 @@ final class WebSocketClient: WebSocketClientProtocol {
             }
 
             Task { @MainActor in
-                self.delegate?.didReceiveEvent(event)
+                let delegate = self.delegate
+                delegate?.didReceiveEvent(event)
+            }
+            // Update status from events
+            switch event.eventType {
+            case "task_start":
+                status = .building
+            case "task_complete":
+                status = pendingApprovals.isEmpty ? .completed : .waitingApproval
+            case "error":
+                status = .error
+            case "approval_needed":
+                status = .waitingApproval
+            case "idle_enter":
+                status = .idleProcessing
+            case "idle_exit":
+                status = .idle
+            case "hibernate_enter":
+                status = .hibernated
+            case "hibernate_exit":
+                status = .idle
+            default:
+                break
             }
         } catch {
             logger.error("Failed to decode TimelineEvent: \(error.localizedDescription)")
             lastError = "Invalid event data from server"
-        }
-
-        // Update status from events
-        switch event.eventType {
-        case "task_start":
-            status = .building
-        case "task_complete":
-            status = pendingApprovals.isEmpty ? .completed : .waitingApproval
-        case "error":
-            status = .error
-        case "approval_needed":
-            status = .waitingApproval
-        case "idle_enter":
-            status = .idleProcessing
-        case "idle_exit":
-            status = .idle
-        case "hibernate_enter":
-            status = .hibernated
-        case "hibernate_exit":
-            status = .idle
-        default:
-            break
         }
     }
 
@@ -447,8 +455,26 @@ final class WebSocketClient: WebSocketClientProtocol {
                 currentFeature = resp.currentFeature
                 currentSession = resp.currentSession
             }
-        } else if action == "run_task" {
+        case "get_containers":
+            if let data = json["data"] as? [String: Any],
+               let payload = try? JSONSerialization.data(withJSONObject: data),
+               let resp = try? JSONDecoder().decode(ContainersResponse.self, from: payload) {
+                containers = resp.containers
+                if let err = resp.error, !err.isEmpty {
+                    lastError = err
+                }
+            }
+        case "get_available_tools":
+            if let data = json["data"] as? [String: Any],
+               let payload = try? JSONSerialization.data(withJSONObject: data),
+               let resp = try? JSONDecoder().decode(AvailableToolsResponse.self, from: payload) {
+                availableTools = resp.tools
+            }
+        case "run_task":
             // Task was queued
+            break
+        default:
+            break
         }
     }
 
@@ -460,6 +486,20 @@ final class WebSocketClient: WebSocketClientProtocol {
         }
         reconnectWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+    }
+
+    private func updateState(_ newState: ConnectionState) {
+        connectionState = newState
+        let delegate = self.delegate
+        Task { @MainActor in
+            delegate?.connectionStateDidChange(newState)
+        }
+    }
+
+    private func establishConnectedSession() {
+        guard !didBootstrapAfterConnect else { return }
+        didBootstrapAfterConnect = true
+        updateState(.connected)
     }
 
     // MARK: - Event Management

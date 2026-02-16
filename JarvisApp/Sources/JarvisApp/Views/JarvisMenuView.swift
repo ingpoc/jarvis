@@ -58,8 +58,8 @@ struct JarvisMenuView: View {
             Divider()
 
             // Idle notification banner
-            if ws.status.isIdle && ws.idleInfo != nil {
-                IdleNotificationBanner(status: ws.status, idleInfo: ws.idleInfo!)
+            if webSocket.status.isIdle && webSocket.idleInfo != nil {
+                IdleNotificationBanner(status: webSocket.status, idleInfo: webSocket.idleInfo!)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
 
@@ -74,12 +74,12 @@ struct JarvisMenuView: View {
             Divider()
 
             // Pending approvals section
-            if !ws.pendingApprovals.isEmpty {
+            if !webSocket.pendingApprovals.isEmpty {
                 HStack {
                     Text("Pending Approvals")
                         .font(.headline)
                     Spacer()
-                    Text("\(ws.pendingApprovals.count)")
+                    Text("\(webSocket.pendingApprovals.count)")
                         .font(.caption)
                         .fontWeight(.bold)
                         .padding(.horizontal, 8)
@@ -98,32 +98,26 @@ struct JarvisMenuView: View {
                 Divider()
             }
 
-            // Timeline section
-            HStack {
-                Text("Timeline")
-                    .font(.headline)
-                Spacer()
-                if !ws.events.isEmpty {
-                    Text("\(ws.events.count) events")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            // Content
+            Group {
+                switch selectedView {
+                case .timeline:
+                    TimelineView()
+                case .commandCenter:
+                    CommandCenterView()
+                case .quickActions:
+                    QuickActionsGrid()
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .padding(.bottom, 4)
-
-                QuickActionsGrid()
-                    .frame(maxHeight: 300)
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
 
             // Bottom bar
             HStack {
                 Button(action: {
-                    ws.sendCommand(action: "get_status")
-                    ws.sendCommand(action: "get_timeline")
+                    webSocket.sendCommand(action: "get_status")
+                    webSocket.sendCommand(action: "get_timeline")
                 }) {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
@@ -131,6 +125,14 @@ struct JarvisMenuView: View {
                 .controlSize(.small)
 
                 Spacer()
+
+                Button(action: {
+                    openWindow(id: "full-app")
+                }) {
+                    Label("Open", systemImage: "arrow.up.right.square")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
 
                 Button(action: {
                     NSApplication.shared.terminate(nil)

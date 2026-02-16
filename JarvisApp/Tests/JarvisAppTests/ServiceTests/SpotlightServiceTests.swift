@@ -180,7 +180,15 @@ final class MockWebSocketClient: WebSocketClientProtocol {
     func send<T: Decodable>(action: String, data: [String: Any]?, timeout: TimeInterval) async throws -> T {
         // Mock implementation - return success for known types
         if T.self == JarvisStatusResponse.self {
-            return JarvisStatusResponse(status: .idle, currentSession: nil, currentFeature: nil, uptime: 100) as! T
+            return JarvisStatusResponse(
+                status: .idle,
+                currentSession: nil,
+                currentFeature: nil,
+                uptime: 100,
+                trust: nil,
+                budget: nil,
+                idleInfo: nil
+            ) as! T
         }
         if T.self == ContainersResponse.self {
             return ContainersResponse(containers: [], error: nil, rawOutput: nil) as! T

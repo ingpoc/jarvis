@@ -320,6 +320,15 @@ class JarvisDaemon:
         # Block until stop is requested
         await self._stop_event.wait()
 
+    def _on_slack_task_done(self, task: asyncio.Task) -> None:
+        """Log Slack task failures instead of letting them surface as unhandled."""
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("Slack bot task crashed")
+
     async def _iokit_idle_loop(self) -> None:
         """Poll IOKit HID idle time and trigger idle mode transitions.
 

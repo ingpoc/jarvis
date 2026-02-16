@@ -6,7 +6,7 @@ struct ApprovalView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(ws.pendingApprovals) { event in
-                ApprovalCard(event: event, ws: ws)
+                ApprovalEventCard(event: event, ws: ws)
             }
         }
     }
@@ -14,7 +14,7 @@ struct ApprovalView: View {
 
 // MARK: - Approval Card with Modify-Input
 
-struct ApprovalCard: View {
+struct ApprovalEventCard: View {
     let event: TimelineEvent
     let ws: WebSocketClient
     @State private var isEditing = false
@@ -75,7 +75,7 @@ struct ApprovalCard: View {
     }
 
     private func approve() {
-        let taskId = event.taskId ?? "\(event.id ?? 0)"
+        let taskId = event.taskId ?? event.id
         if isEditing && !modifiedInput.isEmpty {
             ws.sendCommand(action: "approve", data: [
                 "task_id": taskId,
@@ -88,7 +88,7 @@ struct ApprovalCard: View {
     }
 
     private func deny() {
-        let taskId = event.taskId ?? "\(event.id ?? 0)"
+        let taskId = event.taskId ?? event.id
         ws.sendCommand(action: "deny", data: ["task_id": taskId])
         ws.pendingApprovals.removeAll { $0.id == event.id }
     }

@@ -288,6 +288,8 @@ EOF
 }
 
 start_daemon_with_launchctl() {
+    # Ensure the daemon launch environment exists. The wrapper will fail-fast if missing.
+    write_daemon_launch_env
     write_daemon_launch_agent
     local gui_domain="gui/$(id -u)"
 
@@ -300,7 +302,7 @@ start_daemon_with_launchctl() {
     launchctl kickstart -k "$gui_domain/$DAEMON_LABEL" >/dev/null 2>&1 || true
 
     local pid
-    pid="$(launchctl print "$gui_domain/$DAEMON_LABEL" 2>/dev/null | awk -F'= ' '/pid = / {gsub(/;/, "", $2); print $2; exit}')"
+    pid="$(launchctl_service_pid "$DAEMON_LABEL" || true)"
     if [ -n "${pid:-}" ]; then
         write_pid "$PID_DIR/daemon.pid" "$pid"
         echo "  Daemon PID: $pid"
@@ -328,7 +330,7 @@ start_menubar_with_launchctl() {
     launchctl kickstart -k "$gui_domain/$MENUBAR_LABEL" >/dev/null 2>&1 || true
 
     local pid
-    pid="$(launchctl print "$gui_domain/$MENUBAR_LABEL" 2>/dev/null | awk -F'= ' '/pid = / {gsub(/;/, "", $2); print $2; exit}')"
+    pid="$(launchctl_service_pid "$MENUBAR_LABEL" || true)"
     if [ -n "${pid:-}" ]; then
         write_pid "$PID_DIR/menubar.pid" "$pid"
         echo "  Menu bar PID: $pid"

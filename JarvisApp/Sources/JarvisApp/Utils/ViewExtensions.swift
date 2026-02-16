@@ -50,30 +50,6 @@ extension TaskProgress {
     }
 }
 
-// MARK: - JarvisStatus Extensions
-
-extension JarvisStatus {
-    var color: Color {
-        switch self {
-        case .idle: .gray
-        case .building: .blue
-        case .testing: .yellow
-        case .error: .red
-        case .waitingApproval: .orange
-        }
-    }
-
-    var iconName: String {
-        switch self {
-        case .idle: return "brain.head.profile"
-        case .building: return "hammer"
-        case .testing: return "testtube.2"
-        case .error: return "xmark.octagon"
-        case .waitingApproval: return "hand.raised.fill"
-        }
-    }
-}
-
 // MARK: - Event Colors Utility
 
 struct EventColors {

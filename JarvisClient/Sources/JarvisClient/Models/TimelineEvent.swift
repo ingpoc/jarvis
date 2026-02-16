@@ -9,7 +9,7 @@ public struct TimelineEvent: Identifiable, Codable, Sendable {
     public let taskId: String?
     public let featureId: String?
     public let costUsd: Double?
-    public let metadata: [String: Any]?
+    public let metadata: [String: JSONValue]?
 
     public var date: Date { Date(timeIntervalSince1970: timestamp) }
 
@@ -28,7 +28,7 @@ public struct TimelineEvent: Identifiable, Codable, Sendable {
         taskId: String? = nil,
         featureId: String? = nil,
         costUsd: Double? = nil,
-        metadata: [String: Any]? = nil
+        metadata: [String: JSONValue]? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -60,6 +60,6 @@ public struct TimelineEvent: Identifiable, Codable, Sendable {
         taskId = try container.decodeIfPresent(String.self, forKey: .taskId)
         featureId = try container.decodeIfPresent(String.self, forKey: .featureId)
         costUsd = try container.decodeIfPresent(Double.self, forKey: .costUsd)
-        metadata = try container.decodeIfPresent([String: Any].self, forKey: .metadata)
+        metadata = try container.decodeIfPresent([String: JSONValue].self, forKey: .metadata)
     }
 }

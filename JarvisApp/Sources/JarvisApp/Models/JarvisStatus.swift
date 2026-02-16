@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 enum JarvisStatus: String, Codable {
     case idle

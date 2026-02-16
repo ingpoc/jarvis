@@ -67,7 +67,9 @@ struct VoiceView: View {
     }
 
     private func requestMicrophonePermission() {
-        AVAudioSession.sharedInstance().requestRecordPermission { _ in }
+        // macOS does not support AVAudioSession. Microphone permission is managed
+        // via AVCaptureDevice.
+        AVCaptureDevice.requestAccess(for: .audio) { _ in }
     }
 }
 
