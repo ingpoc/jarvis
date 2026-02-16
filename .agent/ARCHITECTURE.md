@@ -155,6 +155,32 @@ State/Observability
 7. Add OpenClaw delegation tools (`a2a_delegate`, `a2a_poll_task`, `a2a_cancel_task`).
 8. Add conformance and end-to-end integration tests.
 
+## Implemented (Promoted From In-Flight, 2026-02-16)
+
+The following items were implemented, reviewed by Codex, and promoted from
+`.agent/inflight-communication/ANALYSIS_IMPROVEMENT.md`:
+
+1. **A2 AgentCard builder (A2A discovery + host-aware URLs)**
+   - Jarvis serves `GET /.well-known/agent-card.json`.
+   - AgentCard and JSON-RPC `message/stream` `streamUrl` construction is host-aware (derived from request base URL).
+   - Code: `src/jarvis/a2a/agent_card.py`, `src/jarvis/a2a/server.py`
+
+2. **A4 Task store adapter over MemoryStore (durable A2A tasks)**
+   - A2A tasks are persisted in SQLite (`a2a_tasks` table) via `MemoryStore.db_path`.
+   - Non-terminal tasks are reloaded on startup.
+   - Code: `src/jarvis/a2a/task_store.py`
+
+3. **A7 SSE streaming surface (task lifecycle events)**
+   - SSE endpoint `GET /stream/{task_id}` streams task lifecycle events through a shared emitter.
+   - Code: `src/jarvis/a2a/streaming.py`
+
+4. **A11 Daemon integration (A2A server lifecycle)**
+   - Daemon can start/stop the A2A server when enabled, bootstrap token, and apply a `/health` readiness gate.
+   - Code: `src/jarvis/daemon.py`, `src/jarvis/a2a/server.py`, `src/jarvis/a2a/auth.py`
+
+Evidence:
+- Targeted tests live in `tests/test_a2a_evidence.py`.
+
 ## Refactor Priorities (Agreed)
 
 1. Split orchestration responsibilities into smaller modules:

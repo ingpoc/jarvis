@@ -233,6 +233,17 @@ Every implementation item must contain these fields:
    - Any summary/snapshot table in `.agent/inflight-communication/ANALYSIS_IMPROVEMENT.md` must reflect the same status state machine as per-item sections.
    - After Codex posts `REVIEW: CHANGES REQUESTED`, both the per-item `Status:` and the snapshot row must be `CHANGES_REQUESTED` until Claude posts a response and transitions to `READY_FOR_REREVIEW`.
 
+### 12.5.1 Promotion Rule (Mandatory)
+
+Once an item reaches `APPROVED`:
+1. Remove the item section from `.agent/inflight-communication/ANALYSIS_IMPROVEMENT.md`.
+2. Add the stable architectural outcome (not the in-flight review chatter) to `.agent/ARCHITECTURE.md`.
+3. Keep the inflight snapshot table containing only non-approved items.
+
+Rationale:
+- `.agent/ARCHITECTURE.md` is the stable projection (progressive disclosure).
+- `.agent/inflight-communication/ANALYSIS_IMPROVEMENT.md` is churn-only (in-flight coordination).
+
 ### 12.6 Claude Behavior After Review Comments
 
 When Codex requests changes, Claude must:
