@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct StatusBadge: View {
-    @Environment(WebSocketClient.self) private var ws
+    @Environment(\.webSocket) private var webSocket
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -74,6 +74,9 @@ struct StatusBadge: View {
                 }
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Jarvis status")
+        .accessibilityValue("\(webSocket.status.label), \(webSocket.connectionState == .connected ? "Connected" : "Disconnected")")
     }
 
     private func trustColor(tier: Int) -> Color {

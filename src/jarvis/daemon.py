@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
+import os
 import signal
 import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from urllib import parse, request
 
 import os
 
@@ -128,11 +135,16 @@ class JarvisDaemon:
         self._rest_app = None
         self._rest_runner = None
         self._slack_bot = None
+        self._slack_task: asyncio.Task | None = None
         self._voice_client = None
         self._idle_processor = None
         self._file_watcher = None
         self._running = False
         self._stop_event = asyncio.Event()
+        self._idle_loop_task: asyncio.Task | None = None
+        self._last_idle_run_ts: float = 0.0
+        self._idle_runs_today: int = 0
+        self._idle_runs_day: str = datetime.now().strftime("%Y-%m-%d")
 
     async def start(self) -> None:
         """Start all daemon services."""
@@ -173,16 +185,21 @@ class JarvisDaemon:
                     bot_token=self.config.slack.bot_token,
                     app_token=self.config.slack.app_token,
                     default_channel=self.config.slack.default_channel,
+                    research_channel=self.config.slack.research_channel,
                     event_collector=self.events,
                     orchestrator=self.orchestrator,
                 )
                 set_slack_bot(self._slack_bot)
-                await self._slack_bot.start()
-                logger.info("Slack bot started")
+                self._slack_task = asyncio.create_task(
+                    self._slack_bot.start(),
+                    name="jarvis-slack-bot",
+                )
+                self._slack_task.add_done_callback(self._on_slack_task_done)
+                logger.info("Slack bot start requested")
             except ImportError:
                 logger.warning("slack-bolt not installed, skipping Slack integration")
             except Exception as e:
-                logger.error(f"Slack bot failed to start: {e}")
+                logger.exception("Slack bot failed to start: %s", e)
 
         # Voice client (optional)
         if self.config.voice.enabled and self.config.voice.api_key:
@@ -202,7 +219,7 @@ class JarvisDaemon:
             except ImportError:
                 logger.warning("websockets not installed, skipping voice integration")
             except Exception as e:
-                logger.error(f"Voice client failed to connect: {e}")
+                logger.exception("Voice client failed to connect: %s", e)
 
         # Copy bootstrap skills on first daemon start
         try:
@@ -254,6 +271,7 @@ class JarvisDaemon:
 
         self._running = True
         logger.info("Jarvis daemon started")
+        self._start_idle_loop_if_enabled()
 
         # Block until stop is requested
         await self._stop_event.wait()
@@ -346,13 +364,29 @@ class JarvisDaemon:
             try:
                 await self._slack_bot.stop()
             except Exception as e:
-                logger.warning(f"Slack bot stop error: {e}")
+                logger.exception("Slack bot stop error: %s", e)
+        if self._slack_task:
+            self._slack_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._slack_task
+            self._slack_task = None
 
         if self._voice_client:
             try:
                 await self._voice_client.disconnect()
             except Exception as e:
-                logger.warning(f"Voice client disconnect error: {e}")
+                logger.exception("Voice client disconnect error: %s", e)
+
+        if self._idle_loop_task:
+            self._idle_loop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._idle_loop_task
+            self._idle_loop_task = None
+
+        try:
+            await self.orchestrator.close()
+        except Exception as e:
+            logger.exception("Orchestrator shutdown error: %s", e)
 
         self._running = False
         CrashRecovery.clear_pid()

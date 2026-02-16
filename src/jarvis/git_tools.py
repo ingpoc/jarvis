@@ -12,8 +12,18 @@ Pre-commit hooks are ALWAYS enforced (never --no-verify).
 import asyncio
 import json
 import os
+from pathlib import Path
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
+from jarvis.context_files import ensure_project_context_file, ensure_project_jarvis_file
+
+
+def _resolve_repo_path(path: str | None) -> str:
+    """Resolve potentially unsafe/invalid cwd values for git commands."""
+    cwd = (path or "").strip() if isinstance(path, str) else ""
+    if not cwd or cwd == "/" or not os.path.isdir(cwd):
+        return os.getcwd()
+    return cwd
 
 
 async def _run_git(*args: str, cwd: str | None = None, timeout: int = 30) -> dict:
@@ -57,9 +67,32 @@ async def git_clone(args: dict) -> dict:
     if path:
         cmd.append(path)
 
+    clone_cwd = os.getcwd()
     result = await _run_git(*cmd, timeout=120)
     if result["exit_code"] == 0:
-        return {"content": [{"type": "text", "text": f"Cloned {url}"}]}
+        if path:
+            clone_target = Path(path).expanduser()
+            if not clone_target.is_absolute():
+                clone_target = Path(clone_cwd) / clone_target
+        else:
+            repo_name = url.rstrip("/").rsplit("/", 1)[-1]
+            if repo_name.endswith(".git"):
+                repo_name = repo_name[:-4]
+            clone_target = Path(clone_cwd) / repo_name
+
+        seeded: list[str] = []
+        try:
+            if clone_target.exists() and (clone_target / ".git").exists():
+                if ensure_project_jarvis_file(clone_target):
+                    seeded.append("JARVIS.md")
+                if ensure_project_context_file(clone_target):
+                    seeded.append("PROJECT-CONTEXT.md")
+        except Exception:
+            # Clone succeeded; context seeding is best-effort.
+            seeded = []
+
+        seed_text = f" Seeded: {', '.join(seeded)}." if seeded else ""
+        return {"content": [{"type": "text", "text": f"Cloned {url}.{seed_text}"}]}
     return {"content": [{"type": "text", "text": f"Clone failed: {result['stderr']}"}]}
 
 
@@ -72,7 +105,7 @@ async def git_clone(args: dict) -> dict:
     {"path": str},
 )
 async def git_status(args: dict) -> dict:
-    path = args.get("path", os.getcwd())
+    path = _resolve_repo_path(args.get("path", os.getcwd()))
     result = await _run_git("status", "--short", cwd=path)
     return {"content": [{"type": "text", "text": result["stdout"] or "Clean working tree"}]}
 
@@ -83,7 +116,7 @@ async def git_status(args: dict) -> dict:
     {"path": str, "staged": bool, "file": str},
 )
 async def git_diff(args: dict) -> dict:
-    path = args.get("path", os.getcwd())
+    path = _resolve_repo_path(args.get("path", os.getcwd()))
     cmd = ["diff"]
     if args.get("staged", False):
         cmd.append("--cached")
@@ -100,7 +133,7 @@ async def git_diff(args: dict) -> dict:
     {"path": str, "count": int, "oneline": bool},
 )
 async def git_log(args: dict) -> dict:
-    path = args.get("path", os.getcwd())
+    path = _resolve_repo_path(args.get("path", os.getcwd()))
     count = args.get("count", 10)
     cmd = ["log", f"-{count}"]
     if args.get("oneline", True):
@@ -115,7 +148,7 @@ async def git_log(args: dict) -> dict:
     {"path": str, "all": bool},
 )
 async def git_branch(args: dict) -> dict:
-    path = args.get("path", os.getcwd())
+    path = _resolve_repo_path(args.get("path", os.getcwd()))
     cmd = ["branch"]
     if args.get("all", False):
         cmd.append("-a")
@@ -132,7 +165,7 @@ async def git_branch(args: dict) -> dict:
     {"path": str, "files": list},
 )
 async def git_add(args: dict) -> dict:
-    path = args.get("path", os.getcwd())
+    path = _resolve_repo_path(args.get("path", os.getcwd()))
     files = args.get("files", [])
     if not files:
         return {"content": [{"type": "text", "text": "Error: specify files to add (never use '.')"}]}
@@ -154,7 +187,7 @@ async def git_add(args: dict) -> dict:
     {"path": str, "message": str},
 )
 async def git_commit(args: dict) -> dict:
-    path = args.get("path", os.getcwd())
+    path = _resolve_repo_path(args.get("path", os.getcwd()))
     message = args.get("message", "")
     if not message:
         return {"content": [{"type": "text", "text": "Error: commit message required"}]}
@@ -176,7 +209,7 @@ async def git_commit(args: dict) -> dict:
     {"path": str, "branch_name": str, "from_branch": str},
 )
 async def git_create_branch(args: dict) -> dict:
-    path = args.get("path", os.getcwd())
+    path = _resolve_repo_path(args.get("path", os.getcwd()))
     branch = args["branch_name"]
     from_branch = args.get("from_branch")
 
@@ -196,7 +229,7 @@ async def git_create_branch(args: dict) -> dict:
     {"path": str, "action": str, "message": str},
 )
 async def git_stash(args: dict) -> dict:
-    path = args.get("path", os.getcwd())
+    path = _resolve_repo_path(args.get("path", os.getcwd()))
     action = args.get("action", "push")  # push, pop, list
     cmd = ["stash", action]
     if action == "push" and args.get("message"):
@@ -214,7 +247,7 @@ async def git_stash(args: dict) -> dict:
     {"path": str, "remote": str, "branch": str, "set_upstream": bool},
 )
 async def git_push(args: dict) -> dict:
-    path = args.get("path", os.getcwd())
+    path = _resolve_repo_path(args.get("path", os.getcwd()))
     remote = args.get("remote", "origin")
     branch = args.get("branch")
 
@@ -246,7 +279,7 @@ async def git_push(args: dict) -> dict:
     {"path": str, "title": str, "body": str, "base": str, "draft": bool},
 )
 async def git_create_pr(args: dict) -> dict:
-    path = args.get("path", os.getcwd())
+    path = _resolve_repo_path(args.get("path", os.getcwd()))
     title = args.get("title", "")
     body = args.get("body", "")
     base = args.get("base", "main")

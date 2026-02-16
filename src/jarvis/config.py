@@ -9,6 +9,7 @@ JARVIS_HOME = Path.home() / ".jarvis"
 JARVIS_DB = JARVIS_HOME / "jarvis.db"
 JARVIS_CONFIG = JARVIS_HOME / "config.json"
 JARVIS_LOGS = JARVIS_HOME / "logs"
+DEFAULT_WORKSPACE_ROOT = "/Users/gurusharan/Documents/remote-claude/Jarvisworkspace"
 
 
 @dataclass
@@ -56,6 +57,7 @@ class SlackConfig:
     bot_token: str = ""
     app_token: str = ""
     default_channel: str = "#jarvis"
+    research_channel: str = "#jarvisresearch"
     enabled: bool = False
 
 
@@ -151,6 +153,8 @@ class JarvisConfig:
                     setattr(config.resources, k, v)
             if "trust_tier" in data:
                 config.trust_tier = data["trust_tier"]
+            if "workspace_root" in data:
+                config.workspace_root = data["workspace_root"]
 
         # Env var overrides for tokens
         slack_bot = os.environ.get("JARVIS_SLACK_BOT_TOKEN")
@@ -166,6 +170,9 @@ class JarvisConfig:
             config.voice.api_key = voice_key
         if voice_agent:
             config.voice.agent_id = voice_agent
+        workspace_root = os.environ.get("JARVIS_WORKSPACE")
+        if workspace_root:
+            config.workspace_root = workspace_root
 
         # Env var overrides (supports GLM 4.7 / z.ai proxy)
         opus_model = os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL")
@@ -210,6 +217,7 @@ class JarvisConfig:
                 "bot_token": self.slack.bot_token,
                 "app_token": self.slack.app_token,
                 "default_channel": self.slack.default_channel,
+                "research_channel": self.slack.research_channel,
                 "enabled": self.slack.enabled,
             },
             "voice": {

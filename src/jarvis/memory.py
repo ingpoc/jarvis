@@ -14,6 +14,30 @@ from pathlib import Path
 
 from jarvis.config import JARVIS_DB, JARVIS_HOME
 
+STATUS_ALIAS_TO_CANONICAL = {
+    "queued": "pending",
+    "running": "in_progress",
+    "success": "completed",
+    "error": "failed",
+}
+VALID_TASK_STATUSES = {
+    "pending",
+    "in_progress",
+    "paused",
+    "completed",
+    "failed",
+    "cancelled",
+}
+TERMINAL_TASK_STATUSES = {"completed", "failed", "cancelled"}
+VALID_TRANSITIONS = {
+    "pending": {"in_progress", "failed", "cancelled"},
+    "in_progress": {"paused", "completed", "failed", "cancelled"},
+    "paused": {"in_progress", "failed", "cancelled"},
+    "completed": set(),
+    "failed": set(),
+    "cancelled": set(),
+}
+
 
 @dataclass
 class Task:
@@ -182,6 +206,10 @@ class MemoryStore:
         return sqlite3.connect(self.db_path)
 
     # --- Task management ---
+    @staticmethod
+    def _canonical_status(status: str) -> str:
+        raw = (status or "").strip().lower()
+        return STATUS_ALIAS_TO_CANONICAL.get(raw, raw)
 
     def create_task(self, task_id: str, description: str, project_path: str) -> Task:
         now = time.time()
@@ -222,6 +250,21 @@ class MemoryStore:
         conn.commit()
         conn.close()
 
+    def transition_task(self, task_id: str, to_status: str, **kwargs) -> None:
+        """Apply a validated task status transition."""
+        task = self.get_task(task_id)
+        if task is None:
+            raise ValueError(f"Task not found: {task_id}")
+        current = self._canonical_status(task.status)
+        target = self._canonical_status(to_status)
+        if target not in VALID_TASK_STATUSES:
+            raise ValueError(f"Invalid task status: {to_status}")
+        if current != target:
+            allowed = VALID_TRANSITIONS.get(current, set())
+            if target not in allowed:
+                raise ValueError(f"Invalid transition: {current} -> {target}")
+        self.update_task(task_id, status=target, **kwargs)
+
     def get_task(self, task_id: str) -> Task | None:
         conn = sqlite3.connect(self.db_path)
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -238,12 +281,39 @@ class MemoryStore:
             query += " AND project_path = ?"
             params.append(project_path)
         if status:
+            status = self._canonical_status(status)
             query += " AND status = ?"
             params.append(status)
         query += " ORDER BY created_at DESC"
         rows = conn.execute(query, params).fetchall()
         conn.close()
         return [Task(*r) for r in rows]
+
+    def recover_stale_in_progress_tasks(
+        self,
+        project_path: str,
+        stale_after_seconds: int,
+        reason: str,
+    ) -> list[str]:
+        """Mark stale in-progress tasks as failed and return affected IDs."""
+        stale_after_seconds = max(1, int(stale_after_seconds))
+        cutoff = time.time() - stale_after_seconds
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT id, result FROM tasks WHERE project_path = ? AND status = 'in_progress' AND updated_at < ?",
+            (project_path, cutoff),
+        ).fetchall()
+        task_ids: list[str] = []
+        for task_id, existing_result in rows:
+            out = (existing_result or "")[:4500] + f"\n\n[{reason}]"
+            conn.execute(
+                "UPDATE tasks SET status = 'failed', result = ?, updated_at = ? WHERE id = ?",
+                (out, time.time(), task_id),
+            )
+            task_ids.append(task_id)
+        conn.commit()
+        conn.close()
+        return task_ids
 
     # --- Session summaries ---
 

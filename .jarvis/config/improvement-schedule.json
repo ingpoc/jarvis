@@ -1,0 +1,92 @@
+{
+  "version": "1.0.0",
+  "schedule": {
+    "daily": {
+      "name": "Daily Review",
+      "frequency": "Every 24 hours",
+      "actions": [
+        "Check session logs for anomalies",
+        "Review Context Graph entries",
+        "Identify quick wins for optimization"
+      ],
+      "estimated_time": "5-10 minutes",
+      "triggers": ["end_of_workday"]
+    },
+    "weekly": {
+      "name": "Weekly Optimization",
+      "frequency": "Every 7 days or after 5 tasks",
+      "actions": [
+        "Query Context Graph for failures and bottlenecks",
+        "Analyze phase time variance",
+        "Identify workflow friction points",
+        "Propose and test workflow improvements",
+        "Update documentation if improvements validated"
+      ],
+      "estimated_time": "30-60 minutes",
+      "triggers": ["5_tasks_completed", "7_days_passed"]
+    },
+    "monthly": {
+      "name": "Monthly Research & Benchmark",
+      "frequency": "Every 30 days",
+      "actions": [
+        "WebSearch for AI development best practices",
+        "Research new tools and frameworks",
+        "Benchmark current workflow performance",
+        "Experiment with new approaches in isolated container",
+        "Roll out improvements if benchmarks show gains"
+      ],
+      "estimated_time": "2-4 hours",
+      "triggers": ["30_days_passed", "major_tool_release"]
+    },
+    "quarterly": {
+      "name": "Quarterly Overhaul",
+      "frequency": "Every 90 days",
+      "actions": [
+        "Comprehensive workflow audit",
+        "Solicit team feedback",
+        "Consider major restructuring",
+        "Update container templates",
+        "Revise phase documentation",
+        "Archive old session logs"
+      ],
+      "estimated_time": "4-8 hours",
+      "triggers": ["90_days_passed", "major_paradigm_shift"]
+    }
+  },
+  "improvement_triggers": {
+    "immediate": [
+      {
+        "condition": "Same workflow step fails 3+ times",
+        "action": "Pause and investigate root cause immediately"
+      },
+      {
+        "condition": "New MCP tool available that would help",
+        "action": "Test tool in container, integrate if useful"
+      },
+      {
+        "condition": "Critical bug in workflow discovered",
+        "action": "Fix immediately, document the issue"
+      }
+    ],
+    "batched": [
+      {
+        "condition": "Average phase time exceeds budget by 50%",
+        "action": "Add to weekly review agenda"
+      },
+      {
+        "condition": "Pattern emerges across multiple tasks",
+        "action": "Discuss in weekly optimization"
+      }
+    ]
+  },
+  "metrics_to_track": {
+    "phase_times": "Duration of each workflow phase",
+    "success_rate": "Percentage of tasks completed successfully",
+    "test_pass_rate": "Percentage of tests passing on first run",
+    "container_setup_time": "Time to create and setup containers",
+    "bug_fix_iterations": "Number of iterations to fix failures",
+    "context_graph_hits": "How often past decisions help current task"
+  },
+  "last_review": null,
+  "next_review": "2025-02-19"
+}

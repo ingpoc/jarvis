@@ -6,6 +6,8 @@ Each task gets its own lightweight Linux VM with dedicated networking.
 
 import asyncio
 import json
+import os
+import shutil
 import uuid
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -13,10 +15,33 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 from jarvis.config import JarvisConfig
 from jarvis.container_templates import detect_template, get_template, build_setup_script
 
+KEEPALIVE_CMD = "trap : TERM INT; while true; do sleep 86400; done"
+
 
 async def _run_container_cmd(*args: str, timeout: int = 60) -> dict:
     """Execute a container CLI command and return parsed output."""
-    cmd = ["container", *args]
+    container_bin = (
+        os.environ.get("CONTAINER_BIN")
+        or shutil.which("container")
+        or next(
+            (
+                p for p in (
+                    "/opt/homebrew/bin/container",
+                    "/usr/local/bin/container",
+                    "/usr/bin/container",
+                )
+                if os.path.exists(p)
+            ),
+            None,
+        )
+    )
+    if not container_bin:
+        raise FileNotFoundError(
+            "container CLI not found. Checked CONTAINER_BIN, PATH, "
+            "/opt/homebrew/bin/container, /usr/local/bin/container, /usr/bin/container"
+        )
+
+    cmd = [container_bin, *args]
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -28,6 +53,52 @@ async def _run_container_cmd(*args: str, timeout: int = 60) -> dict:
         "stdout": stdout.decode().strip(),
         "stderr": stderr.decode().strip(),
     }
+
+
+def _normalize_string_list(value) -> list[str]:
+    """Normalize list-like tool inputs.
+
+    Accepts:
+    - list[str]
+    - comma-separated string
+    - empty string / None => []
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        return [part.strip() for part in stripped.split(",") if part.strip()]
+    raise ValueError(f"Expected list or string, got {type(value).__name__}")
+
+
+async def _get_container_status(container_id: str) -> str:
+    """Return normalized status for a container ID."""
+    result = await _run_container_cmd("list", "--all", "--format", "json", timeout=15)
+    if result["exit_code"] != 0 or not result["stdout"]:
+        return "unknown"
+    try:
+        containers = json.loads(result["stdout"])
+    except json.JSONDecodeError:
+        return "unknown"
+
+    for container in containers:
+        config = container.get("configuration", {}) or {}
+        if config.get("id") == container_id:
+            status = container.get("status", "unknown")
+            return status.lower() if isinstance(status, str) else "unknown"
+    return "not_found"
+
+
+async def _collect_container_diagnostics(container_id: str) -> dict:
+    """Collect status + recent logs for better error payloads."""
+    status = await _get_container_status(container_id)
+    logs_result = await _run_container_cmd("logs", "-n", "80", container_id, timeout=15)
+    logs_text = logs_result["stdout"] or logs_result["stderr"]
+    return {"container_status": status, "logs_tail": logs_text[:4000]}
 
 
 # --- MCP Tools ---
@@ -45,6 +116,9 @@ async def _run_container_cmd(*args: str, timeout: int = 60) -> dict:
         "cpus": int,
         "memory": str,
         "ssh_forward": bool,
+        "keep_alive": bool,
+        "command": str,
+        "mode": str,  # service | job
         "template": str,
     },
 )
@@ -56,6 +130,16 @@ async def container_run(args: dict) -> dict:
     cpus = args.get("cpus", config.container.default_cpus)
     memory = args.get("memory", config.container.default_memory)
 
+    try:
+        volumes = _normalize_string_list(args.get("volumes", []))
+        ports = _normalize_string_list(args.get("ports", []))
+        env_vars = _normalize_string_list(args.get("env", []))
+    except ValueError as e:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "status": "error",
+            "error": f"Invalid container_run input: {e}",
+        })}]}
+
     cmd_args = [
         "run", "-d",
         "--name", name,
@@ -64,27 +148,66 @@ async def container_run(args: dict) -> dict:
         "--network", config.container.network,
     ]
 
-    for vol in args.get("volumes", []):
-        cmd_args.extend(["--volume", vol])
+    for vol in volumes:
+        if vol and ":" in vol:  # Only add valid volume mappings with colon
+            cmd_args.extend(["--volume", vol])
 
-    for port in args.get("ports", []):
-        cmd_args.extend(["--publish", port])
+    for port in ports:
+        if port and ":" in str(port):  # Only add valid port mappings with colon
+            cmd_args.extend(["--publish", port])
 
-    for env_var in args.get("env", []):
+    for env_var in env_vars:
         cmd_args.extend(["--env", env_var])
 
     if args.get("ssh_forward", False):
         cmd_args.append("--ssh")
 
     cmd_args.append(image)
+    explicit_command = str(args.get("command", "")).strip()
+    mode = str(args.get("mode", "service") or "service").strip().lower()
+    if mode not in {"service", "job"}:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "status": "error",
+            "error": f"Invalid mode '{mode}'. Expected 'service' or 'job'.",
+        })}]}
+
+    keep_alive = bool(args.get("keep_alive", True))
+    if mode == "job" and not explicit_command:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "status": "error",
+            "error": "Job mode requires a non-empty command.",
+            "hint": "Use mode='service' for long-running containers or provide command for mode='job'.",
+        })}]}
+
+    if explicit_command:
+        cmd_args.extend(["sh", "-lc", explicit_command])
+    elif keep_alive:
+        # Keep containers alive for interactive development workflows.
+        cmd_args.extend(["sh", "-lc", KEEPALIVE_CMD])
 
     result = await _run_container_cmd(*cmd_args, timeout=120)
 
     if result["exit_code"] == 0:
+        await asyncio.sleep(0.5)
+        status = await _get_container_status(name)
+        if mode == "service" and status not in ("running", "starting"):
+            diagnostics = await _collect_container_diagnostics(name)
+            return {"content": [{"type": "text", "text": json.dumps({
+                "status": "error",
+                "container_id": name,
+                "error": "Service-mode container exited immediately after start",
+                "start_output": result["stdout"] or result["stderr"],
+                "mode": mode,
+                **diagnostics,
+            })}]}
+
         # Resolve and apply container template
         template_name = args.get("template", "auto")
         template = None
-        if template_name and template_name != "auto":
+        # Empty template means "no template"; omitted means "auto".
+        if template_name == "":
+            template = None
+        elif template_name and template_name != "auto":
             template = get_template(template_name)
         else:
             import os
@@ -101,12 +224,41 @@ async def container_run(args: dict) -> dict:
                 "template": template.name,
                 "setup_exit_code": setup_result["exit_code"],
             }
+            if setup_result["exit_code"] != 0:
+                diagnostics = await _collect_container_diagnostics(name)
+                return {"content": [{"type": "text", "text": json.dumps({
+                    "status": "error",
+                    "container_id": name,
+                    "error": "Template setup failed",
+                    "template": template.name,
+                    "setup_exit_code": setup_result["exit_code"],
+                    "setup_stdout": setup_result["stdout"][:2000],
+                    "setup_stderr": setup_result["stderr"][:2000],
+                    "mode": mode,
+                    **diagnostics,
+                })}]}
+
+        status = await _get_container_status(name)
+        if mode == "service" and status != "running":
+            diagnostics = await _collect_container_diagnostics(name)
+            return {"content": [{"type": "text", "text": json.dumps({
+                "status": "error",
+                "container_id": name,
+                "error": "Service-mode container not running after initialization",
+                "template": setup_info["template"] if setup_info else None,
+                "setup_exit_code": setup_info["setup_exit_code"] if setup_info else None,
+                "mode": mode,
+                **diagnostics,
+            })}]}
 
         response = {
-            "status": "running",
+            "status": "running" if status == "running" else "accepted",
             "container_id": name,
             "image": image,
             "message": result["stdout"],
+            "mode": mode,
+            "container_status": status,
+            "keep_alive": keep_alive and not explicit_command,
         }
         if setup_info:
             response["template"] = setup_info["template"]
@@ -136,6 +288,15 @@ async def container_exec(args: dict) -> dict:
     container_id = args["container_id"]
     command = args["command"]
     timeout = args.get("timeout", 300)
+    status = await _get_container_status(container_id)
+    if status != "running":
+        diagnostics = await _collect_container_diagnostics(container_id)
+        return {"content": [{"type": "text", "text": json.dumps({
+            "exit_code": 125,
+            "stdout": "",
+            "stderr": f"container is not running (status={status})",
+            **diagnostics,
+        })}]}
 
     cmd_args = ["exec"]
 

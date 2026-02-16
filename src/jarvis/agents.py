@@ -13,6 +13,7 @@ orchestrated through the main agent loop.
 import asyncio
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -208,8 +209,14 @@ class MultiAgentPipeline:
     """Orchestrates the Planner -> Executor(s) -> Tester -> Reviewer pipeline."""
 
     def __init__(self, project_path: str | None = None):
-        self.project_path = project_path or os.getcwd()
         self.config = JarvisConfig.load()
+        default_workspace = (
+            os.environ.get("JARVIS_WORKSPACE")
+            or self.config.workspace_root
+            or os.getcwd()
+        )
+        self.project_path = str(Path(project_path or default_workspace).expanduser().resolve())
+        Path(self.project_path).mkdir(parents=True, exist_ok=True)
         self.trust = TrustEngine()
         self.budget = BudgetController()
         self.memory = MemoryStore()
@@ -243,6 +250,50 @@ class MultiAgentPipeline:
             "tester": TESTER_AGENT,
             "reviewer": REVIEWER_AGENT,
         }
+
+    @staticmethod
+    def _extract_json_candidates(text: str) -> list[dict]:
+        """Extract JSON object candidates from markdown/code-fenced text."""
+        candidates: list[dict] = []
+        if not text.strip():
+            return candidates
+
+        # Prefer explicit json code fences first.
+        fence_matches = re.findall(r"```json\s*(\{[\s\S]*?\})\s*```", text, flags=re.IGNORECASE)
+        for raw in fence_matches:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    candidates.append(parsed)
+            except Exception:
+                pass
+
+        # Fallback: try raw object fragments.
+        for raw in re.findall(r"(\{[\s\S]*\})", text):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    candidates.append(parsed)
+            except Exception:
+                continue
+        return candidates
+
+    def _extract_plan(self, text_fragments: list[str]) -> dict | None:
+        """Find the latest planner-like JSON with subtasks."""
+        joined = "\n".join(text_fragments[-30:])
+        for candidate in reversed(self._extract_json_candidates(joined)):
+            subtasks = candidate.get("subtasks")
+            if isinstance(subtasks, list):
+                return candidate
+        return None
+
+    def _extract_review(self, text_fragments: list[str]) -> dict | None:
+        """Find the latest review-like JSON with approval/issue fields."""
+        joined = "\n".join(text_fragments[-30:])
+        for candidate in reversed(self._extract_json_candidates(joined)):
+            if any(k in candidate for k in ("approved", "issues", "summary", "suggestions")):
+                return candidate
+        return None
 
     async def _pre_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
         """Enforce budget and trust on every tool call."""
@@ -398,10 +449,12 @@ class MultiAgentPipeline:
         """
         task_id = f"task-{uuid.uuid4().hex[:8]}"
         result = PipelineResult(task_id=task_id, status="in_progress")
+        text_fragments: list[str] = []
+        tool_uses: list[str] = []
 
         # Record task
         self.memory.create_task(task_id, task_description, self.project_path)
-        self.memory.update_task(task_id, status="in_progress")
+        self.memory.transition_task(task_id, "in_progress")
 
         await notify_task_started(task_id, task_description)
         if callback:
@@ -441,9 +494,11 @@ Report progress at each step."""
                     elif isinstance(message, AssistantMessage):
                         for block in message.content:
                             if isinstance(block, TextBlock):
+                                text_fragments.append(block.text)
                                 if callback:
                                     callback("agent_text", {"text": block.text[:300]})
                             elif isinstance(block, ToolUseBlock):
+                                tool_uses.append(block.name)
                                 if callback:
                                     callback("agent_tool", {"tool": block.name})
 
@@ -469,10 +524,39 @@ Report progress at each step."""
         finally:
             await self._cleanup_containers()
 
+        result.plan = self._extract_plan(text_fragments)
+        result.review = self._extract_review(text_fragments)
+        if result.plan and isinstance(result.plan.get("subtasks"), list):
+            for sub in result.plan.get("subtasks", []):
+                if not isinstance(sub, dict):
+                    continue
+                sub_id = str(sub.get("id", f"subtask-{len(result.subtask_results)+1}"))
+                desc = str(sub.get("description", "")).strip()
+                files = sub.get("files") if isinstance(sub.get("files"), list) else []
+                result.subtask_results.append(
+                    SubtaskResult(
+                        subtask_id=sub_id,
+                        status="completed" if result.status == "completed" else "failed",
+                        output=desc[:500],
+                        files_changed=[str(f) for f in files[:40]],
+                    )
+                )
+        elif tool_uses:
+            # Fallback: at least reflect executed tool sequence as pseudo-subtasks.
+            for idx, tool_name in enumerate(tool_uses[:40], start=1):
+                result.subtask_results.append(
+                    SubtaskResult(
+                        subtask_id=f"tool-{idx}",
+                        status="completed" if result.status == "completed" else "failed",
+                        output=f"Tool used: {tool_name}",
+                    )
+                )
+
         # Update task record
-        self.memory.update_task(
+        final_status = result.status if result.status in ("completed", "failed", "cancelled") else "failed"
+        self.memory.transition_task(
             task_id,
-            status=result.status,
+            final_status,
             cost_usd=result.total_cost_usd,
             turns=result.total_turns,
         )
