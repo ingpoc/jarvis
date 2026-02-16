@@ -1,12 +1,17 @@
 """A2A Task Store: wraps MemoryStore for A2A protocol tasks."""
 
 import json
+import logging
+import sqlite3
+import threading
 import time
 import uuid
 
 from jarvis.a2a.models import A2AArtifact, A2ATask, A2ATaskState, map_internal_to_a2a
 from jarvis.config import JARVIS_HOME
 from jarvis.memory import MemoryStore
+
+logger = logging.getLogger(__name__)
 
 
 # Dedicated A2A tasks table (separate from internal tasks)
@@ -28,32 +33,45 @@ CREATE TABLE IF NOT EXISTS a2a_tasks (
 class A2ATaskStore:
     """Manages A2A tasks with MemoryStore persistence."""
 
+    _lock = threading.Lock()
+
     def __init__(self, memory: MemoryStore | None = None):
         self.memory = memory or MemoryStore()
         self._a2a_tasks: dict[str, A2ATask] = {}  # In-memory cache
+        self._db_path = self.memory.db_path
+        self._local_conn: sqlite3.Connection | None = None
         self._init_a2a_table()
         self._load_cached_tasks()
 
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get or create a single connection for this instance."""
+        with self._lock:
+            if self._local_conn is None:
+                self._local_conn = sqlite3.connect(
+                    self._db_path,
+                    timeout=30.0,
+                    check_same_thread=False,
+                )
+                self._local_conn.execute("PRAGMA journal_mode=WAL")
+            return self._local_conn
+
     def _init_a2a_table(self) -> None:
         """Initialize A2A tasks table in database."""
-        import sqlite3
-        conn = sqlite3.connect(self.memory.db_path)
-        conn.executescript(A2A_TASKS_TABLE)
-        conn.commit()
-        conn.close()
+        with self._lock:
+            conn = self._get_connection()
+            conn.executescript(A2A_TASKS_TABLE)
+            conn.commit()
 
     def _load_cached_tasks(self) -> None:
         """Load recent non-terminal tasks from database on startup."""
-        import sqlite3
         terminal_states = {"completed", "failed", "canceled", "rejected"}
         try:
-            conn = sqlite3.connect(self.memory.db_path)
-            rows = conn.execute(
-                "SELECT id, status, message, context_id, result, error, artifacts_json, created_at, updated_at "
-                "FROM a2a_tasks WHERE status NOT IN (?, ?, ?, ?) ORDER BY updated_at DESC LIMIT 100",
-                list(terminal_states),
-            ).fetchall()
-            conn.close()
+            with self._lock:
+                rows = self._get_connection().execute(
+                    "SELECT id, status, message, context_id, result, error, artifacts_json, created_at, updated_at "
+                    "FROM a2a_tasks WHERE status NOT IN (?, ?, ?, ?) ORDER BY updated_at DESC LIMIT 100",
+                    list(terminal_states),
+                ).fetchall()
 
             for row in rows:
                 task = A2ATask(
@@ -68,8 +86,8 @@ class A2ATaskStore:
                     updated_at=row[8],
                 )
                 self._a2a_tasks[task.id] = task
-        except Exception:
-            pass  # Table may not exist yet
+        except Exception as e:
+            logger.debug("Failed to load cached tasks: %s", e)
 
     def _parse_artifacts(self, artifacts_json: str | None) -> list[A2AArtifact]:
         """Parse artifacts from JSON string."""
@@ -83,22 +101,20 @@ class A2ATaskStore:
 
     def _persist_task(self, task: A2ATask) -> None:
         """Persist task to database."""
-        import sqlite3
         artifacts_json = json.dumps([
             {"name": a.name, "content": a.content, "mime_type": a.mime_type}
             for a in task.artifacts
         ]) if task.artifacts else None
 
-        conn = sqlite3.connect(self.memory.db_path)
-        conn.execute(
-            "INSERT OR REPLACE INTO a2a_tasks "
-            "(id, status, message, context_id, result, error, artifacts_json, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (task.id, task.status.value, task.message, task.context_id,
-             task.result, task.error, artifacts_json, task.created_at, task.updated_at),
-        )
-        conn.commit()
-        conn.close()
+        with self._lock:
+            self._get_connection().execute(
+                "INSERT OR REPLACE INTO a2a_tasks "
+                "(id, status, message, context_id, result, error, artifacts_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (task.id, task.status.value, task.message, task.context_id,
+                 task.result, task.error, artifacts_json, task.created_at, task.updated_at),
+            )
+            self._get_connection().commit()
 
     def create_task(
         self,
@@ -126,15 +142,13 @@ class A2ATaskStore:
             return self._a2a_tasks[task_id]
 
         # Check database
-        import sqlite3
         try:
-            conn = sqlite3.connect(self.memory.db_path)
-            row = conn.execute(
-                "SELECT id, status, message, context_id, result, error, artifacts_json, created_at, updated_at "
-                "FROM a2a_tasks WHERE id = ?",
-                (task_id,),
-            ).fetchone()
-            conn.close()
+            with self._lock:
+                row = self._get_connection().execute(
+                    "SELECT id, status, message, context_id, result, error, artifacts_json, created_at, updated_at "
+                    "FROM a2a_tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
 
             if row:
                 task = A2ATask(
@@ -150,8 +164,8 @@ class A2ATaskStore:
                 )
                 self._a2a_tasks[task_id] = task  # Cache it
                 return task
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to get task %s from database: %s", task_id, e)
 
         return None
 
@@ -206,9 +220,7 @@ class A2ATaskStore:
     ) -> list[A2ATask]:
         """List tasks with optional filters."""
         # Query from database for complete list
-        import sqlite3
         try:
-            conn = sqlite3.connect(self.memory.db_path)
             query = "SELECT id, status, message, context_id, result, error, artifacts_json, created_at, updated_at FROM a2a_tasks WHERE 1=1"
             params: list = []
 
@@ -222,8 +234,8 @@ class A2ATaskStore:
             query += " ORDER BY created_at DESC LIMIT ?"
             params.append(limit)
 
-            rows = conn.execute(query, params).fetchall()
-            conn.close()
+            with self._lock:
+                rows = self._get_connection().execute(query, params).fetchall()
 
             tasks = []
             for row in rows:
@@ -240,7 +252,8 @@ class A2ATaskStore:
                 )
                 tasks.append(task)
             return tasks
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to list tasks from database, using cache: %s", e)
             # Fallback to in-memory cache
             tasks = list(self._a2a_tasks.values())
             if context_id:
@@ -249,3 +262,19 @@ class A2ATaskStore:
                 tasks = [t for t in tasks if t.status == status]
             tasks.sort(key=lambda t: t.created_at, reverse=True)
             return tasks[:limit]
+
+    def close(self) -> None:
+        """Close the database connection."""
+        with self._lock:
+            if self._local_conn is not None:
+                self._local_conn.close()
+                self._local_conn = None
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - close connection."""
+        self.close()
+        return False

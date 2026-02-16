@@ -80,6 +80,7 @@ class A2AConfig:
     port: int = 9848  # Can override with JARVIS_A2A_PORT env var
     default_trust_tier: int = 1
     token_path: str = ""  # Empty means ~/.jarvis/a2a_token
+    task_timeout_seconds: int = 300  # 5 minutes for blocking tasks
 
 
 @dataclass
@@ -261,6 +262,7 @@ class JarvisConfig:
                 "port": self.a2a.port,
                 "default_trust_tier": self.a2a.default_trust_tier,
                 "token_path": self.a2a.token_path,
+                "task_timeout_seconds": self.a2a.task_timeout_seconds,
             },
             "trust_tier": self.trust_tier,
         }

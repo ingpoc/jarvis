@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 class JarvisAgentExecutor:
     """Executes A2A tasks using the Jarvis orchestration layer."""
 
+    DEFAULT_TIMEOUT_SECONDS = 300
+
     def __init__(
         self,
         config: JarvisConfig,
@@ -34,6 +36,7 @@ class JarvisAgentExecutor:
         self._active_tasks: dict[str, asyncio.Task] = {}
         self._task_clients: dict[str, ClaudeSDKClient] = {}
         self._emitter = get_emitter()
+        self._timeout = config.a2a.task_timeout_seconds
 
     def set_orchestrator(self, orchestrator: Any) -> None:
         """Set the orchestrator instance for task execution."""
@@ -146,7 +149,19 @@ class JarvisAgentExecutor:
         self._active_tasks[task.id] = coro_task
 
         if blocking:
-            await coro_task
+            try:
+                await asyncio.wait_for(coro_task, timeout=self._timeout)
+            except asyncio.TimeoutError:
+                self.task_store.update_task_status(
+                    task.id,
+                    A2ATaskState.FAILED,
+                    error=f"Task timed out after {self._timeout} seconds",
+                )
+                await self._emit_event(task.id, "task_failed", {
+                    "taskId": task.id,
+                    "status": A2ATaskState.FAILED.value,
+                    "error": f"Task timed out after {self._timeout} seconds",
+                })
 
         return self.task_store.get_task(task.id) or task
 

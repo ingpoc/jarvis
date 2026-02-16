@@ -89,6 +89,10 @@ async def stream_task_updates(task_id: str, timeout: float = 300.0) -> AsyncIter
             except asyncio.TimeoutError:
                 # Send keepalive
                 yield f"event: keepalive\ndata: {{}}\n\n"
+            except asyncio.CancelledError:
+                # Client disconnected - cleanup and re-raise
+                emitter.unsubscribe(task_id, queue)
+                raise
     finally:
         emitter.unsubscribe(task_id, queue)
 

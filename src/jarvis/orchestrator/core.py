@@ -16,15 +16,13 @@ import json
 import logging
 import os
 import re
-import shutil
 import time
 import traceback
 import uuid
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from typing import Any
 
 from claude_agent_sdk import (
-    AgentDefinition,
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
@@ -44,15 +42,13 @@ from jarvis.context_files import (
     append_project_turn,
     ensure_core_context_files,
     ensure_project_jarvis_file,
-    load_core_context,
-    should_use_project_jarvis,
 )
 from jarvis.container_tools import create_container_mcp_server, cleanup_containers
-from jarvis.events import EventCollector, EVENT_TOOL_USE, EVENT_TASK_START, EVENT_TASK_COMPLETE, EVENT_ERROR
+from jarvis.events import EventCollector, EVENT_TASK_START, EVENT_TASK_COMPLETE, EVENT_ERROR
 from jarvis.git_tools import create_git_mcp_server
 from jarvis.harness import BuildHarness
 from jarvis.memory import MemoryStore
-from jarvis.loop_detector import LoopDetector, LoopAction, build_intervention_message
+from jarvis.loop_detector import LoopDetector
 from jarvis.notifications import (
     notify_approval_needed,
     notify_task_completed,
@@ -61,14 +57,16 @@ from jarvis.notifications import (
 )
 from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
-from jarvis.jarvis_hooks import build_deny_response
 from jarvis.session_manager import SessionManager
 from jarvis.agents import MultiAgentPipeline
 from jarvis.model_router import get_model_router
-from jarvis.self_learning import learn_from_task, get_relevant_learnings, format_learning_for_context
-from jarvis.context_layers import build_context_layers, format_context_for_prompt
+from jarvis.self_learning import learn_from_task
 from jarvis.universal_heuristics import auto_seed_project
-from typing import Any
+# Subpackage modules
+from jarvis.orchestrator.capabilities import DynamicCapabilitiesManager
+from jarvis.orchestrator.mcp_loader import MCPConfigLoader
+from jarvis.orchestrator.prompts import SystemPromptBuilder
+from jarvis.orchestrator.hooks import OrchestratorHooks
 
 
 def _safe_json_parse(text: str, default: Any = None) -> Any:
@@ -79,54 +77,7 @@ def _safe_json_parse(text: str, default: Any = None) -> Any:
         return default
 
 
-def _is_tool_error(tool_name: str, tool_response: str) -> bool:
-    """Determine if a tool response represents a real error.
-
-    Uses tool-specific heuristics to avoid false positives from responses
-    that merely mention 'error' (e.g., reading error-handling code).
-    """
-    if not isinstance(tool_response, str):
-        return False
-
-    # Read/Glob/Grep: reading code that mentions "error" is NOT an error
-    if tool_name in ("Read", "Glob", "Grep", "WebFetch", "WebSearch"):
-        return False
-
-    response_lower = tool_response.lower()
-
-    # Bash: look for common failure patterns
-    if tool_name == "Bash":
-        failure_signals = [
-            "command not found",
-            "no such file or directory",
-            "permission denied",
-            "segmentation fault",
-            "killed",
-            "npm err!",
-            "syntaxerror:",
-            "modulenotfounderror:",
-            "importerror:",
-            "typeerror:",
-            "nameerror:",
-            "valueerror:",
-            "compilation failed",
-            "build failed",
-            "test failed",
-            "tests failed",
-            "exit code",
-            "exited with",
-        ]
-        return any(sig in response_lower for sig in failure_signals)
-
-    # Edit/Write: tool-level failures (not content)
-    if tool_name in ("Edit", "Write"):
-        return "error" in response_lower and len(tool_response) < 200
-
-    return False
-
 logger = logging.getLogger(__name__)
-_DYNAMIC_CAPS_FILE = JARVIS_HOME / "dynamic_capabilities.json"
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class JarvisOrchestrator:
@@ -143,19 +94,34 @@ class JarvisOrchestrator:
         Path(self.project_path).mkdir(parents=True, exist_ok=True)
         ensure_core_context_files()
         ensure_project_jarvis_file(self.project_path)
+
+        # Core components
         self.trust = TrustEngine()
         self.budget = BudgetController()
         self.memory = MemoryStore()
         self.tracer = DecisionTracer(memory=self.memory)
+
+        # MCP servers
         self.container_server = create_container_mcp_server()
         self.git_server = create_git_mcp_server()
         self.review_server = create_review_mcp_server()
         self.browser_server = create_browser_mcp_server()
-        self._configured_mcp_servers = self._load_configured_mcp_servers()
-        self._dynamic_mcp_servers: dict[str, dict] = {}
-        self._dynamic_agents: dict[str, AgentDefinition] = {}
-        self._dynamic_skills: dict[str, dict] = {}
-        self._load_dynamic_capabilities()
+
+        # Use subpackage modules
+        self._mcp_loader = MCPConfigLoader(self.project_path)
+        self._capabilities = DynamicCapabilitiesManager()
+        self._prompt_builder = SystemPromptBuilder(
+            trust=self.trust,
+            budget=self.budget,
+            memory=self.memory,
+            project_path=self.project_path,
+            config_max_turns=self.config.budget.max_turns_per_subtask,
+        )
+
+        # Load configured MCP servers
+        self._configured_mcp_servers = self._mcp_loader.load_configured_mcp_servers()
+
+        # Session state
         self._session_id: str | None = None
         self._active_containers: list[str] = []
         self.loop_detector = LoopDetector(
@@ -166,6 +132,8 @@ class JarvisOrchestrator:
         self._chat_client: ClaudeSDKClient | None = None  # Deprecated: use SessionManager
         self._session_manager = SessionManager.get_instance()
         self._channel_id = "default"  # Default channel for this orchestrator
+
+        # Code orchestrator
         self.code_orchestrator = CodeOrchestrator(
             mcp_servers={
                 "jarvis-container": self.container_server,
@@ -173,6 +141,10 @@ class JarvisOrchestrator:
             },
             project_path=self.project_path,
         )
+
+        # Hooks (initialized after notifications module is available)
+        self._hooks: OrchestratorHooks | None = None
+
         self._preflight_status: dict = {
             "ready": False,
             "checked_at": None,
@@ -194,17 +166,30 @@ class JarvisOrchestrator:
             },
         }
 
+    def _init_hooks(self) -> None:
+        """Initialize hooks lazily (after notifications module is imported)."""
+        if self._hooks is None:
+            import jarvis.notifications as notifications
+            self._hooks = OrchestratorHooks(
+                trust=self.trust,
+                budget=self.budget,
+                memory=self.memory,
+                loop_detector=self.loop_detector,
+                events=self.events,
+                project_path=self.project_path,
+                notifications_module=notifications,
+            )
+
     def _build_mcp_servers(self) -> dict:
         """Build static + dynamic MCP server map."""
-        servers: dict[str, dict] = {
-            "jarvis-container": self.container_server,
-            "jarvis-git": self.git_server,
-            "jarvis-review": self.review_server,
-            "jarvis-browser": self.browser_server,
-        }
-        servers.update(self._configured_mcp_servers)
-        servers.update(self._dynamic_mcp_servers)
-        return servers
+        return self._mcp_loader.build_mcp_servers_map(
+            container_server=self.container_server,
+            git_server=self.git_server,
+            review_server=self.review_server,
+            browser_server=self.browser_server,
+            configured_servers=self._configured_mcp_servers,
+            dynamic_servers=self._capabilities.mcp_servers,
+        )
 
     def _extract_urls_from_text(self, text: str) -> list[str]:
         """Extract and normalize HTTP(S) URLs from free-form text."""
@@ -240,331 +225,9 @@ class JarvisOrchestrator:
             )
         return added
 
-    def _load_dynamic_capabilities(self) -> None:
-        """Load dynamic MCP servers/agents/skills persisted across restarts."""
-        if not _DYNAMIC_CAPS_FILE.exists():
-            return
-        try:
-            data = json.loads(_DYNAMIC_CAPS_FILE.read_text())
-        except Exception as exc:
-            logger.warning("Failed to load dynamic capabilities: %s", exc)
-            return
-
-        for name, server in (data.get("mcp_servers", {}) or {}).items():
-            if isinstance(server, dict):
-                self._dynamic_mcp_servers[str(name)] = server
-
-        for name, skill in (data.get("skills", {}) or {}).items():
-            if not isinstance(skill, dict):
-                continue
-            desc = str(skill.get("description", "")).strip()
-            content = str(skill.get("content", "")).strip()
-            if desc and content:
-                self._dynamic_skills[str(name)] = {"description": desc, "content": content}
-
-        for name, raw_agent in (data.get("agents", {}) or {}).items():
-            if not isinstance(raw_agent, dict):
-                continue
-            description = str(raw_agent.get("description", "")).strip()
-            prompt = str(raw_agent.get("prompt", "")).strip()
-            if not description or not prompt:
-                continue
-            tools = raw_agent.get("tools")
-            model = raw_agent.get("model")
-            safe_model = model if model in ("sonnet", "opus", "haiku", "inherit", None) else "inherit"
-            self._dynamic_agents[str(name)] = AgentDefinition(
-                description=description,
-                prompt=prompt,
-                tools=tools if isinstance(tools, list) else None,
-                model=safe_model,
-            )
-
-    def _persist_dynamic_capabilities(self) -> None:
-        """Persist dynamic capabilities so they survive daemon restart."""
-        try:
-            JARVIS_HOME.mkdir(parents=True, exist_ok=True)
-            agents_payload: dict[str, dict] = {}
-            for name, agent in self._dynamic_agents.items():
-                agents_payload[name] = {
-                    "description": agent.description,
-                    "prompt": agent.prompt,
-                    "tools": list(agent.tools) if agent.tools else [],
-                    "model": agent.model,
-                }
-            payload = {
-                "mcp_servers": self._dynamic_mcp_servers,
-                "agents": agents_payload,
-                "skills": self._dynamic_skills,
-            }
-            _DYNAMIC_CAPS_FILE.write_text(json.dumps(payload, indent=2))
-        except Exception as exc:
-            logger.warning("Failed to persist dynamic capabilities: %s", exc)
-
-    def _load_configured_mcp_servers(self) -> dict[str, dict]:
-        """Load MCP servers from project config and built-in documentation defaults."""
-        configured: dict[str, dict] = {}
-
-        # Load .mcp.json from workspace first, then fallback to Jarvis core repo.
-        mcp_candidates = [
-            Path(self.project_path) / ".mcp.json",
-            REPO_ROOT / ".mcp.json",
-        ]
-        for mcp_json_path in mcp_candidates:
-            if not mcp_json_path.exists():
-                continue
-            try:
-                data = json.loads(mcp_json_path.read_text())
-                server_map = data.get("mcpServers", {})
-                if isinstance(server_map, dict):
-                    for name, raw in server_map.items():
-                        parsed = self._parse_project_mcp_server(name, raw)
-                        if parsed and name not in configured:
-                            configured[name] = parsed
-            except Exception as exc:
-                logger.warning("Failed to parse .mcp.json (%s): %s", mcp_json_path, exc)
-
-        # Ensure doc/repo lookup MCPs are available by default.
-        if "context7" not in configured and shutil.which("npx"):
-            context7_args = ["-y", "@upstash/context7-mcp"]
-            api_key = os.environ.get("CONTEXT7_API_KEY") or os.environ.get("CTX7_API_KEY")
-            if api_key:
-                context7_args.extend(["--api-key", api_key])
-            configured["context7"] = {
-                "type": "stdio",
-                "command": "npx",
-                "args": context7_args,
-            }
-        if "deepwiki" not in configured:
-            configured["deepwiki"] = {
-                "type": "http",
-                "url": "https://mcp.deepwiki.com/mcp",
-            }
-
-        return configured
-
-    def _parse_project_mcp_server(self, name: str, raw: object) -> dict | None:
-        """Parse one .mcp.json server entry into Claude Agent SDK format."""
-        if not isinstance(raw, dict):
-            return None
-        if "url" in raw and raw.get("url"):
-            return {
-                "type": "http",
-                "url": str(raw["url"]),
-                "headers": raw.get("headers", {}) or {},
-            }
-
-        command = str(raw.get("command", "")).strip()
-        args = [str(a) for a in (raw.get("args", []) or [])]
-        env = {str(k): str(v) for k, v in (raw.get("env", {}) or {}).items()}
-        if not command:
-            return None
-
-        if name == "context-graph":
-            command, args, env = self._resolve_context_graph(command, args, env)
-        elif name == "token-efficient":
-            command, args = self._resolve_token_efficient(command, args)
-
-        return {
-            "type": "stdio",
-            "command": command,
-            "args": args,
-            "env": env,
-        }
-
-    def _resolve_context_graph(
-        self,
-        command: str,
-        args: list[str],
-        env: dict[str, str],
-    ) -> tuple[str, list[str], dict[str, str]]:
-        """Normalize context-graph config to a valid path + cache dir."""
-        candidate_dirs = [
-            Path(self.project_path) / "mcp" / "context-graph-mcp",
-            REPO_ROOT / "mcp" / "context-graph-mcp",
-            Path(self.project_path).parents[1] / "mcp-servers" / "context-graph-mcp",
-            Path(self.project_path).parents[2] / "mcp-servers" / "context-graph-mcp",
-        ]
-        selected = next((p for p in candidate_dirs if (p / "server.py").exists()), None)
-        if selected:
-            command = "uv"
-            args = ["--directory", str(selected), "run", "python", "server.py"]
-            env.setdefault("UV_CACHE_DIR", "/tmp/uv-cache-codex")
-        return command, args, env
-
-    def _resolve_token_efficient(self, command: str, args: list[str]) -> tuple[str, list[str]]:
-        """Normalize token-efficient config to direct stdio node launch."""
-        candidate_files = [
-            Path(self.project_path) / "mcp" / "token-efficient-mcp" / "dist" / "index.js",
-            REPO_ROOT / "mcp" / "token-efficient-mcp" / "dist" / "index.js",
-            Path(self.project_path).parents[1] / "mcp-servers" / "token-efficient-mcp" / "dist" / "index.js",
-            Path(self.project_path).parents[2] / "mcp-servers" / "token-efficient-mcp" / "dist" / "index.js",
-        ]
-        selected = next((p for p in candidate_files if p.exists()), None)
-        if selected:
-            return "node", [str(selected)]
-
-        # If .mcp.json used srt wrapper, fall back to plain node invocation.
-        if command == "srt" and args and args[0] == "node":
-            return "node", args[1:]
-        return command, args
-
     def _build_system_prompt(self) -> str:
         """Build system prompt with project context and trust level."""
-        trust_status = self.trust.status(self.project_path)
-        budget_status = self.budget.summary()
-
-        # Load project JARVIS markdown if it exists.
-        jarvis_md = ""
-        if should_use_project_jarvis(self.project_path):
-            jarvis_md_path = Path(self.project_path) / "JARVIS.md"
-            if not jarvis_md_path.exists():
-                jarvis_md_path = Path(self.project_path) / "Jarvis.md"
-            if jarvis_md_path.exists():
-                jarvis_md = f"\n\n## Project Rules (JARVIS.md)\n{jarvis_md_path.read_text()}"
-
-        core_context = load_core_context()
-
-        # Load last session summary for continuity
-        last_summary = self.memory.get_last_summary(self.project_path)
-        continuity = ""
-        if last_summary:
-            continuity = (
-                f"\n\n## Previous Session\n{last_summary['summary']}\n"
-                f"Tasks completed: {', '.join(last_summary['tasks_completed'])}\n"
-                f"Tasks remaining: {', '.join(last_summary['tasks_remaining'])}"
-            )
-
-        # Load context layers (L1-L4) for project awareness
-        context_layers_text = ""
-        try:
-            try:
-                loop = asyncio.get_running_loop()
-                # If we're already in an async context, use cached layers
-                if hasattr(self, "_cached_context_layers") and self._cached_context_layers:
-                    context_layers_text = (
-                        "\n\n## Project Context (L1-L4)\n"
-                        + format_context_for_prompt(self._cached_context_layers, max_length=2000)
-                    )
-            except RuntimeError:
-                # No event loop running, build synchronously
-                layers = asyncio.run(build_context_layers(self.project_path, ["L1"]))
-                context_layers_text = (
-                    "\n\n## Project Context (L1)\n"
-                    + format_context_for_prompt(layers, max_length=1000)
-                )
-        except Exception:
-            pass  # Context layers are supplementary, don't block
-
-        # Load learned patterns
-        patterns = self.memory.get_patterns(self.project_path)
-        patterns_text = ""
-        if patterns:
-            patterns_text = "\n\n## Learned Patterns\n" + "\n".join(
-                f"- [{p['type']}] {p['pattern']} (confidence: {p['confidence']:.1f})"
-                for p in patterns[:10]
-            )
-
-        # Load high-confidence learnings (error-fix patterns)
-        learnings = self.memory.get_learnings(
-            project_path=self.project_path,
-            min_confidence=0.7,
-            limit=5,
-        )
-        learnings_text = ""
-        if learnings:
-            learnings_text = "\n\n## Known Error-Fix Patterns"
-            for learning in learnings:
-                learnings_text += f"\n{format_learning_for_context(learning)}"
-
-        # Decision traces section
-        traces_text = ""
-        # (traces injected at run_task time via context)
-
-        return f"""You are Jarvis, an autonomous development partner.
-
-## Trust Level
-Current: T{trust_status['tier']} ({trust_status['tier_name']})
-Tasks until upgrade: {trust_status['tasks_until_upgrade']}
-
-## Budget
-Session: {budget_status['session']}
-Daily: {budget_status['daily']}
-Turns: {budget_status['turns']}
-
-## Autonomy Rules at T{trust_status['tier']}
-- You CAN: {self._get_tier_capabilities(trust_status['tier'])}
-- You CANNOT (need approval): {self._get_tier_restrictions(trust_status['tier'])}
-- NEVER: deploy to production, delete main branch, modify CI/CD without approval
-
-## Conversation Contract
-- Always interact conversationally with the user.
-- Decide yourself when to ask a clarifying question vs. execute tools.
-- Do not mention internal routing or implementation details.
-- For broad capability questions, answer directly without unnecessary tool calls.
-
-## Working in Apple Containers
-- Each task runs in an isolated Linux VM via Apple Containers
-- Use container_run to create VMs, container_exec to run commands inside them
-- Mount project source with --volume flag
-- Install packages freely inside containers (they're isolated)
-- Use container_stop when done to clean up
-- Output from containers is capped to prevent context bloat
-
-## Browser Testing (Headless Playwright)
-- Use browser_setup to install Playwright + Chromium in a container
-- browser_navigate: load URL, capture screenshot + console logs + network errors
-- browser_interact: click, fill, select on page elements
-- browser_test_run: run Playwright test suites
-- browser_api_test: test REST API endpoints from container
-- browser_wallet_test: test Solana dApps with mock Solflare/Phantom wallet
-- All browser testing runs headless inside containers (no Chrome extension needed)
-
-## External Documentation MCPs
-- Use context7 MCP for framework/library SDK documentation (resolve package first, then query docs)
-- Use deepwiki MCP for GitHub repository docs: structure, wiki pages, and repo-specific Q&A
-- Use context-graph MCP (when available) to persist/retrieve decision traces across tasks
-
-## Full Autonomy Capabilities
-- Clone repos: use Bash with `git clone` inside containers
-- Install dependencies: freely inside containers (npm, pip, cargo, etc)
-- Start servers: use container_exec to run servers (they get dedicated IPs)
-- Test APIs: use browser_api_test or curl via container_exec
-- Fix issues: read errors, edit code, re-run tests - iterate up to {self.config.budget.max_turns_per_subtask} times
-- Web search: use WebSearch to find docs, StackOverflow answers, API references
-- Web fetch: use WebFetch to read documentation pages
-- Git operations: stage, commit, branch, push (per trust tier)
-- Code review: use review_diff/review_files for independent quality checks
-
-## Workflow
-1. Analyze the task and create a plan
-2. Start a container with appropriate image
-3. Mount the project source into the container
-4. Execute: install deps, write code, run builds
-5. Test: run the test suite, fix failures (max {self.config.budget.max_turns_per_subtask} retries)
-6. If tests pass: commit changes (if T2+)
-7. Clean up containers
-8. Report results
-{jarvis_md}{continuity}{context_layers_text}{patterns_text}{learnings_text}"""
-
-    def _get_tier_capabilities(self, tier: int) -> str:
-        capabilities = {
-            0: "read files, analyze code, suggest changes",
-            1: "edit files, run tests, lint, format",
-            2: "all of T1 + git commit, install packages, run servers, manage containers",
-            3: "all of T2 + git push, create PRs, run any local command",
-            4: "everything local, full sandbox authority",
-        }
-        return capabilities.get(tier, "read files")
-
-    def _get_tier_restrictions(self, tier: int) -> str:
-        restrictions = {
-            0: "all writes, all commands, all git operations",
-            1: "package installs, git operations, network access, containers",
-            2: "git push, create PRs, external API calls",
-            3: "production deploys, CI/CD modifications",
-            4: "production deploys only",
-        }
-        return restrictions.get(tier, "production deploys")
+        return self._prompt_builder.build()
 
     def _build_allowed_tools(self) -> list[str]:
         """Build tool list based on trust tier."""
@@ -653,169 +316,33 @@ Turns: {budget_status['turns']}
 
     async def _pre_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
         """Hook: enforce trust and budget before tool execution."""
-        import time as _time
-        context["_tool_start_time"] = _time.monotonic()
-
-        tool_name = input_data.get("tool_name", "")
-        tool_input = input_data.get("tool_input", {})
-
-        # Budget check
-        can_continue, reason = self.budget.enforce()
-        if not can_continue:
-            return build_deny_response(f"Budget limit: {reason}")
-
-        # Trust check for container operations
-        if "container" in tool_name.lower():
-            action = tool_name.split("__")[-1] if "__" in tool_name else tool_name
-            allowed, reason = self.trust.can_perform(self.project_path, action)
-            if not allowed:
-                return build_deny_response(reason)
-
-        # Trust check for git push
-        if tool_name == "Bash":
-            command = tool_input.get("command", "")
-            if "git push" in command:
-                allowed, reason = self.trust.can_perform(self.project_path, "git_push")
-                if not allowed:
-                    return build_deny_response(reason)
-
-        return {}
-
-    def _extract_error_info(self, tool_name: str, tool_response: str, tool_input: dict) -> tuple[str | None, int]:
-        """Extract error message and exit code from tool response."""
-        if not isinstance(tool_response, str):
-            return None, 0
-
-        response_lower = tool_response.lower()
-
-        # Bash tool: check for non-zero exit code
-        if tool_name == "Bash" and tool_input.get("exit_code", 0) != 0:
-            return tool_response[:500], tool_input.get("exit_code", 1)
-
-        # Tool-level error signals: lines starting with error/traceback
-        if any(response_lower.lstrip().startswith(p) for p in ("error:", "error!", "traceback ", "fatal:", "panic:")):
-            return tool_response[:500], 1
-
-        # Explicit failure patterns
-        if _is_tool_error(tool_name, tool_response):
-            return tool_response[:500], 1
-
-        return None, 0
-
-    def _extract_files_touched(self, tool_name: str, tool_input: dict) -> list[str]:
-        """Extract files touched by Edit/Write tools."""
-        if tool_name in ["Edit", "Write"] and isinstance(tool_input, dict):
-            if "file_path" in tool_input:
-                return [tool_input["file_path"]]
-        return []
-
-    def _track_container_from_response(self, tool_name: str, tool_response: str) -> str | None:
-        """Extract container ID from container_run response if running."""
-        if "container_run" not in tool_name or not isinstance(tool_response, str):
-            return None
-        try:
-            data = json.loads(tool_response)
-            if data.get("status") == "running":
-                return data.get("container_id")
-        except (json.JSONDecodeError, TypeError):
-            pass
-        return None
-
-    def _check_loop_detection(self, tool_name: str, tool_input: dict, tool_response: str, task_id: str) -> dict | None:
-        """Check for loops and return intervention response if needed."""
-        tool_input_str = json.dumps(tool_input)
-        tool_output_str = str(tool_response)[:5120]
-        error = tool_response[:1024] if isinstance(tool_response, str) and "error" in tool_response.lower() else None
-
-        action = self.loop_detector.record_iteration(task_id, tool_name, tool_input_str, tool_output_str, error)
-
-        if action == LoopAction.CONTINUE:
-            return None
-
-        tracker = self.loop_detector.get_tracker(task_id)
-        message = build_intervention_message(action, tracker)
-
-        if action == LoopAction.ESCALATE:
-            asyncio.create_task(notify_approval_needed(task_id, "loop_escalation"))
-
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PostToolUse",
-                "message": message,
-            }
-        }
+        self._init_hooks()
+        return await self._hooks.pre_tool_hook(input_data, tool_use_id, context)
 
     async def _post_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
         """Hook: track container lifecycle, emit events, detect loops, capture execution records."""
+        self._init_hooks()
+        result = await self._hooks.post_tool_hook(input_data, tool_use_id, context)
+        # Track active containers locally (not in hooks module)
         tool_name = input_data.get("tool_name", "")
         tool_response = input_data.get("tool_response", "")
-        tool_input = input_data.get("tool_input", {})
-
-        # Emit tool use event
-        self.events.emit(EVENT_TOOL_USE, tool_name, task_id=context.get("task_id"), metadata={"tool": tool_name})
-
-        task_id = context.get("task_id", "unknown")
-        session_id = self._session_id or "unknown"
-
-        # Extract error info and files touched
-        error_message, exit_code = self._extract_error_info(tool_name, tool_response, tool_input)
-        files_touched = self._extract_files_touched(tool_name, tool_input)
-
-        # Calculate duration
-        duration_ms = 0.0
-        if "_tool_start_time" in context:
-            duration_ms = (time.monotonic() - context["_tool_start_time"]) * 1000
-
-        # Record execution
-        try:
-            self.memory.record_execution(
-                task_id=task_id, session_id=session_id, tool_name=tool_name,
-                tool_input=tool_input, tool_output=tool_response, exit_code=exit_code,
-                files_touched=files_touched or None, error_message=error_message,
-                duration_ms=duration_ms, project_path=self.project_path,
-            )
-        except Exception:
-            pass
-
-        # Track active containers
-        container_id = self._track_container_from_response(tool_name, tool_response)
-        if container_id:
-            self._active_containers.append(container_id)
-
-        # Loop detection
-        loop_response = self._check_loop_detection(tool_name, tool_input, tool_response, task_id)
-        return loop_response if loop_response else {}
+        if "container_run" in tool_name and isinstance(tool_response, str):
+            try:
+                data = json.loads(tool_response)
+                if data.get("status") == "running":
+                    container_id = data.get("container_id")
+                    if container_id:
+                        self._active_containers.append(container_id)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return result
 
     async def _post_message_hook(self, input_data: dict, context: dict) -> dict:
         """Hook: track token usage and costs from ResultMessage events."""
-        message_type = input_data.get("type", "")
-
-        if message_type == "result":
-            cost_usd = input_data.get("total_cost_usd", 0.0)
-            num_turns = input_data.get("num_turns", 0)
-            input_tokens = input_data.get("usage", {}).get("input_tokens", 0)
-            output_tokens = input_data.get("usage", {}).get("output_tokens", 0)
-
-            # Record token usage for analytics
-            task_id = context.get("task_id", "unknown")
-            try:
-                self.memory.record_token_usage(
-                    session_id=self._session_id or "unknown",
-                    task_id=task_id,
-                    model=self.config.models.executor,
-                    prompt_tokens=input_tokens,
-                    completion_tokens=output_tokens,
-                    cost_usd=cost_usd,
-                    project_path=self.project_path,
-                )
-            except Exception:
-                pass  # Token tracking is best-effort
-
-            # Record cost in budget controller
-            if cost_usd > 0:
-                self.budget.record_cost(cost_usd, num_turns)
-
-        return {}
+        self._init_hooks()
+        context["session_id"] = self._session_id
+        context["model"] = self.config.models.executor
+        return await self._hooks.post_message_hook(input_data, context)
 
     def _build_options(self) -> ClaudeAgentOptions:
         """Build Agent SDK options with all Jarvis integrations."""
@@ -839,7 +366,7 @@ Turns: {budget_status['turns']}
                     HookMatcher(hooks=[self._post_message_hook]),
                 ],
             },
-            agents=self._dynamic_agents or None,
+            agents=self._capabilities.agents or None,
         )
 
         # Resume previous session if available
@@ -856,25 +383,7 @@ Turns: {budget_status['turns']}
         env: dict[str, str] | None = None,
     ) -> dict:
         """Register a dynamic stdio MCP server for future task/chat turns."""
-        if not name.strip():
-            return {"success": False, "error": "MCP server name is required"}
-        if not command.strip():
-            return {"success": False, "error": "MCP server command is required"}
-        if name.startswith("jarvis-"):
-            return {"success": False, "error": "Reserved MCP server prefix: jarvis-"}
-
-        self._dynamic_mcp_servers[name] = {
-            "type": "stdio",
-            "command": command,
-            "args": args or [],
-            "env": env or {},
-        }
-        self._persist_dynamic_capabilities()
-        return {
-            "success": True,
-            "name": name,
-            "server_count": len(self._dynamic_mcp_servers),
-        }
+        return self._capabilities.register_mcp_server(name, command, args, env)
 
     def register_agent(
         self,
@@ -885,36 +394,15 @@ Turns: {budget_status['turns']}
         model: str | None = None,
     ) -> dict:
         """Register a dynamic SDK sub-agent."""
-        if not name.strip():
-            return {"success": False, "error": "Agent name is required"}
-        if not description.strip() or not prompt.strip():
-            return {"success": False, "error": "Agent description and prompt are required"}
-        safe_model = model if model in ("sonnet", "opus", "haiku", "inherit", None) else "inherit"
-        self._dynamic_agents[name] = AgentDefinition(
-            description=description,
-            prompt=prompt,
-            tools=tools or None,
-            model=safe_model,
-        )
-        self._persist_dynamic_capabilities()
-        return {"success": True, "name": name, "agent_count": len(self._dynamic_agents)}
+        return self._capabilities.register_agent(name, description, prompt, tools, model)
 
     def register_skill(self, name: str, description: str, content: str) -> dict:
         """Register a dynamic skill instruction block visible to Jarvis."""
-        if not name.strip():
-            return {"success": False, "error": "Skill name is required"}
-        if not description.strip() or not content.strip():
-            return {"success": False, "error": "Skill description and content are required"}
-        self._dynamic_skills[name] = {
-            "description": description.strip(),
-            "content": content.strip(),
-        }
-        self._persist_dynamic_capabilities()
-        return {"success": True, "name": name, "skill_count": len(self._dynamic_skills)}
+        return self._capabilities.register_skill(name, description, content)
 
     def get_capabilities(self) -> dict:
         """Return capability inventory for UI/diagnostics."""
-        dynamic_names = sorted(self._dynamic_mcp_servers.keys())
+        dynamic_names = sorted(self._capabilities.mcp_servers.keys())
         static_names = [
             "jarvis-container",
             "jarvis-git",
@@ -922,8 +410,8 @@ Turns: {budget_status['turns']}
             "jarvis-browser",
             *sorted(self._configured_mcp_servers.keys()),
         ]
-        dynamic_agents = sorted(self._dynamic_agents.keys())
-        dynamic_skills = sorted(self._dynamic_skills.keys())
+        dynamic_agents = sorted(self._capabilities.agents.keys())
+        dynamic_skills = sorted(self._capabilities.skills.keys())
         tools = sorted(set(self._build_options().allowed_tools or self._build_allowed_tools()))
         capability_tools = tools + [f"mcp://{n}" for n in (static_names + dynamic_names)]
         capability_tools += ["hook://PreToolUse", "hook://PostToolUse"]

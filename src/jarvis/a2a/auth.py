@@ -19,7 +19,7 @@ def read_token(token_path: str = "") -> str | None:
         return None
     try:
         return path.read_text().strip()
-    except Exception:
+    except (OSError, PermissionError):
         return None
 
 
