@@ -6,6 +6,15 @@ This folder is the **agent workspace** for the Jarvis repo. It is designed to:
 2. Make Codex <-> Claude collaboration explicit, auditable, and low-ambiguity.
 3. Support **progressive disclosure**: load only what you need for the current step.
 
+## Writing Rules (Mandatory)
+
+When updating any `.agent/*` document:
+1. Be concise and concrete. Prefer short bullets over paragraphs.
+2. Progressive disclosure is required:
+   - Put the minimal stable truth in `ARCHITECTURE.md`.
+   - Put churn, logs, and coordination details only in `inflight-communication/*`.
+3. Avoid duplication. Reference the canonical file instead of copying text.
+
 ## Files And Folders
 
 ### `.agent/MISSION.md`
@@ -48,7 +57,7 @@ Contains:
 ### `.agent/agent-communication/AGENT_COMMS_FRAMEWORK.md`
 
 **What it is:** The **current comms protocol** Codex and Claude follow right now (file-based).  
-Includes: evidence ladder, progressive disclosure policy, and review state machine rules.  
+Includes: evidence ladder, review mechanics, and promotion rule (approved moves to architecture).  
 **Stability:** Medium-high. This is “how we operate.”  
 **When to read:** When uncertain about review mechanics, ownership, or what constitutes approval.
 
@@ -80,8 +89,9 @@ Contains:
    - `.agent/inflight-communication/ANALYSIS_IMPROVEMENT.md`
    - `.agent/inflight-communication/IMPLEMENTATION_PLAN.md`
 3. Promote to `.agent/ARCHITECTURE.md` only after agreement/approval (no in-flight chatter).
-4. Never “close” blocker IDs unless you are the reviewer (Codex).
-5. Keep context small:
+4. After Codex marks an item `APPROVED`, remove it from inflight and add the stable outcome to architecture (promotion rule).
+5. Never “close” blocker IDs unless you are the reviewer (Codex).
+6. Keep context small:
    - load only the sections relevant to the current item/blocker
    - do not paste large logs unless they are required evidence
 
