@@ -176,7 +176,7 @@ class MLXInferenceEngine:
                 self._tokenizer,
                 prompt=formatted,
                 max_tokens=max_tokens or self.max_tokens,
-                temp=temperature,
+                temperature=temperature,
             ),
         )
 
