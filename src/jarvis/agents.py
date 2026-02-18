@@ -13,6 +13,7 @@ orchestrated through the main agent loop.
 import asyncio
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,7 +35,7 @@ from jarvis.decision_tracer import DecisionTracer, TraceCategory
 from jarvis.loop_detector import LoopDetector, LoopAction, build_intervention_message
 from jarvis.budget import BudgetController
 from jarvis.config import JarvisConfig
-from jarvis.container_tools import create_container_mcp_server
+from jarvis.container_tools import create_container_mcp_server, cleanup_containers
 from jarvis.git_tools import create_git_mcp_server
 from jarvis.memory import MemoryStore
 from jarvis.notifications import (
@@ -46,6 +47,9 @@ from jarvis.notifications import (
 )
 from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
+from jarvis.jarvis_hooks import build_deny_response
+from jarvis.events import EventCollector, EVENT_TOOL_USE
+from jarvis.self_learning import learn_from_task
 
 
 # --- Agent Definitions ---
@@ -208,8 +212,14 @@ class MultiAgentPipeline:
     """Orchestrates the Planner -> Executor(s) -> Tester -> Reviewer pipeline."""
 
     def __init__(self, project_path: str | None = None):
-        self.project_path = project_path or os.getcwd()
         self.config = JarvisConfig.load()
+        default_workspace = (
+            os.environ.get("JARVIS_WORKSPACE")
+            or self.config.workspace_root
+            or os.getcwd()
+        )
+        self.project_path = str(Path(project_path or default_workspace).expanduser().resolve())
+        Path(self.project_path).mkdir(parents=True, exist_ok=True)
         self.trust = TrustEngine()
         self.budget = BudgetController()
         self.memory = MemoryStore()
@@ -225,6 +235,7 @@ class MultiAgentPipeline:
         self._loop_detector = LoopDetector(
             max_iterations=self.config.budget.max_turns_per_subtask
         )
+        self.events = EventCollector(memory=self.memory)
 
     def _build_mcp_servers(self) -> dict:
         """All MCP servers for agent use."""
@@ -244,17 +255,55 @@ class MultiAgentPipeline:
             "reviewer": REVIEWER_AGENT,
         }
 
+    @staticmethod
+    def _extract_json_candidates(text: str) -> list[dict]:
+        """Extract JSON object candidates from markdown/code-fenced text."""
+        candidates: list[dict] = []
+        if not text.strip():
+            return candidates
+
+        # Prefer explicit json code fences first.
+        fence_matches = re.findall(r"```json\s*(\{[\s\S]*?\})\s*```", text, flags=re.IGNORECASE)
+        for raw in fence_matches:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    candidates.append(parsed)
+            except Exception:
+                pass
+
+        # Fallback: try raw object fragments.
+        for raw in re.findall(r"(\{[\s\S]*\})", text):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    candidates.append(parsed)
+            except Exception:
+                continue
+        return candidates
+
+    def _extract_plan(self, text_fragments: list[str]) -> dict | None:
+        """Find the latest planner-like JSON with subtasks."""
+        joined = "\n".join(text_fragments[-30:])
+        for candidate in reversed(self._extract_json_candidates(joined)):
+            subtasks = candidate.get("subtasks")
+            if isinstance(subtasks, list):
+                return candidate
+        return None
+
+    def _extract_review(self, text_fragments: list[str]) -> dict | None:
+        """Find the latest review-like JSON with approval/issue fields."""
+        joined = "\n".join(text_fragments[-30:])
+        for candidate in reversed(self._extract_json_candidates(joined)):
+            if any(k in candidate for k in ("approved", "issues", "summary", "suggestions")):
+                return candidate
+        return None
+
     async def _pre_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
         """Enforce budget and trust on every tool call."""
         can_continue, reason = self.budget.enforce()
         if not can_continue:
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": f"Budget limit: {reason}",
-                }
-            }
+            return build_deny_response(f"Budget limit: {reason}")
 
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input", {})
@@ -264,18 +313,12 @@ class MultiAgentPipeline:
             allowed, reason = self.trust.can_perform(self.project_path, "git_push")
             if not allowed:
                 await notify_approval_needed("", "git push")
-                return {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": reason,
-                    }
-                }
+                return build_deny_response(reason)
 
         return {}
 
     async def _post_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
-        """Hook: detect loops after tool execution."""
+        """Hook: emit timeline events, detect loops after tool execution."""
         tool_name = input_data.get("tool_name", "")
         tool_input_str = json.dumps(input_data.get("tool_input", {}))
         tool_response = input_data.get("tool_response", "")
@@ -285,6 +328,15 @@ class MultiAgentPipeline:
             error = tool_response[:1024]
 
         subtask_id = context.get("task_id", "default")
+
+        # Emit tool use event for timeline (this was missing!)
+        self.events.emit(
+            EVENT_TOOL_USE,
+            tool_name,
+            task_id=subtask_id,
+            metadata={"tool": tool_name, "input": tool_input_str[:200]}
+        )
+
         action = self._loop_detector.record_iteration(
             subtask_id, tool_name, tool_input_str, tool_output_str, error
         )
@@ -398,10 +450,13 @@ class MultiAgentPipeline:
         """
         task_id = f"task-{uuid.uuid4().hex[:8]}"
         result = PipelineResult(task_id=task_id, status="in_progress")
+        text_fragments: list[str] = []
+        tool_uses: list[str] = []
+        session_id: str | None = None
 
         # Record task
         self.memory.create_task(task_id, task_description, self.project_path)
-        self.memory.update_task(task_id, status="in_progress")
+        self.memory.transition_task(task_id, "in_progress")
 
         await notify_task_started(task_id, task_description)
         if callback:
@@ -435,15 +490,18 @@ Report progress at each step."""
                     if isinstance(message, SystemMessage):
                         if message.subtype == "init":
                             session_id = message.data.get("session_id")
+                            self.events.session_id = session_id
                             if callback:
                                 callback("session_started", {"session_id": session_id})
 
                     elif isinstance(message, AssistantMessage):
                         for block in message.content:
                             if isinstance(block, TextBlock):
+                                text_fragments.append(block.text)
                                 if callback:
                                     callback("agent_text", {"text": block.text[:300]})
                             elif isinstance(block, ToolUseBlock):
+                                tool_uses.append(block.name)
                                 if callback:
                                     callback("agent_tool", {"tool": block.name})
 
@@ -469,10 +527,39 @@ Report progress at each step."""
         finally:
             await self._cleanup_containers()
 
+        result.plan = self._extract_plan(text_fragments)
+        result.review = self._extract_review(text_fragments)
+        if result.plan and isinstance(result.plan.get("subtasks"), list):
+            for sub in result.plan.get("subtasks", []):
+                if not isinstance(sub, dict):
+                    continue
+                sub_id = str(sub.get("id", f"subtask-{len(result.subtask_results)+1}"))
+                desc = str(sub.get("description", "")).strip()
+                files = sub.get("files") if isinstance(sub.get("files"), list) else []
+                result.subtask_results.append(
+                    SubtaskResult(
+                        subtask_id=sub_id,
+                        status="completed" if result.status == "completed" else "failed",
+                        output=desc[:500],
+                        files_changed=[str(f) for f in files[:40]],
+                    )
+                )
+        elif tool_uses:
+            # Fallback: at least reflect executed tool sequence as pseudo-subtasks.
+            for idx, tool_name in enumerate(tool_uses[:40], start=1):
+                result.subtask_results.append(
+                    SubtaskResult(
+                        subtask_id=f"tool-{idx}",
+                        status="completed" if result.status == "completed" else "failed",
+                        output=f"Tool used: {tool_name}",
+                    )
+                )
+
         # Update task record
-        self.memory.update_task(
+        final_status = result.status if result.status in ("completed", "failed", "cancelled") else "failed"
+        self.memory.transition_task(
             task_id,
-            status=result.status,
+            final_status,
             cost_usd=result.total_cost_usd,
             turns=result.total_turns,
         )
@@ -491,6 +578,34 @@ Report progress at each step."""
         except Exception:
             pass
 
+        # Self-learning: extract patterns from execution records
+        if self.config.knowledge.enable_learning:
+            try:
+                import logging
+                logger = logging.getLogger(__name__)
+                
+                # Check if we have execution records to learn from
+                records = self.memory.get_execution_records(task_id=task_id, limit=1)
+                if records:
+                    learning_stats = await learn_from_task(
+                        task_id=task_id,
+                        project_path=self.project_path,
+                        memory=self.memory,
+                    )
+                    if learning_stats.get("errors_found", 0) > 0:
+                        logger.info(
+                            f"Learning loop (pipeline): Task {task_id} - "
+                            f"{learning_stats['errors_found']} errors found, "
+                            f"{learning_stats['learnings_saved']} patterns saved, "
+                            f"{learning_stats['skills_flagged']} skill candidates flagged"
+                        )
+                else:
+                    logger.debug(f"Learning loop (pipeline): Task {task_id} - No execution records to analyze")
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Learning extraction failed for pipeline task {task_id}: {e}", exc_info=True)
+
         if callback:
             callback("pipeline_completed", {
                 "task_id": task_id,
@@ -503,20 +618,5 @@ Report progress at each step."""
 
     async def _cleanup_containers(self) -> None:
         """Stop and remove all active containers."""
-        for cid in self._active_containers:
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "container", "stop", cid,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await asyncio.wait_for(proc.communicate(), timeout=10)
-                proc = await asyncio.create_subprocess_exec(
-                    "container", "delete", cid,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await asyncio.wait_for(proc.communicate(), timeout=10)
-            except Exception:
-                pass
+        await cleanup_containers(self._active_containers)
         self._active_containers.clear()

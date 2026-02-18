@@ -1,8 +1,6 @@
 import Foundation
 
-/// Public API for JarvisClient
-/// All types are exported from their respective modules
-
-// Models are automatically available
-// Networking classes are automatically available
-// Utilities are automatically available
+/// JarvisClient module entrypoint.
+///
+/// Note: SwiftPM folders like `Models/` and `Networking/` are *not* separate modules.
+/// Their types are part of the `JarvisClient` module namespace directly.

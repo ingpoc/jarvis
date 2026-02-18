@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import time
 from typing import TYPE_CHECKING
 
 try:
@@ -45,6 +47,7 @@ class JarvisSlackBot:
         bot_token: str,
         app_token: str,
         default_channel: str,
+        research_channel: str = "#jarvisresearch",
         event_collector: EventCollector | None = None,
         orchestrator=None,
     ):
@@ -52,12 +55,15 @@ class JarvisSlackBot:
         self._bot_token = bot_token
         self._app_token = app_token
         self._default_channel = default_channel
+        self._research_channel = research_channel
         self._event_collector = event_collector
         self._orchestrator = orchestrator
 
         self._app = AsyncApp(token=bot_token)
         self._handler: AsyncSocketModeHandler | None = None
         self._client = AsyncWebClient(token=bot_token)
+        self._notify_dedupe_window_secs = int(os.environ.get("JARVIS_SLACK_DEDUPE_SECS", "180"))
+        self._last_notify_at: dict[str, float] = {}
 
         self._register_commands()
         self._register_events()
@@ -128,13 +134,25 @@ class JarvisSlackBot:
             text = event.get("text", "")
             # Strip bot mention
             parts = text.split(">", 1)
-            task_text = parts[1].strip() if len(parts) > 1 else text
-            if not task_text:
+            chat_text = parts[1].strip() if len(parts) > 1 else text
+            if not chat_text:
                 await say("Mention me with a task, e.g. `@Jarvis fix the failing tests`")
                 return
-            await say(f"On it: _{task_text}_")
             if self._orchestrator:
-                asyncio.create_task(self._run_task(task_text))
+                asyncio.create_task(self._run_chat_from_event(event, say, chat_text))
+
+        @self._app.event("message")
+        async def handle_message(event, say):
+            # Only handle direct conversations and ignore bot/system messages.
+            if event.get("channel_type") not in {"im", "mpim"}:
+                return
+            if event.get("bot_id") or event.get("subtype"):
+                return
+            chat_text = (event.get("text") or "").strip()
+            if not chat_text:
+                return
+            if self._orchestrator:
+                asyncio.create_task(self._run_chat_from_event(event, say, chat_text))
 
     def _register_actions(self):
         @self._app.action("jarvis_approve")
@@ -166,6 +184,9 @@ class JarvisSlackBot:
     def _on_event(self, event_data: dict):
         """Handle events from EventCollector - send to Slack."""
         event_type = event_data.get("event_type", "")
+        metadata = event_data.get("metadata") or {}
+        if metadata.get("slack_notify") is False:
+            return
         auto_notify_types = {
             "feature_complete", "error", "approval_needed",
             "task_complete", "trust_change",
@@ -178,6 +199,13 @@ class JarvisSlackBot:
         event_type = event_data["event_type"]
         summary = event_data.get("summary", "")
         task_id = event_data.get("task_id", "")
+        dedupe_key = f"{event_type}|{task_id}|{summary[:180]}"
+        now = time.time()
+        last = self._last_notify_at.get(dedupe_key, 0.0)
+        if (now - last) < self._notify_dedupe_window_secs:
+            logger.info("Skipping duplicate Slack notification within window: %s", dedupe_key)
+            return
+        self._last_notify_at[dedupe_key] = now
 
         if event_type == "approval_needed":
             blocks = self._build_approval_blocks(task_id, summary)
@@ -218,17 +246,71 @@ class JarvisSlackBot:
         try:
             result = await self._orchestrator.run_task(task_text)
             status = result.get("status", "unknown")
-            cost = result.get("cost_usd", 0.0)
+            output = result.get("output", "").strip()
             emoji = ":white_check_mark:" if status == "completed" else ":x:"
+
+            # Truncate output if too long (Slack limit: 40,000 chars)
+            max_length = 35000
+            truncated = False
+            if len(output) > max_length:
+                output = output[:max_length] + "\n\n... (output truncated)"
+                truncated = True
+
+            # Format message
+            message = f"{emoji} *Task {status}*\n\n{output}"
+            if truncated:
+                message += "\n\n_Output was truncated due to size_"
+
             await self._client.chat_postMessage(
                 channel=self._default_channel,
-                text=f"{emoji} Task {status}: {task_text[:100]} (${cost:.2f})",
+                text=message,
             )
         except Exception as e:
             await self._client.chat_postMessage(
                 channel=self._default_channel,
                 text=f":x: Task failed: {e}",
             )
+
+    async def _run_chat_from_event(self, event: dict, say, chat_text: str):
+        """Handle conversational Slack message via orchestrator.chat."""
+        channel = event.get("channel")
+        thread_ts = event.get("thread_ts") or event.get("ts")
+        user = event.get("user", "unknown")
+        logger.info("Slack chat message from %s in %s: %s", user, channel, chat_text[:120])
+
+        try:
+            raw_timeout = os.environ.get("JARVIS_SLACK_CHAT_SYNC_TIMEOUT_SECS", "").strip()
+            try:
+                sync_timeout = float(raw_timeout) if raw_timeout else 8.0
+            except ValueError:
+                sync_timeout = 8.0
+
+            chat_task = asyncio.create_task(
+                self._orchestrator.handle_message(
+                    chat_text,
+                    origin=f"slack:{channel or 'unknown'}",
+                )
+            )
+
+            if sync_timeout <= 0:
+                result = await chat_task
+                reply = (result.get("reply") or "").strip() or "No response generated."
+                await say(reply[:35000], thread_ts=thread_ts)
+                return
+
+            done, _ = await asyncio.wait({chat_task}, timeout=sync_timeout)
+            if done:
+                result = await chat_task
+                reply = (result.get("reply") or "").strip() or "No response generated."
+                await say(reply[:35000], thread_ts=thread_ts)
+                return
+
+            await say("Working on it. I will reply in this thread shortly.", thread_ts=thread_ts)
+            result = await chat_task
+            reply = (result.get("reply") or "").strip() or "No response generated."
+            await say(reply[:35000], thread_ts=thread_ts)
+        except Exception as e:
+            await say(f":x: Chat failed: {e}", thread_ts=thread_ts)
 
     # --- Block Kit builders ---
 

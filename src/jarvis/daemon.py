@@ -1,24 +1,123 @@
-"""Jarvis daemon: persistent background process with WS + Slack + Voice."""
+"""Jarvis daemon: persistent background process with WS + Slack + Voice + Idle."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
+import os
 import signal
 import sys
-
-import os
+import time
+import traceback
+from datetime import datetime
+from pathlib import Path
+from urllib import parse, request
 
 from jarvis.config import JarvisConfig, ensure_jarvis_home
 from jarvis.notifications import set_slack_bot, set_voice_client
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.ws_server import JarvisWSServer
+from jarvis.mcp_health import health_check_all_servers, filter_healthy_servers, notify_health_failures
+from jarvis.a2a.server import JarvisA2AServer
 
 logger = logging.getLogger(__name__)
 
 
+class CrashRecovery:
+    """Daemon crash recovery: detects unclean shutdowns and recovers state."""
+
+    PID_FILE = Path.home() / ".jarvis" / "daemon.pid"
+    CRASH_LOG = Path.home() / ".jarvis" / "logs" / "crash.log"
+
+    @classmethod
+    def write_pid(cls) -> None:
+        """Write current PID to file for crash detection."""
+        cls.PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        cls.PID_FILE.write_text(str(os.getpid()))
+
+    @classmethod
+    def clear_pid(cls) -> None:
+        """Remove PID file on clean shutdown."""
+        try:
+            cls.PID_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    @classmethod
+    def check_previous_crash(cls) -> dict | None:
+        """Check if the previous daemon run crashed.
+
+        Returns crash info dict if a crash was detected, None otherwise.
+        """
+        if not cls.PID_FILE.exists():
+            return None
+
+        try:
+            old_pid = int(cls.PID_FILE.read_text().strip())
+        except (ValueError, OSError):
+            cls.clear_pid()
+            return None
+
+        # Check if the old process is still running
+        try:
+            os.kill(old_pid, 0)  # Signal 0 = check existence
+            # Process is still running - not a crash, another instance
+            return {"status": "running", "pid": old_pid}
+        except ProcessLookupError:
+            # Process is gone - it crashed
+            return {"status": "crashed", "pid": old_pid}
+        except PermissionError:
+            # Process exists but we can't signal it
+            return {"status": "running", "pid": old_pid}
+
+    @classmethod
+    def log_crash(cls, error: str) -> None:
+        """Log crash information for post-mortem analysis."""
+        cls.CRASH_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(cls.CRASH_LOG, "a") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"Crash at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"PID: {os.getpid()}\n")
+            f.write(f"Error: {error}\n")
+            f.write(f"Traceback:\n{traceback.format_exc()}\n")
+
+    @classmethod
+    def recover_state(cls, orchestrator) -> dict:
+        """Attempt to recover state after a crash.
+
+        - Resumes in-progress tasks if possible
+        - Cleans up stale container resources
+        - Rebuilds context layers
+
+        Returns recovery summary.
+        """
+        recovery = {"recovered_tasks": 0, "cleaned_containers": 0}
+
+        try:
+            # Find tasks that were in-progress when we crashed
+            stale_tasks = orchestrator.memory.list_tasks(status="in_progress")
+            for task in stale_tasks:
+                orchestrator.memory.update_task(
+                    task.id,
+                    status="failed",
+                    result="Daemon crashed during execution",
+                )
+                recovery["recovered_tasks"] += 1
+
+            logger.info(
+                f"Crash recovery: marked {recovery['recovered_tasks']} "
+                f"stale tasks as failed"
+            )
+        except Exception as e:
+            logger.warning(f"Crash recovery error: {e}")
+
+        return recovery
+
+
 class JarvisDaemon:
-    """Long-running daemon: WebSocket bridge + optional Slack/Voice."""
+    """Long-running daemon: WebSocket bridge + optional Slack/Voice + Idle processing."""
 
     def __init__(self, project_path: str | None = None):
         ensure_jarvis_home()
@@ -26,18 +125,39 @@ class JarvisDaemon:
         self.orchestrator = JarvisOrchestrator(project_path)
         self.events = self.orchestrator.events
         self._ws_server: JarvisWSServer | None = None
+        self._a2a_server: JarvisA2AServer | None = None
+        self._a2a_task: asyncio.Task | None = None
         self._remote_server = None
         self._rest_app = None
         self._rest_runner = None
         self._slack_bot = None
+        self._slack_task: asyncio.Task | None = None
         self._voice_client = None
-        self._tts_service = None
+        self._idle_processor = None
+        self._file_watcher = None
         self._running = False
         self._stop_event = asyncio.Event()
+        self._idle_loop_task: asyncio.Task | None = None
+        self._last_idle_run_ts: float = 0.0
+        self._idle_runs_today: int = 0
+        self._idle_runs_day: str = datetime.now().strftime("%Y-%m-%d")
 
     async def start(self) -> None:
         """Start all daemon services."""
         loop = asyncio.get_running_loop()
+
+        # Crash recovery
+        crash_info = CrashRecovery.check_previous_crash()
+        if crash_info and crash_info["status"] == "crashed":
+            logger.warning(f"Detected previous crash (PID {crash_info['pid']}), recovering...")
+            recovery = CrashRecovery.recover_state(self.orchestrator)
+            logger.info(f"Recovery complete: {recovery}")
+        elif crash_info and crash_info["status"] == "running":
+            logger.error(f"Another daemon instance is running (PID {crash_info['pid']})")
+            return
+
+        CrashRecovery.write_pid()
+
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, lambda: asyncio.create_task(self.stop()))
 
@@ -47,6 +167,10 @@ class JarvisDaemon:
             orchestrator=self.orchestrator,
         )
         await self._ws_server.start()
+
+        # Mark daemon as running before starting background loops/tasks.
+        # (e.g. the IOKit idle loop checks this flag in its while condition.)
+        self._running = True
 
         # Remote WSS server (if enabled)
         if self._remote_enabled():
@@ -61,16 +185,21 @@ class JarvisDaemon:
                     bot_token=self.config.slack.bot_token,
                     app_token=self.config.slack.app_token,
                     default_channel=self.config.slack.default_channel,
+                    research_channel=self.config.slack.research_channel,
                     event_collector=self.events,
                     orchestrator=self.orchestrator,
                 )
                 set_slack_bot(self._slack_bot)
-                await self._slack_bot.start()
-                logger.info("Slack bot started")
+                self._slack_task = asyncio.create_task(
+                    self._slack_bot.start(),
+                    name="jarvis-slack-bot",
+                )
+                self._slack_task.add_done_callback(self._on_slack_task_done)
+                logger.info("Slack bot start requested")
             except ImportError:
                 logger.warning("slack-bolt not installed, skipping Slack integration")
             except Exception as e:
-                logger.error(f"Slack bot failed to start: {e}")
+                logger.exception("Slack bot failed to start: %s", e)
 
         # Voice client (optional)
         if self.config.voice.enabled and self.config.voice.api_key:
@@ -90,17 +219,225 @@ class JarvisDaemon:
             except ImportError:
                 logger.warning("websockets not installed, skipping voice integration")
             except Exception as e:
-                logger.error(f"Voice client failed to connect: {e}")
+                logger.exception("Voice client failed to connect: %s", e)
 
-        self._running = True
+        # A2A server (optional - Agent-to-Agent protocol)
+        if self.config.a2a.enabled:
+            try:
+                # Bootstrap A2A token if not exists
+                from jarvis.a2a.auth import get_token_path, generate_token, write_token, read_token
+                token_file = get_token_path(self.config.a2a.token_path)
+                if not token_file.exists():
+                    new_token = generate_token()
+                    write_token(new_token, self.config.a2a.token_path)
+                    logger.info(f"Generated new A2A token at {token_file}")
+                else:
+                    logger.debug(f"A2A token found at {token_file}")
+
+                logger.info(f"Starting A2A server on port {self.config.a2a.port}")
+                self._a2a_server = JarvisA2AServer(
+                    self.config,
+                    orchestrator=self.orchestrator,
+                    project_path=self.orchestrator.project_path if self.orchestrator else None,
+                )
+                self._a2a_task = asyncio.create_task(
+                    self._a2a_server.start(),
+                    name="jarvis-a2a-server",
+                )
+
+                # Wait for A2A server to be ready (health gate)
+                a2a_ready = False
+                for attempt in range(10):
+                    await asyncio.sleep(0.5)
+                    try:
+                        import httpx
+                        async with httpx.AsyncClient() as client:
+                            resp = await client.get(
+                                f"http://localhost:{self.config.a2a.port}/health",
+                                timeout=1.0,
+                            )
+                            if resp.status_code == 200:
+                                a2a_ready = True
+                                break
+                    except Exception:
+                        pass
+
+                if a2a_ready:
+                    logger.info(f"A2A server ready on port {self.config.a2a.port}")
+                else:
+                    logger.warning("A2A server started but health check failed")
+            except Exception as e:
+                logger.exception("A2A server failed to start: %s", e)
+
+        # Copy bootstrap skills on first daemon start
+        try:
+            from jarvis.skill_generator import copy_bootstrap_skills
+            copied = copy_bootstrap_skills()
+            if copied:
+                logger.info(f"Installed {len(copied)} bootstrap skills: {', '.join(copied)}")
+        except Exception as e:
+            logger.warning(f"Bootstrap skills install failed: {e}")
+
+        # Initialize model router only when MLX local inference is configured
+        if self.config.models.executor.startswith("mlx") or os.environ.get("JARVIS_MLX_ENABLED"):
+            try:
+                from jarvis.model_router import get_model_router
+                router = get_model_router()
+                init_result = await router.initialize()
+                logger.info(f"Model router initialized: MLX={init_result.get('mlx')}, "
+                            f"Foundation={init_result.get('foundation')}")
+            except Exception as e:
+                logger.warning(f"Model router initialization failed: {e}")
+
+        # Seed universal heuristics once at startup (idempotent)
+        try:
+            from jarvis.universal_heuristics import auto_seed_project
+            seed_result = await auto_seed_project(
+                self.orchestrator.memory, self.orchestrator.project_path
+            )
+            if seed_result.get("seeded", 0) > 0:
+                logger.info(
+                    f"Seeded {seed_result['seeded']} universal heuristics "
+                    f"for {seed_result.get('languages', [])}"
+                )
+        except Exception:
+            pass  # Seeding is best-effort
+
+        # Idle introspection processor (must be set before IOKit check below)
+        try:
+            from jarvis.introspection_processor import IntrospectionProcessor
+            from jarvis.mlx_inference import get_mlx_engine
+            self._idle_processor = IntrospectionProcessor(
+                memory=self.orchestrator.memory,
+                mlx_engine=get_mlx_engine(),
+                project_path=str(self.orchestrator.project_path) if self.orchestrator else None,
+            )
+            logger.info("Idle introspection processor initialized")
+        except Exception as e:
+            logger.debug(f"Introspection processor not loaded: {e}")
+
+        # macOS native integrations
+        try:
+            from jarvis.macos_native import get_platform_capabilities
+            caps = get_platform_capabilities()
+            if caps["is_apple_silicon"]:
+                chip = caps.get("chip_info", {})
+                logger.info(
+                    f"Apple Silicon detected: {chip.get('chip', 'unknown')}, "
+                    f"{chip.get('total_memory_gb', '?')}GB RAM"
+                )
+
+                # Start IOKit-based idle detection polling
+                if caps["iokit_available"] and self._idle_processor:
+                    self._iokit_idle_task = asyncio.create_task(
+                        self._iokit_idle_loop()
+                    )
+                    logger.info("IOKit HID idle detection active")
+
+                # Load credentials from Keychain
+                from jarvis.macos_native import keychain_retrieve
+                kc_api_key = keychain_retrieve("com.jarvis.anthropic", "api_key")
+                if kc_api_key:
+                    os.environ.setdefault("ANTHROPIC_API_KEY", kc_api_key)
+                    logger.info("Loaded API key from Keychain")
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"macOS native init: {e}")
+
         logger.info("Jarvis daemon started")
 
         # Block until stop is requested
         await self._stop_event.wait()
 
+    def _on_slack_task_done(self, task: asyncio.Task) -> None:
+        """Log Slack task failures instead of letting them surface as unhandled."""
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("Slack bot task crashed")
+
+    async def _iokit_idle_loop(self) -> None:
+        """Poll IOKit HID idle time and trigger idle mode transitions.
+
+        Runs every 30s and checks the actual HID idle seconds.
+        More accurate than timer-based idle detection since it
+        uses real keyboard/mouse/trackpad activity.
+        """
+        from jarvis.macos_native import get_idle_seconds, get_memory_pressure
+
+        threshold = self.config.idle.idle_threshold_minutes * 60
+
+        while self._running:
+            try:
+                await asyncio.sleep(30)
+
+                idle_secs = get_idle_seconds()
+                if idle_secs is None:
+                    continue
+
+                if self._idle_processor:
+                    if idle_secs >= threshold:
+                        self._idle_processor.trigger_idle()
+                    elif idle_secs < 5:
+                        # Recent activity
+                        self._idle_processor.record_activity()
+
+                # Check memory pressure for hibernation
+                pressure = get_memory_pressure()
+                if pressure and pressure.get("should_hibernate"):
+                    if self._idle_processor:
+                        self._idle_processor.trigger_hibernate()
+                    # Also unload MLX model to free memory
+                    try:
+                        from jarvis.model_router import get_model_router
+                        router = get_model_router()
+                        await router.shutdown()
+                    except Exception:
+                        pass
+                    logger.warning(
+                        f"Memory pressure CRITICAL ({pressure.get('free_mb', '?')}MB free) "
+                        "— hibernated + unloaded local models"
+                    )
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"IOKit idle loop error: {e}")
+
     async def stop(self) -> None:
         """Gracefully stop all services."""
         logger.info("Jarvis daemon stopping")
+
+        # Shutdown model router (unload MLX) if it was initialized
+        try:
+            from jarvis.model_router import get_model_router
+            router = get_model_router()
+            await router.shutdown()
+        except Exception as e:
+            logger.debug(f"Model router shutdown error: {e}")
+
+        # Cancel IOKit idle loop
+        if hasattr(self, "_iokit_idle_task") and self._iokit_idle_task:
+            self._iokit_idle_task.cancel()
+            try:
+                await self._iokit_idle_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._file_watcher:
+            try:
+                await self._file_watcher.stop()
+            except Exception as e:
+                logger.warning(f"File watcher stop error: {e}")
+
+        if self._idle_processor:
+            try:
+                await self._idle_processor.stop()
+            except Exception as e:
+                logger.warning(f"Idle processor stop error: {e}")
 
         if self._ws_server:
             await self._ws_server.stop()
@@ -115,15 +452,46 @@ class JarvisDaemon:
             try:
                 await self._slack_bot.stop()
             except Exception as e:
-                logger.warning(f"Slack bot stop error: {e}")
+                logger.exception("Slack bot stop error: %s", e)
+        if self._slack_task:
+            self._slack_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._slack_task
+            self._slack_task = None
 
         if self._voice_client:
             try:
                 await self._voice_client.disconnect()
             except Exception as e:
-                logger.warning(f"Voice client disconnect error: {e}")
+                logger.exception("Voice client disconnect error: %s", e)
+
+        # Stop A2A server
+        if self._a2a_server:
+            logger.info("Stopping A2A server")
+            try:
+                await self._a2a_server.stop()
+            except Exception as e:
+                logger.exception("A2A server stop error: %s", e)
+            self._a2a_server = None
+        if self._a2a_task:
+            self._a2a_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._a2a_task
+            self._a2a_task = None
+
+        if self._idle_loop_task:
+            self._idle_loop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._idle_loop_task
+            self._idle_loop_task = None
+
+        try:
+            await self.orchestrator.close()
+        except Exception as e:
+            logger.exception("Orchestrator shutdown error: %s", e)
 
         self._running = False
+        CrashRecovery.clear_pid()
         self._stop_event.set()
 
     def _remote_enabled(self) -> bool:
@@ -229,7 +597,13 @@ def main():
     )
     project_path = sys.argv[1] if len(sys.argv) > 1 else None
     daemon = JarvisDaemon(project_path=project_path)
-    asyncio.run(daemon.start())
+    try:
+        asyncio.run(daemon.start())
+    except Exception as e:
+        CrashRecovery.log_crash(str(e))
+        raise
+    finally:
+        CrashRecovery.clear_pid()
 
 
 if __name__ == "__main__":

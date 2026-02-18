@@ -18,6 +18,14 @@ from pathlib import Path
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 
+def _resolve_project_path(path: str | None) -> str:
+    """Resolve potentially unsafe/invalid project roots."""
+    candidate = (path or "").strip() if isinstance(path, str) else ""
+    if not candidate or candidate == "/" or not os.path.isdir(candidate):
+        return os.getcwd()
+    return candidate
+
+
 async def _review_with_claude(diff: str, context: str, model: str = "claude-opus-4-6") -> dict:
     """Use Claude Agent SDK query() for code review."""
     from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock, ResultMessage
@@ -177,7 +185,7 @@ async def review_files(args: dict) -> dict:
     files = args.get("files", [])
     context = args.get("context", "Code review")
     reviewer = args.get("reviewer", "claude")
-    project_path = args.get("project_path", os.getcwd())
+    project_path = _resolve_project_path(args.get("project_path", os.getcwd()))
 
     # Read files and create a pseudo-diff
     file_contents = []
@@ -209,7 +217,7 @@ async def review_pr(args: dict) -> dict:
     """Review a GitHub pull request."""
     pr_number = args["pr_number"]
     reviewer = args.get("reviewer", "claude")
-    project_path = args.get("project_path", os.getcwd())
+    project_path = _resolve_project_path(args.get("project_path", os.getcwd()))
 
     # Get PR diff via gh
     proc = await asyncio.create_subprocess_exec(

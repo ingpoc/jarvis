@@ -65,6 +65,15 @@ struct VoiceView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
+        .onAppear {
+            requestMicrophonePermission()
+        }
+    }
+
+    private func requestMicrophonePermission() {
+        // macOS does not support AVAudioSession. Microphone permission is managed
+        // via AVCaptureDevice.
+        AVCaptureDevice.requestAccess(for: .audio) { _ in }
     }
 }
 

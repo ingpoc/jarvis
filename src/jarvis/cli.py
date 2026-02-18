@@ -38,10 +38,12 @@ from rich.table import Table
 
 from jarvis.budget import BudgetController
 from jarvis.config import JARVIS_HOME, JarvisConfig, ensure_jarvis_home
+from jarvis.context_files import should_use_project_jarvis
 from jarvis.memory import MemoryStore, generate_jarvis_md
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.container_templates import detect_template, list_templates as list_all_templates, get_template
 from jarvis.trust import TrustEngine, TrustTier
+from jarvis.skill_generator import copy_bootstrap_skills
 
 console = Console()
 
@@ -168,6 +170,7 @@ def status():
     """Show Jarvis status: trust, budget, active tasks."""
     ensure_jarvis_home()
     orchestrator = JarvisOrchestrator()
+    _run_async(orchestrator.run_model_preflight(live_check=False))
     status_data = _run_async(orchestrator.get_status())
 
     # Trust panel
@@ -188,6 +191,20 @@ def status():
     budget_table.add_row("Turns", budget["turns"])
     console.print(Panel(budget_table, title="Budget", border_style="green"))
 
+    # Preflight panel
+    preflight = status_data.get("preflight", {}) or {}
+    ready = bool(preflight.get("ready", False))
+    errors = preflight.get("errors", []) or []
+    warnings = preflight.get("warnings", []) or []
+    provider = preflight.get("provider", {}) or {}
+    preflight_table = Table(show_header=False, box=None)
+    preflight_table.add_row("Ready", "[green]yes[/]" if ready else "[red]no[/]")
+    preflight_table.add_row("Token present", "yes" if provider.get("token_present") else "no")
+    preflight_table.add_row("Base URL", provider.get("base_url") or "(default)")
+    preflight_table.add_row("Errors", ", ".join(errors) if errors else "-")
+    preflight_table.add_row("Warnings", ", ".join(warnings) if warnings else "-")
+    console.print(Panel(preflight_table, title="Preflight", border_style=("green" if ready else "red")))
+
     # Recent tasks
     if status_data["recent_tasks"]:
         task_table = Table(title="Recent Tasks")
@@ -196,7 +213,7 @@ def status():
         task_table.add_column("Status")
         task_table.add_column("Cost")
         for t in status_data["recent_tasks"]:
-            color = {"completed": "green", "failed": "red", "in_progress": "blue"}.get(
+            color = {"completed": "green", "failed": "red", "cancelled": "yellow", "in_progress": "blue"}.get(
                 t["status"], "white"
             )
             task_table.add_row(t["id"], t["description"][:60], f"[{color}]{t['status']}[/]", t["cost"])
@@ -536,24 +553,30 @@ def init():
     cfg.save()
 
     trust_status = TrustEngine().status(str(project_path))
-    jarvis_md_path = project_path / "JARVIS.md"
-    if not jarvis_md_path.exists():
-        content = generate_jarvis_md(project_path, {
-            "project_name": project_name,
-            "project_type": project_type,
-            "project_path": str(project_path),
-            "test_runner": test_runner,
-            "package_manager": package_manager,
-            "container_image": container_image,
-            "cpus": cfg.container.default_cpus,
-            "memory": cfg.container.default_memory,
-            "trust_tier": trust_status["tier"],
-            "trust_tier_name": trust_status["tier_name"],
-        })
-        jarvis_md_path.write_text(content)
-        console.print(f"\n  Created [bold]JARVIS.md[/]")
+    if should_use_project_jarvis(project_path):
+        jarvis_md_path = project_path / "JARVIS.md"
+        legacy_path = project_path / "Jarvis.md"
+        if not jarvis_md_path.exists() and legacy_path.exists():
+            jarvis_md_path = legacy_path
+        if not jarvis_md_path.exists():
+            content = generate_jarvis_md(project_path, {
+                "project_name": project_name,
+                "project_type": project_type,
+                "project_path": str(project_path),
+                "test_runner": test_runner,
+                "package_manager": package_manager,
+                "container_image": container_image,
+                "cpus": cfg.container.default_cpus,
+                "memory": cfg.container.default_memory,
+                "trust_tier": trust_status["tier"],
+                "trust_tier_name": trust_status["tier_name"],
+            })
+            jarvis_md_path.write_text(content)
+            console.print(f"\n  Created [bold]{jarvis_md_path.name}[/]")
+        else:
+            console.print(f"\n  [dim]{jarvis_md_path.name} already exists[/]")
     else:
-        console.print(f"\n  [dim]JARVIS.md already exists[/]")
+        console.print("\n  [dim]Skipping project JARVIS.md for Jarvis core repo[/]")
 
     console.print(f"\n[bold green]Ready.[/] Trust: T{trust_status['tier']}. "
                   f"Try: jarvis \"describe this codebase\"\n")
@@ -839,6 +862,221 @@ def daemon(install, uninstall):
     from jarvis.daemon import JarvisDaemon
     d = JarvisDaemon()
     _run_async(d.start())
+
+
+# --- Learnings management ---
+
+
+@cli.command()
+@click.option("--limit", "-n", default=20, help="Number of learnings to show")
+@click.option("--all-confidence", "-a", is_flag=True, help="Show all confidence levels")
+def learnings(limit, all_confidence):
+    """Show learned error-fix patterns.
+
+    Examples:
+        jarvis learnings           # high-confidence learnings
+        jarvis learnings -a        # all learnings
+        jarvis learnings -n 50     # last 50 learnings
+    """
+    memory = MemoryStore()
+    min_conf = 0.0 if all_confidence else 0.5
+
+    items = memory.get_learnings(
+        project_path=os.getcwd(),
+        min_confidence=min_conf,
+        limit=limit,
+    )
+
+    if not items:
+        console.print("[dim]No learnings yet. Run some tasks to build knowledge.[/]")
+        return
+
+    table = Table(title=f"Learned Patterns ({len(items)})")
+    table.add_column("ID", style="dim")
+    table.add_column("Error Pattern")
+    table.add_column("Fix")
+    table.add_column("Confidence")
+    table.add_column("Count")
+    table.add_column("Revalidate")
+
+    for l in items:
+        conf = l["confidence"]
+        conf_color = "green" if conf >= 0.7 else ("yellow" if conf >= 0.4 else "red")
+        reval = "[yellow]yes[/]" if l.get("needs_revalidation") else ""
+        table.add_row(
+            str(l["id"]),
+            l["error_message"][:50],
+            l["fix_description"][:40],
+            f"[{conf_color}]{conf:.2f}[/]",
+            str(l["occurrence_count"]),
+            reval,
+        )
+
+    console.print(table)
+
+
+# --- Skills management ---
+
+
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def skills(ctx):
+    """Manage auto-generated and bootstrap skills."""
+    if ctx.invoked_subcommand is None:
+        _list_skills()
+
+
+def _list_skills():
+    """List all available skills."""
+    skills_dir = Path.home() / ".claude" / "skills"
+    if not skills_dir.exists():
+        console.print("[dim]No skills directory. Run: jarvis skills bootstrap[/]")
+        return
+
+    skill_files = list(skills_dir.glob("*.md"))
+    if not skill_files:
+        console.print("[dim]No skills installed. Run: jarvis skills bootstrap[/]")
+        return
+
+    table = Table(title=f"Installed Skills ({len(skill_files)})")
+    table.add_column("Name", style="cyan")
+    table.add_column("Description")
+    table.add_column("Confidence")
+    table.add_column("Type")
+
+    for sf in sorted(skill_files):
+        content = sf.read_text()
+        # Parse frontmatter
+        desc = ""
+        conf = ""
+        skill_type = "custom"
+        for line in content.splitlines():
+            if line.startswith("description:"):
+                desc = line.split(":", 1)[1].strip()
+            elif line.startswith("confidence:"):
+                conf = line.split(":", 1)[1].strip()
+            elif line.startswith("auto_generated:"):
+                val = line.split(":", 1)[1].strip()
+                skill_type = "auto" if val == "true" else "bootstrap"
+
+        table.add_row(sf.stem, desc[:50], conf, skill_type)
+
+    console.print(table)
+
+
+@skills.command("bootstrap")
+def skills_bootstrap():
+    """Install bootstrap skills for coding domain."""
+    copied = copy_bootstrap_skills()
+    if copied:
+        console.print(f"[green]Installed {len(copied)} bootstrap skills:[/]")
+        for name in copied:
+            console.print(f"  - {name}")
+    else:
+        console.print("[dim]All bootstrap skills already installed.[/]")
+
+
+@skills.command("generate")
+def skills_generate():
+    """Generate skills from detected patterns."""
+    memory = MemoryStore()
+
+    async def _gen():
+        from jarvis.skill_generator import generate_skills_from_patterns
+        return await generate_skills_from_patterns(
+            memory=memory,
+            project_path=os.getcwd(),
+        )
+
+    result = _run_async(_gen())
+    generated = result.get("skills_generated", 0)
+    candidates = result.get("candidates_found", 0)
+
+    if generated > 0:
+        console.print(f"[green]Generated {generated} skills from {candidates} candidates:[/]")
+        for s in result.get("skills_saved", []):
+            console.print(f"  - {s['name']} (confidence: {s['confidence']:.2f})")
+    elif candidates > 0:
+        console.print(f"[yellow]Found {candidates} candidates but no new skills generated.[/]")
+    else:
+        console.print("[dim]No skill candidates ready (need 3+ occurrences of a pattern).[/]")
+
+
+@skills.command("validate")
+@click.argument("name")
+def skills_validate(name):
+    """Validate a skill against execution history."""
+    memory = MemoryStore()
+
+    async def _val():
+        from jarvis.skill_generator import validate_skill
+        return await validate_skill(name, memory)
+
+    result = _run_async(_val())
+    if result.get("validated"):
+        console.print(
+            f"[green]Skill '{name}' validated:[/] "
+            f"{result['success_rate']:.0%} success rate "
+            f"({result['successful']}/{result['test_count']} tasks)"
+        )
+    else:
+        console.print(f"[red]Skill '{name}' validation failed:[/]")
+        for err in result.get("errors", []):
+            console.print(f"  - {err}")
+
+
+# --- Context layers ---
+
+
+@cli.command()
+@click.option("--layer", "-l", default=None, help="Specific layer (L1-L4)")
+@click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
+def context(layer, json_output):
+    """Show project context layers (L1-L4).
+
+    Examples:
+        jarvis context          # summary of all layers
+        jarvis context -l L1    # repo structure only
+        jarvis context -j       # full JSON output
+    """
+    from jarvis.context_layers import build_context_layers, format_context_for_prompt
+
+    layers_to_build = [layer] if layer else None
+
+    async def _build():
+        return await build_context_layers(os.getcwd(), layers_to_build)
+
+    result = _run_async(_build())
+
+    if json_output:
+        console.print_json(json.dumps(result, indent=2, default=str))
+    else:
+        formatted = format_context_for_prompt(result)
+        console.print(Panel(formatted, title="Project Context", border_style="blue"))
+
+        # Show per-layer stats
+        for layer_name, data in result.items():
+            if layer_name == "L1":
+                console.print(f"  L1 Repo: {', '.join(data.get('languages', []))} | "
+                              f"{data.get('total_files', 0)} files")
+            elif layer_name == "L2":
+                console.print(f"  L2 Modules: {len(data.get('modules', {}))} modules, "
+                              f"{len(data.get('import_edges', []))} import edges")
+            elif layer_name == "L3":
+                console.print(f"  L3 Signatures: {data.get('total_signatures', 0)} signatures")
+            elif layer_name == "L4":
+                console.print(f"  L4 Tests: {data.get('test_count', 0)} tests in "
+                              f"{len(data.get('test_files', []))} files")
+
+
+# --- Idle mode ---
+
+
+@cli.command()
+def idle_status():
+    """Show idle mode processor status."""
+    console.print("[dim]Idle mode stats are available via the daemon (jarvis daemon).[/]")
+    console.print("[dim]Use 'jarvis status' to see overall system state.[/]")
 
 
 def main():

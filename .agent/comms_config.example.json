@@ -1,0 +1,26 @@
+{
+  "claude": {
+    "base_url": "http://127.0.0.1:9850",
+    "token_env": "CLAUDE_IMPLEMENTER_TOKEN"
+  },
+  "codex": {
+    "base_url": "http://127.0.0.1:9851",
+    "token_env": "CODEX_REVIEWER_TOKEN"
+  },
+  "timeouts": {
+    "submit_seconds": 30,
+    "review_seconds": 600,
+    "implement_seconds": 1800
+  },
+  "retries": {
+    "max_attempts": 3
+  },
+  "sandbox": {
+    "mode": "workspace-write"
+  },
+  "projection": {
+    "architecture_path": ".agent/ARCHITECTURE.md",
+    "inflight_path": ".agent/inflight-communication/ANALYSIS_IMPROVEMENT.md"
+  }
+}
+

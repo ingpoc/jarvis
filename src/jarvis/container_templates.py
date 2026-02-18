@@ -169,3 +169,166 @@ def build_setup_script(template: ContainerTemplate) -> str:
     lines.append("")
     lines.append(f'echo "Template {template.name} setup complete"')
     return "\n".join(lines)
+
+
+# --- Docker Fallback ---
+
+class DockerFallback:
+    """Docker-based container runtime fallback.
+
+    Used when Apple Containerization is unavailable (non-macOS or
+    older macOS versions). Provides the same interface using Docker CLI.
+    """
+
+    def __init__(self):
+        self._docker_available: bool | None = None
+
+    def is_available(self) -> bool:
+        """Check if Docker is installed and running."""
+        if self._docker_available is not None:
+            return self._docker_available
+
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["docker", "info"],
+                capture_output=True,
+                timeout=5,
+            )
+            self._docker_available = result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            self._docker_available = False
+
+        return self._docker_available
+
+    def run_container(
+        self,
+        template: ContainerTemplate,
+        workspace_path: str,
+        workspace_dir: str = "/workspace",
+        name: str | None = None,
+    ) -> dict:
+        """Start a Docker container using the given template.
+
+        Args:
+            template: Container template to use
+            workspace_path: Host path to mount as workspace
+            workspace_dir: Container path for workspace mount
+            name: Optional container name
+
+        Returns:
+            dict with container_id and status
+        """
+        import subprocess
+
+        cmd = ["docker", "run", "-d"]
+
+        # Container name
+        if name:
+            cmd.extend(["--name", name])
+
+        # Mount workspace
+        cmd.extend(["-v", f"{workspace_path}:{workspace_dir}"])
+        cmd.extend(["-w", workspace_dir])
+
+        # Environment variables
+        for key, value in template.env.items():
+            cmd.extend(["-e", f"{key}={value}"])
+
+        # Image
+        cmd.append(template.base_image)
+
+        # Keep container running
+        cmd.extend(["tail", "-f", "/dev/null"])
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                return {
+                    "status": "error",
+                    "error": result.stderr.strip(),
+                }
+
+            container_id = result.stdout.strip()[:12]
+
+            # Run setup commands
+            for setup_cmd in template.setup_commands:
+                subprocess.run(
+                    ["docker", "exec", container_id, "bash", "-c", setup_cmd],
+                    capture_output=True,
+                    timeout=120,
+                )
+
+            return {
+                "status": "running",
+                "container_id": container_id,
+                "backend": "docker",
+            }
+
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            return {"status": "error", "error": str(e)}
+
+    def exec_in_container(self, container_id: str, command: str) -> dict:
+        """Execute a command in a running Docker container."""
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["docker", "exec", container_id, "bash", "-c", command],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            return {
+                "exit_code": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        except subprocess.TimeoutExpired:
+            return {"exit_code": -1, "stdout": "", "stderr": "Command timed out"}
+
+    def stop_container(self, container_id: str) -> bool:
+        """Stop and remove a Docker container."""
+        import subprocess
+
+        try:
+            subprocess.run(
+                ["docker", "rm", "-f", container_id],
+                capture_output=True,
+                timeout=30,
+            )
+            return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+
+    def get_container_logs(self, container_id: str, tail: int = 100) -> str:
+        """Get logs from a Docker container."""
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["docker", "logs", "--tail", str(tail), container_id],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return result.stdout + result.stderr
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return ""
+
+
+# Singleton fallback instance
+_docker_fallback: DockerFallback | None = None
+
+
+def get_docker_fallback() -> DockerFallback:
+    """Get the Docker fallback runtime."""
+    global _docker_fallback
+    if _docker_fallback is None:
+        _docker_fallback = DockerFallback()
+    return _docker_fallback

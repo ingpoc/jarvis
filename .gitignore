@@ -24,7 +24,7 @@ wheels/
 venv/
 ENV/
 env/
-.venv
+.venv/
 
 # IDE
 .vscode/
@@ -41,3 +41,18 @@ env/
 
 # Swift build
 JarvisApp/.build/
+JarvisApp/.swiftpm/
+JarvisClient/.build/
+JarvisiOS/.build/
+
+# Local runtime config/secrets
+.env
+.mcp.json
+.codex/config.toml
+.agent/comms_config.json
+
+# Local assistant workspace artifacts
+.claude/
+
+# Test artifacts
+.test/

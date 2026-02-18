@@ -29,6 +29,11 @@ def set_slack_bot(bot) -> None:
     _slack_bot = bot
 
 
+def get_slack_bot():
+    """Get the registered Slack bot instance (or None)."""
+    return _slack_bot
+
+
 def set_voice_client(client) -> None:
     """Register voice client for notification dispatch."""
     global _voice_client

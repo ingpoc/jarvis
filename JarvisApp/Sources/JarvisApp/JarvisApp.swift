@@ -1,12 +1,12 @@
 import SwiftUI
-import Observation
-import JarvisClient
+import CoreSpotlight
+
+// MARK: - App Container
 
 @main
 struct JarvisApp: App {
-    @State private var router = NavigationRouter()
-    @State private var authManager = AuthManager.shared
-    @State private var webSocketClient = JarvisWebSocketClient.shared
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @State private var webSocket = WebSocketClient()
 
     var body: some Scene {
         // Hidden window - opened via menu bar or hotkey
@@ -23,13 +23,51 @@ struct JarvisApp: App {
         // Menu bar icon (primary interface)
         MenuBarExtra {
             JarvisMenuView()
-                .environment(authManager)
-                .environment(webSocketClient)
-                .frame(width: 360, height: 480)
+                .environment(webSocket)
+                .environment(\.webSocket, webSocket)
+                .frame(width: 420, height: 520)
+                .onAppear {
+                    // Initialize Spotlight quick actions on first appearance
+                    Task { @MainActor in
+                        SpotlightService.shared.indexQuickActions()
+                    }
+                }
         } label: {
-            MenuBarIcon(status: router.currentStatus)
+            Image(systemName: "app.fill")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [.purple, .blue],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         }
         .menuBarExtraStyle(.window)
+
+        Window("Jarvis", id: "full-app") {
+            FullAppView()
+                .environment(webSocket)
+                .environment(\.webSocket, webSocket)
+                .frame(minWidth: 1000, minHeight: 700)
+        }
+    }
+}
+
+// MARK: - Environment Key
+
+private struct WebSocketKey: EnvironmentKey {
+    static var defaultValue: WebSocketClient {
+        WebSocketClient()
+    }
+}
+
+// MARK: - Environment Extension
+
+extension EnvironmentValues {
+    var webSocket: WebSocketClient {
+        get { self[WebSocketKey.self] }
+        set { self[WebSocketKey.self] = newValue }
     }
 }
 

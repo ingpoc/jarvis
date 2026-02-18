@@ -10,6 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 try:
@@ -32,8 +35,7 @@ DEFAULT_PORT = 9847
 def _require_websockets():
     if not HAS_WEBSOCKETS:
         raise ImportError(
-            "websockets is required for the WS bridge. "
-            "Install with: pip install websockets"
+            "websockets is required for the WS bridge. Install with: pip install websockets"
         )
 
 
@@ -52,9 +54,99 @@ class JarvisWSServer:
         self._port = port
         self._clients: set = set()
         self._server = None
+        self._started_at = time.time()
+        self._background_tasks: set[asyncio.Task] = set()
 
         # Register as EventCollector listener
         self._events.add_listener(self._broadcast_event)
+
+    def _track_background_task(self, task: asyncio.Task) -> None:
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _run_chat_nonblocking(
+        self,
+        *,
+        message: str,
+        origin: str,
+        request_id: str | None,
+        action: str,
+    ) -> dict:
+        """Return chat quickly; continue long-running turns in background."""
+        if not self._orchestrator:
+            return {"error": "Orchestrator not connected"}
+
+        raw_timeout = os.environ.get("JARVIS_WS_CHAT_SYNC_TIMEOUT_SECS", "").strip()
+        try:
+            sync_timeout = float(raw_timeout) if raw_timeout else 8.0
+        except ValueError:
+            sync_timeout = 8.0
+        chat_task = asyncio.create_task(self._orchestrator.handle_message(message, origin=origin))
+
+        if sync_timeout <= 0:
+            return await chat_task
+
+        done, _ = await asyncio.wait({chat_task}, timeout=sync_timeout)
+        if done:
+            return await chat_task
+
+        async def _publish_when_done() -> None:
+            try:
+                result = await chat_task
+                reply = (result.get("reply") or "").strip()
+                self._events.emit(
+                    "chat_async_complete",
+                    (reply or result.get("status") or "completed")[:200],
+                    metadata={
+                        "request_id": request_id,
+                        "action": action,
+                        "origin": origin,
+                        "route": result.get("route"),
+                        "status": result.get("status"),
+                        "reply": reply[:5000],
+                        "decision": result.get("decision") or {},
+                    },
+                )
+            except Exception as exc:
+                logger.exception("Background chat failed")
+                self._events.emit(
+                    "error",
+                    f"Background chat failed: {exc}",
+                    metadata={
+                        "request_id": request_id,
+                        "action": action,
+                        "origin": origin,
+                        "error": str(exc),
+                    },
+                )
+
+        self._track_background_task(asyncio.create_task(_publish_when_done()))
+        queued = {
+            "status": "queued",
+            "route": "chat",
+            "reply": "Working on it. I will post the full response when finished.",
+            "queued": True,
+            "decision": {
+                "mode": "chat",
+                "confidence": 0.5,
+                "reason": "async_queued",
+            },
+        }
+        return queued
+
+    def _resolve_client_path(self, raw_path: str) -> Path:
+        """Resolve client-provided paths strictly inside Jarvis workspace."""
+        base = (
+            Path(self._orchestrator.project_path if self._orchestrator else ".")
+            .expanduser()
+            .resolve()
+        )
+        incoming = Path(raw_path).expanduser()
+        candidate = incoming if incoming.is_absolute() else (base / incoming)
+        resolved = candidate.resolve()
+        if resolved != base and base not in resolved.parents:
+            raise PermissionError(f"Path escapes workspace: {resolved}")
+        return resolved
 
     async def start(self) -> None:
         """Start WebSocket server on 127.0.0.1."""
@@ -86,10 +178,14 @@ class JarvisWSServer:
                 try:
                     cmd_data = json.loads(raw)
                 except json.JSONDecodeError:
-                    await websocket.send(json.dumps({
-                        "type": "error",
-                        "data": {"message": "Invalid JSON"},
-                    }))
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "data": {"message": "Invalid JSON"},
+                            }
+                        )
+                    )
                     continue
 
                 await self._handle_command(websocket, cmd_data)
@@ -106,12 +202,15 @@ class JarvisWSServer:
         """
         action = cmd_data.get("action", "")
         data = cmd_data.get("data", {})
+        request_id = cmd_data.get("id")
         result: Any = None
+        started_at = time.time()
 
         try:
             if action == "get_status":
                 if self._orchestrator:
-                    result = await self._orchestrator.get_status()
+                    raw_status = await self._orchestrator.get_status()
+                    result = self._build_status_payload(raw_status)
                 else:
                     result = {"error": "Orchestrator not connected"}
 
@@ -119,6 +218,110 @@ class JarvisWSServer:
                 if self._orchestrator:
                     limit = data.get("limit", 50)
                     result = self._orchestrator.memory.get_timeline(limit=limit)
+                else:
+                    result = {"error": "Orchestrator not connected"}
+
+            elif action == "get_available_tools":
+                if self._orchestrator:
+                    tools = self._orchestrator.get_capabilities().get("tools", [])
+                    result = {"tools": tools}
+                else:
+                    result = {"error": "Orchestrator not connected"}
+
+            elif action == "get_capabilities":
+                if self._orchestrator:
+                    result = self._orchestrator.get_capabilities()
+                else:
+                    result = {"error": "Orchestrator not connected"}
+
+            elif action == "get_model_status":
+                from jarvis.local_model_manager import get_local_model_manager
+                from jarvis.afm_integration import is_afm_available
+                from jarvis.lm_studio_manager import get_lm_studio_manager
+
+                local_mgr = get_local_model_manager()
+                lm_mgr = get_lm_studio_manager()
+                config = self._orchestrator.config if self._orchestrator else None
+                current_model = config.models.executor if config else "unknown"
+
+                provider = "anthropic"
+                if current_model == "foundation-models":
+                    provider = "foundation"
+                elif "/" in current_model or current_model.startswith("lmstudio-"):
+                    provider = "lmstudio"
+
+                afm_available = is_afm_available()
+                lm_running = lm_mgr.is_running or lm_mgr.is_api_available()
+
+                result = {
+                    "current_model": current_model,
+                    "provider": provider,
+                    "provider_type": local_mgr.provider.value
+                    if local_mgr.provider
+                    else "anthropic",
+                    "available_models": [
+                        "claude-sonnet-4-5-20250929",
+                        "claude-opus-4-6",
+                        "claude-haiku-4-5-20251001",
+                    ],
+                    "foundation_available": afm_available,
+                    "mlx_available": False,
+                    "lmstudio_running": lm_running,
+                    "lmstudio_model_loaded": lm_mgr.current_model if lm_running else None,
+                    "lmstudio_available_models": lm_mgr.available_models if lm_running else [],
+                    "local_models": {
+                        "foundation": {
+                            "available": afm_available,
+                            "model": "apple-foundation-models",
+                        },
+                        "lmstudio": {
+                            "running": lm_running,
+                            "model_loaded": lm_mgr.current_model,
+                            "available_models": lm_mgr.available_models if lm_running else [],
+                        },
+                    },
+                }
+
+            elif action == "switch_model":
+                model = data.get("model", "")
+                if not model:
+                    result = {"error": "Missing 'model'"}
+                elif self._orchestrator:
+                    from jarvis.local_model_manager import get_local_model_manager
+
+                    local_mgr = get_local_model_manager()
+
+                    # Determine provider based on model ID
+                    provider = "anthropic"
+                    if model == "foundation-models":
+                        provider = "foundation"
+                    elif (
+                        "/" in model
+                        or model.startswith("lmstudio-")
+                        or "qwen" in model.lower()
+                        or "deepseek" in model.lower()
+                    ):
+                        provider = "lmstudio"
+
+                    if provider != "anthropic":
+                        switch_result = await local_mgr.switch_model(model)
+                        if "error" in switch_result:
+                            result = switch_result
+                        else:
+                            self._orchestrator.config.models.executor = model
+                            self._orchestrator.config.models.provider_type = provider
+                            self._orchestrator.config.save()
+                            result = {
+                                "success": True,
+                                "current_model": model,
+                                "provider": provider,
+                                "info": switch_result.get("info", ""),
+                            }
+                    else:
+                        self._orchestrator.config.models.executor = model
+                        self._orchestrator.config.models.provider_type = "anthropic"
+                        self._orchestrator.config.save()
+                        result = {"success": True, "current_model": model, "provider": "anthropic"}
                 else:
                     result = {"error": "Orchestrator not connected"}
 
@@ -145,22 +348,359 @@ class JarvisWSServer:
                 if not description:
                     result = {"error": "Missing 'description'"}
                 elif self._orchestrator:
-                    asyncio.create_task(
-                        self._orchestrator.run_task(description)
-                    )
-                    result = {"queued": description[:100]}
+                    origin_tag = f"ws:{request_id}" if request_id else "ws"
+                    force_mode = str(data.get("mode", "")).strip().lower()
+                    if force_mode == "pipeline":
+
+                        async def runner(desc: str):
+                            return await self._orchestrator.run_pipeline(desc)
+
+                        mode = "pipeline"
+                    else:
+                        # WS default is single-agent for predictable conversational UX.
+                        # Callers can explicitly request pipeline mode with data.mode="pipeline".
+                        async def runner(desc: str):
+                            return await self._orchestrator.run_task(desc, origin=origin_tag)
+
+                        mode = "single"
+                    asyncio.create_task(runner(description))
+                    result = {"queued": description[:100], "mode": mode, "origin": origin_tag}
                 else:
                     result = {"error": "Orchestrator not connected"}
+
+            elif action == "chat":
+                message = data.get("message", "")
+                if not message:
+                    result = {"error": "Missing 'message'"}
+                elif self._orchestrator:
+                    origin_tag = f"ws:{ws.remote_address[0]}:{ws.remote_address[1]}"
+                    result = await self._run_chat_nonblocking(
+                        message=message,
+                        origin=origin_tag,
+                        request_id=request_id,
+                        action=action,
+                    )
+                else:
+                    result = {"error": "Orchestrator not connected"}
+
+            elif action == "message":
+                message = data.get("message", "")
+                if not message:
+                    result = {"error": "Missing 'message'"}
+                elif not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    origin_tag = f"ws:{ws.remote_address[0]}:{ws.remote_address[1]}"
+                    result = await self._run_chat_nonblocking(
+                        message=message,
+                        origin=origin_tag,
+                        request_id=request_id,
+                        action=action,
+                    )
+                    route = result.get("route", "unknown")
+                    decision = result.get("decision", {}) or {}
+                    self._events.emit(
+                        "chat_intent",
+                        f"route={route}",
+                        metadata={
+                            "route": route,
+                            "confidence": decision.get("confidence"),
+                            "reason": decision.get("reason"),
+                            "mode": decision.get("mode"),
+                        },
+                    )
+
+            elif action == "run_code_orchestration":
+                if not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    code = str(data.get("code", "") or "")
+                    timeout = int(data.get("timeout", 30) or 30)
+                    if not code.strip():
+                        result = {"error": "Missing 'code'"}
+                    else:
+                        result = self._orchestrator.run_code_orchestration(
+                            code=code,
+                            timeout=max(1, min(timeout, 300)),
+                        )
+
+            elif action == "add_mcp_server":
+                if not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    result = self._orchestrator.register_mcp_server(
+                        name=data.get("name", ""),
+                        command=data.get("command", ""),
+                        args=data.get("args", []) or [],
+                        env=data.get("env", {}) or {},
+                    )
+
+            elif action == "add_agent":
+                if not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    result = self._orchestrator.register_agent(
+                        name=data.get("name", ""),
+                        description=data.get("description", ""),
+                        prompt=data.get("prompt", ""),
+                        tools=data.get("tools", []) or [],
+                        model=data.get("model"),
+                    )
+
+            elif action == "add_skill":
+                if not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    result = self._orchestrator.register_skill(
+                        name=data.get("name", ""),
+                        description=data.get("description", ""),
+                        content=data.get("content", ""),
+                    )
+
+            elif action == "run_tests":
+                if self._orchestrator:
+                    prompt = (
+                        "Run the project's test suite, report failures, and suggest fixes. "
+                        "Use the project's native test command."
+                    )
+                    origin_tag = f"ws:{request_id}:run_tests" if request_id else "ws:run_tests"
+                    asyncio.create_task(self._orchestrator.run_task(prompt, origin=origin_tag))
+                    result = {"queued": "run_tests"}
+                else:
+                    result = {"error": "Orchestrator not connected"}
+
+            elif action == "build_project":
+                if self._orchestrator:
+                    prompt = "Build the current project and report build status and any errors."
+                    origin_tag = (
+                        f"ws:{request_id}:build_project" if request_id else "ws:build_project"
+                    )
+                    asyncio.create_task(self._orchestrator.run_task(prompt, origin=origin_tag))
+                    result = {"queued": "build_project"}
+                else:
+                    result = {"error": "Orchestrator not connected"}
+
+            elif action == "git_status":
+                cwd = self._orchestrator.project_path if self._orchestrator else None
+                proc = await asyncio.create_subprocess_exec(
+                    "git",
+                    "status",
+                    "--short",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    result = {"git_status": stdout.decode().strip() or "Clean working tree"}
+                else:
+                    result = {"error": stderr.decode().strip() or "git status failed"}
+
+            elif action == "read_file":
+                file_path = data.get("file_path", "")
+                if not file_path:
+                    result = {"error": "Missing 'file_path'"}
+                else:
+                    path = self._resolve_client_path(file_path)
+                    if not path.exists():
+                        result = {"error": f"File not found: {path}"}
+                    elif path.is_dir():
+                        result = {"error": f"Path is a directory: {path}"}
+                    else:
+                        text = path.read_text(errors="replace")
+                        result = {
+                            "file_path": str(path),
+                            "size_bytes": path.stat().st_size,
+                            "content": text[:20000],
+                            "truncated": len(text) > 20000,
+                        }
+
+            elif action == "analyze_code":
+                file_path = data.get("file_path", "")
+                if not file_path:
+                    result = {"error": "Missing 'file_path'"}
+                else:
+                    path = self._resolve_client_path(file_path)
+                    if not path.exists() or path.is_dir():
+                        result = {"error": f"File not found: {path}"}
+                    else:
+                        text = path.read_text(errors="replace")
+                        lines = text.splitlines()
+                        result = {
+                            "file_path": str(path),
+                            "language_hint": path.suffix.lstrip("."),
+                            "line_count": len(lines),
+                            "char_count": len(text),
+                            "preview": "\n".join(lines[:120]),
+                            "truncated": len(lines) > 120,
+                        }
+
+            elif action == "process_file":
+                file_path = data.get("file_path", "")
+                if not file_path:
+                    result = {"error": "Missing 'file_path'"}
+                else:
+                    path = self._resolve_client_path(file_path)
+                    if not path.exists():
+                        result = {"error": f"File not found: {path}"}
+                    else:
+                        result = {
+                            "file_path": str(path),
+                            "is_directory": path.is_dir(),
+                            "size_bytes": path.stat().st_size if path.is_file() else None,
+                            "extension": path.suffix.lower(),
+                        }
+
+            elif action == "get_containers":
+                from jarvis.container_tools import _run_container_cmd
+
+                # Listing containers can be slow right after the container system is started.
+                cmd_result = await _run_container_cmd("list", "--format", "json", timeout=30)
+                if cmd_result["exit_code"] == 0 and cmd_result["stdout"]:
+                    try:
+                        containers = json.loads(cmd_result["stdout"])
+                        jarvis_containers = [
+                            c
+                            for c in containers
+                            if c.get("configuration", {}).get("id", "").startswith("jarvis-")
+                        ]
+                        result = {
+                            "containers": [self._normalize_container(c) for c in jarvis_containers]
+                        }
+                    except json.JSONDecodeError:
+                        result = {
+                            "containers": [],
+                            "error": "Failed to decode container list JSON",
+                            "raw_output": (cmd_result["stdout"] or "")[:2000],
+                        }
+                else:
+                    err = (
+                        cmd_result.get("stderr")
+                        or cmd_result.get("stdout")
+                        or "container list failed"
+                    )
+                    result = {"containers": [], "error": err[:2000]}
+
+            elif action == "stop_container":
+                from jarvis.container_tools import _run_container_cmd
+
+                container_id = data.get("container_id", "")
+                if not container_id:
+                    result = {"success": False, "error": "Missing 'container_id'"}
+                else:
+                    cmd_result = await _run_container_cmd("stop", container_id, timeout=30)
+                    result = {
+                        "success": cmd_result["exit_code"] == 0,
+                        "container_id": container_id,
+                        "output": cmd_result["stdout"] or cmd_result["stderr"],
+                    }
+
+            elif action == "start_container":
+                from jarvis.container_tools import _run_container_cmd
+
+                container_id = data.get("container_id", "")
+                if not container_id:
+                    result = {"success": False, "error": "Missing 'container_id'"}
+                else:
+                    cmd_result = await _run_container_cmd("start", container_id, timeout=30)
+                    result = {
+                        "success": cmd_result["exit_code"] == 0,
+                        "container_id": container_id,
+                        "output": cmd_result["stdout"] or cmd_result["stderr"],
+                    }
+
+            elif action == "restart_container":
+                from jarvis.container_tools import _run_container_cmd
+
+                container_id = data.get("container_id", "")
+                if not container_id:
+                    result = {"success": False, "error": "Missing 'container_id'"}
+                else:
+                    stop_result = await _run_container_cmd("stop", container_id, timeout=30)
+                    start_result = await _run_container_cmd("start", container_id, timeout=30)
+                    ok = stop_result["exit_code"] == 0 and start_result["exit_code"] == 0
+                    result = {
+                        "success": ok,
+                        "container_id": container_id,
+                        "output": start_result["stdout"]
+                        or stop_result["stderr"]
+                        or start_result["stderr"],
+                    }
 
             else:
                 result = {"error": f"Unknown action: {action}"}
 
         except Exception as e:
-            logger.error(f"Command error ({action}): {e}")
-            result = {"error": str(e)}
+            logger.exception("Command error (%s): %s", action, e)
+            result = {"error": str(e), "error_type": type(e).__name__}
 
-        response = {"type": "response", "action": action, "data": result}
+        duration_ms = int(max(0.0, (time.time() - started_at) * 1000))
+        if isinstance(result, dict):
+            result.setdefault("_meta", {})
+            result["_meta"].update(
+                {
+                    "request_id": request_id,
+                    "action": action,
+                    "duration_ms": duration_ms,
+                }
+            )
+
+        response = {"type": "response", "id": request_id, "action": action, "data": result}
+        # Include the result fields at top-level for clients decoding direct payload types.
+        if isinstance(result, dict):
+            response.update(result)
         await ws.send(json.dumps(response, default=str))
+
+    def _build_status_payload(self, raw_status: dict) -> dict:
+        """Normalize status shape for both legacy and typed Swift clients."""
+        active_tasks = raw_status.get("active_tasks", []) or []
+        recent_tasks = raw_status.get("recent_tasks", []) or []
+
+        status = "idle"
+        if active_tasks:
+            status = "building"
+        elif any(t.get("status") in ("failed", "error") for t in recent_tasks):
+            status = "error"
+        preflight = raw_status.get("preflight") or {}
+
+        return {
+            **raw_status,
+            "status": status,
+            "current_session": raw_status.get("session_id"),
+            "current_feature": active_tasks[0]["description"][:120] if active_tasks else None,
+            "uptime": max(0.0, time.time() - self._started_at),
+            "preflight_ready": bool(preflight.get("ready", False)),
+            "preflight_errors": preflight.get("errors", []),
+            "preflight_warnings": preflight.get("warnings", []),
+        }
+
+    @staticmethod
+    def _normalize_container(container: dict) -> dict:
+        """Map container CLI JSON into app model fields."""
+        config = container.get("configuration", {}) or {}
+        resources = config.get("resources", {}) or {}
+        image = config.get("image", {}) or {}
+        status = container.get("status", "")
+        container_id = config.get("id", "")
+        cpus = resources.get("cpus")
+        if isinstance(cpus, str) and cpus.isdigit():
+            cpus = int(cpus)
+        if not isinstance(cpus, int):
+            cpus = None
+
+        memory = resources.get("memory")
+        if memory is not None and not isinstance(memory, str):
+            memory = str(memory)
+
+        return {
+            "id": container_id,
+            "name": container_id,
+            "status": status.lower() if isinstance(status, str) else "unknown",
+            "image": image.get("reference", "unknown"),
+            "cpus": cpus,
+            "memory": memory,
+            "task_id": None,
+        }
 
     def _broadcast_event(self, event_data: dict) -> None:
         """EventCollector listener callback: push events to all clients."""
@@ -172,11 +712,38 @@ class JarvisWSServer:
             default=str,
         )
 
+        # Check if we're in an async context with a running event loop
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running event loop - schedule broadcast from the main loop
+            logger.debug(
+                f"No running loop, scheduling broadcast for {event_data.get('event_type')}"
+            )
+            # Use call_soon_threadsafe if we have a reference to the loop
+            if self._server:
+                asyncio.run_coroutine_threadsafe(
+                    self._broadcast_to_clients(message), asyncio.get_event_loop()
+                )
+            return
+
         stale: set = set()
         for ws in self._clients:
             try:
-                asyncio.ensure_future(ws.send(message))
-            except Exception:
+                asyncio.ensure_future(ws.send(message), loop=loop)
+            except Exception as e:
+                logger.debug(f"Broadcast failed for client: {e}")
                 stale.add(ws)
 
+        self._clients -= stale
+
+    async def _broadcast_to_clients(self, message: str) -> None:
+        """Async helper to broadcast message to all clients."""
+        stale: set = set()
+        for ws in self._clients:
+            try:
+                await ws.send(message)
+            except Exception as e:
+                logger.debug(f"Broadcast failed for client: {e}")
+                stale.add(ws)
         self._clients -= stale

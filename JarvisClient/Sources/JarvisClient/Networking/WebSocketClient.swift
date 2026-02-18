@@ -18,7 +18,7 @@ public enum WebSocketError: LocalizedError {
 
 @available(macOS 14, iOS 17, *)
 @Observable
-public final class JarvisWebSocketClient: Starscream.WebSocketDelegate {
+public final class WebSocketClient: Starscream.WebSocketDelegate {
     public private(set) var isConnected = false
     public private(set) var status: JarvisStatus = .idle
     public private(set) var connectionError: Error?
@@ -181,14 +181,7 @@ public final class JarvisWebSocketClient: Starscream.WebSocketDelegate {
         return (response["success"] as? Bool) ?? false
     }
 
-    // Non-blocking fire-and-forget version for UI use
-    public func sendVoiceNoWait(text: String) {
-        _ = sendCommand(action: "send_voice", data: ["text": text])
-    }
-
-    // MARK: - Starscream.WebSocketDelegate
-
-    public func didReceive(event: Starscream.WebSocketEvent, client: any Starscream.WebSocketClient) {
+    public func didReceive(event: WebSocketEvent, client: Starscream.WebSocketClient) {
         switch event {
         case .connected:
             DispatchQueue.main.async {
