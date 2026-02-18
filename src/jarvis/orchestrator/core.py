@@ -60,6 +60,7 @@ from jarvis.trust import TrustEngine
 from jarvis.session_manager import SessionManager
 from jarvis.agents import MultiAgentPipeline
 from jarvis.self_learning import learn_from_task
+
 # Subpackage modules
 from jarvis.orchestrator.capabilities import DynamicCapabilitiesManager
 from jarvis.orchestrator.mcp_loader import MCPConfigLoader
@@ -84,9 +85,7 @@ class JarvisOrchestrator:
     def __init__(self, project_path: str | None = None):
         self.config = JarvisConfig.load()
         default_workspace = (
-            os.environ.get("JARVIS_WORKSPACE")
-            or self.config.workspace_root
-            or os.getcwd()
+            os.environ.get("JARVIS_WORKSPACE") or self.config.workspace_root or os.getcwd()
         )
         self.project_path = str(Path(project_path or default_workspace).expanduser().resolve())
         Path(self.project_path).mkdir(parents=True, exist_ok=True)
@@ -122,9 +121,7 @@ class JarvisOrchestrator:
         # Session state
         self._session_id: str | None = None
         self._active_containers: list[str] = []
-        self.loop_detector = LoopDetector(
-            max_iterations=self.config.budget.max_turns_per_subtask
-        )
+        self.loop_detector = LoopDetector(max_iterations=self.config.budget.max_turns_per_subtask)
         self.events = EventCollector(memory=self.memory)
         self._chat_lock = asyncio.Lock()
         self._chat_client: ClaudeSDKClient | None = None  # Deprecated: use SessionManager
@@ -152,8 +149,7 @@ class JarvisOrchestrator:
             "provider": {
                 "base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
                 "token_present": bool(
-                    os.environ.get("ANTHROPIC_AUTH_TOKEN")
-                    or os.environ.get("ANTHROPIC_API_KEY")
+                    os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
                 ),
             },
             "models": {
@@ -168,6 +164,7 @@ class JarvisOrchestrator:
         """Initialize hooks lazily (after notifications module is imported)."""
         if self._hooks is None:
             import jarvis.notifications as notifications
+
             self._hooks = OrchestratorHooks(
                 trust=self.trust,
                 budget=self.budget,
@@ -272,52 +269,62 @@ class JarvisOrchestrator:
 
         if tier >= 1:  # Assistant: edit, test, search
             tools.extend(["Edit", "Write", "Bash", "Task", "Skill", "NotebookEdit"])
-            tools.extend([
-                "mcp__jarvis-git__git_clone",
-                "mcp__jarvis-git__git_status",
-                "mcp__jarvis-git__git_diff",
-                "mcp__jarvis-git__git_log",
-                "mcp__jarvis-git__git_branch",
-            ])
+            tools.extend(
+                [
+                    "mcp__jarvis-git__git_clone",
+                    "mcp__jarvis-git__git_status",
+                    "mcp__jarvis-git__git_diff",
+                    "mcp__jarvis-git__git_log",
+                    "mcp__jarvis-git__git_branch",
+                ]
+            )
 
         if tier >= 2:  # Developer: containers, packages, git commit
-            tools.extend([
-                "mcp__jarvis-container__container_run",
-                "mcp__jarvis-container__container_exec",
-                "mcp__jarvis-container__container_stop",
-                "mcp__jarvis-container__container_list",
-                "mcp__jarvis-container__container_logs",
-                "mcp__jarvis-container__container_inspect",
-                "mcp__jarvis-container__container_stats",
-                "mcp__jarvis-git__git_add",
-                "mcp__jarvis-git__git_commit",
-                "mcp__jarvis-git__git_create_branch",
-                "mcp__jarvis-git__git_stash",
-                "mcp__jarvis-review__review_diff",
-                "mcp__jarvis-review__review_files",
-                "mcp__jarvis-browser__browser_setup",
-                "mcp__jarvis-browser__browser_test_run",
-                "mcp__jarvis-browser__browser_navigate",
-                "mcp__jarvis-browser__browser_interact",
-                "mcp__jarvis-browser__browser_api_test",
-                "mcp__jarvis-browser__browser_wallet_test",
-            ])
+            tools.extend(
+                [
+                    "mcp__jarvis-container__container_run",
+                    "mcp__jarvis-container__container_exec",
+                    "mcp__jarvis-container__container_stop",
+                    "mcp__jarvis-container__container_list",
+                    "mcp__jarvis-container__container_logs",
+                    "mcp__jarvis-container__container_inspect",
+                    "mcp__jarvis-container__container_stats",
+                    "mcp__jarvis-git__git_add",
+                    "mcp__jarvis-git__git_commit",
+                    "mcp__jarvis-git__git_create_branch",
+                    "mcp__jarvis-git__git_stash",
+                    "mcp__jarvis-review__review_diff",
+                    "mcp__jarvis-review__review_files",
+                    "mcp__jarvis-browser__browser_setup",
+                    "mcp__jarvis-browser__browser_test_run",
+                    "mcp__jarvis-browser__browser_navigate",
+                    "mcp__jarvis-browser__browser_interact",
+                    "mcp__jarvis-browser__browser_api_test",
+                    "mcp__jarvis-browser__browser_wallet_test",
+                ]
+            )
 
         if tier >= 3:  # Trusted Dev: push, PRs
-            tools.extend([
-                "mcp__jarvis-git__git_push",
-                "mcp__jarvis-git__git_create_pr",
-                "mcp__jarvis-review__review_pr",
-            ])
+            tools.extend(
+                [
+                    "mcp__jarvis-git__git_push",
+                    "mcp__jarvis-git__git_create_pr",
+                    "mcp__jarvis-review__review_pr",
+                ]
+            )
 
         return tools
 
-    async def _pre_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
+    async def _pre_tool_hook(
+        self, input_data: dict, tool_use_id: str | None, context: dict
+    ) -> dict:
         """Hook: enforce trust and budget before tool execution."""
         self._init_hooks()
         return await self._hooks.pre_tool_hook(input_data, tool_use_id, context)
 
-    async def _post_tool_hook(self, input_data: dict, tool_use_id: str | None, context: dict) -> dict:
+    async def _post_tool_hook(
+        self, input_data: dict, tool_use_id: str | None, context: dict
+    ) -> dict:
         """Hook: track container lifecycle, emit events, detect loops, capture execution records."""
         self._init_hooks()
         result = await self._hooks.post_tool_hook(input_data, tool_use_id, context)
@@ -344,15 +351,33 @@ class JarvisOrchestrator:
 
     def _build_options(self) -> ClaudeAgentOptions:
         """Build Agent SDK options with all Jarvis integrations."""
+
+        # Determine env vars for model provider
+        env = {}
+        model_id = self.config.models.executor
+        provider_type = getattr(self.config.models, "provider_type", "anthropic")
+
+        # Local models need custom base URLs
+        if (
+            provider_type == "lmstudio"
+            or "/" in model_id
+            or "qwen" in model_id.lower()
+            or "deepseek" in model_id.lower()
+        ):
+            # LM Studio - route through local server
+            env["ANTHROPIC_BASE_URL"] = "http://localhost:1234"
+            env["ANTHROPIC_AUTH_TOKEN"] = "lmstudio"
+
         options = ClaudeAgentOptions(
             system_prompt=self._build_system_prompt(),
             allowed_tools=self._build_allowed_tools(),
             permission_mode="acceptEdits",
             max_turns=self.config.budget.max_turns_per_task,
             max_budget_usd=self.config.budget.max_per_session_usd,
-            model=self.config.models.executor,
+            model=model_id,
             cwd=self.project_path,
             mcp_servers=self._build_mcp_servers(),
+            env=env if env else {},
             hooks={
                 "PreToolUse": [
                     HookMatcher(hooks=[self._pre_tool_hook]),
@@ -372,6 +397,118 @@ class JarvisOrchestrator:
             options.resume = self._session_id
 
         return options
+
+    async def _run_task_local(
+        self,
+        task_id: str,
+        task_description: str,
+        provider_type: str,
+        model_id: str,
+        emit_notifications: bool,
+    ) -> dict:
+        """Run task using local model (Foundation or LM Studio) directly.
+
+        This bypasses the Claude Agent SDK and calls local models directly.
+        """
+        from jarvis.local_model_manager import get_local_model_manager
+
+        result = {
+            "task_id": task_id,
+            "status": "unknown",
+            "cost_usd": 0.0,
+            "turns": 1,
+            "session_id": None,
+            "output": "",
+        }
+
+        try:
+            local_mgr = get_local_model_manager()
+
+            # Ensure the correct provider is active
+            await local_mgr.switch_model(model_id)
+
+            # Generate response
+            response = await local_mgr.generate(task_description)
+
+            result["output"] = response.get("content", "")
+            result["status"] = "completed"
+            result["cost_usd"] = 0.0
+
+            # Emit completion event
+            self.events.emit(
+                EVENT_TASK_COMPLETE,
+                result["output"],
+                task_id=task_id,
+                metadata={"status": "completed", "provider": provider_type},
+            )
+
+            if emit_notifications:
+                await notify_task_completed(task_id, result["output"])
+
+        except Exception as e:
+            result["status"] = "failed"
+            result["output"] = f"Error: {str(e)}"
+            self.events.emit(
+                EVENT_ERROR,
+                str(e),
+                task_id=task_id,
+            )
+
+        return result
+
+    async def _chat_local(self, user_message: str, provider_type: str, model_id: str) -> dict:
+        """Handle chat via local model (Foundation or LM Studio), bypassing Claude Agent SDK."""
+        from jarvis.local_model_manager import get_local_model_manager
+
+        try:
+            local_mgr = get_local_model_manager()
+            await local_mgr.switch_model(model_id)
+            response = await local_mgr.generate(user_message)
+            reply = response.get("content", "").strip()
+
+            self.events.emit(
+                "chat_assistant",
+                reply[:200],
+                cost_usd=0.0,
+                metadata={"reply": reply[:5000], "tools": [], "provider": provider_type},
+            )
+            decision = {
+                "mode": "chat",
+                "confidence": 1.0,
+                "reason": f"local_model:{provider_type}",
+            }
+            self.events.emit(
+                "chat_route",
+                f"mode=chat provider={provider_type}",
+                metadata={"decision": decision},
+            )
+            self.memory.save_channel_turn("message", self.project_path, user_message, reply)
+            append_project_turn(
+                self.project_path,
+                actor="chat:local",
+                message=user_message,
+                outcome=reply[:500],
+            )
+            return {
+                "status": "completed",
+                "route": "chat",
+                "reply": reply,
+                "decision": decision,
+            }
+        except Exception as e:
+            tb = traceback.format_exc()
+            logger.error("local chat failed: %s\n%s", e, tb)
+            self.events.emit(
+                EVENT_ERROR,
+                str(e)[:200],
+                metadata={"error": str(e), "provider": provider_type},
+            )
+            return {
+                "status": "error",
+                "route": "chat",
+                "reply": f"Local model error: {e}",
+                "decision": {"mode": "chat", "confidence": 0.0, "reason": "local_model_error"},
+            }
 
     def register_mcp_server(
         self,
@@ -413,7 +550,12 @@ class JarvisOrchestrator:
         tools = sorted(set(self._build_options().allowed_tools or self._build_allowed_tools()))
         capability_tools = tools + [f"mcp://{n}" for n in (static_names + dynamic_names)]
         capability_tools += ["hook://PreToolUse", "hook://PostToolUse"]
-        capability_tools += ["agent://planner", "agent://executor", "agent://tester", "agent://reviewer"]
+        capability_tools += [
+            "agent://planner",
+            "agent://executor",
+            "agent://tester",
+            "agent://reviewer",
+        ]
         capability_tools += [f"agent://{name}" for name in dynamic_agents]
         capability_tools += ["skill://Skill"]
         capability_tools += [f"skill://{name}" for name in dynamic_skills]
@@ -494,6 +636,16 @@ class JarvisOrchestrator:
         if callback:
             callback("task_started", {"id": task_id, "description": task_description})
 
+        # Check if using local model (Foundation or LM Studio) - route to local model handler
+        provider_type = getattr(self.config.models, "provider_type", "anthropic")
+        model_id = self.config.models.executor
+
+        if provider_type == "foundation" or provider_type == "lmstudio":
+            # Use local model directly instead of Claude Agent SDK
+            return await self._run_task_local(
+                task_id, task_description, provider_type, model_id, emit_notifications
+            )
+
         options = self._build_options()
         result = {
             "task_id": task_id,
@@ -505,6 +657,7 @@ class JarvisOrchestrator:
         }
 
         try:
+
             async def _run_query() -> None:
                 async with ClaudeSDKClient(options=options) as client:
                     await client.query(task_description)
@@ -525,10 +678,13 @@ class JarvisOrchestrator:
                                     result["output"] += block.text + "\n"
                                 elif isinstance(block, ToolUseBlock):
                                     if callback:
-                                        callback("tool_use", {
-                                            "tool": block.name,
-                                            "input": block.input,
-                                        })
+                                        callback(
+                                            "tool_use",
+                                            {
+                                                "tool": block.name,
+                                                "input": block.input,
+                                            },
+                                        )
 
                         # Final result
                         elif isinstance(message, ResultMessage):
@@ -606,35 +762,54 @@ class JarvisOrchestrator:
             pass
 
         # Self-learning: extract patterns from execution records
-        try:
-            learning_stats = await learn_from_task(
-                task_id=task_id,
-                project_path=self.project_path,
-                memory=self.memory,
-            )
-            if learning_stats["learnings_saved"] > 0:
-                self.events.emit(
-                    "learning_captured",
-                    f"Learned {learning_stats['learnings_saved']} patterns from task",
-                    task_id=task_id,
-                    metadata=learning_stats,
-                )
-        except Exception as e:
-            # Don't block task completion on learning failure
-            self.events.emit(EVENT_ERROR, f"Learning extraction failed: {e}", task_id=task_id)
+        if self.config.knowledge.enable_learning:
+            try:
+                # Check if we have execution records to learn from
+                records = self.memory.get_execution_records(task_id=task_id, limit=1)
+                if records:
+                    learning_stats = await learn_from_task(
+                        task_id=task_id,
+                        project_path=self.project_path,
+                        memory=self.memory,
+                    )
+                    if learning_stats.get("errors_found", 0) > 0:
+                        logger.info(
+                            f"Learning loop: Task {task_id} - "
+                            f"{learning_stats['errors_found']} errors found, "
+                            f"{learning_stats['learnings_saved']} patterns saved, "
+                            f"{learning_stats['skills_flagged']} skill candidates flagged"
+                        )
+                    if learning_stats["learnings_saved"] > 0:
+                        self.events.emit(
+                            "learning_captured",
+                            f"Learned {learning_stats['learnings_saved']} patterns from task",
+                            task_id=task_id,
+                            metadata=learning_stats,
+                        )
+                else:
+                    logger.debug(f"Learning loop: Task {task_id} - No execution records to analyze")
+            except Exception as e:
+                # Don't block task completion on learning failure
+                logger.warning(f"Learning extraction failed for task {task_id}: {e}", exc_info=True)
+                self.events.emit(EVENT_ERROR, f"Learning extraction failed: {e}", task_id=task_id)
+        else:
+            logger.debug(f"Learning loop: Disabled by config for task {task_id}")
 
         # Events + macOS notifications
         if result["status"] == "completed":
             self.events.emit(
-                EVENT_TASK_COMPLETE, task_description,
-                task_id=task_id, cost_usd=result["cost_usd"],
+                EVENT_TASK_COMPLETE,
+                task_description,
+                task_id=task_id,
+                cost_usd=result["cost_usd"],
                 metadata={"origin": origin, "slack_notify": emit_notifications},
             )
             if emit_notifications:
                 await notify_task_completed(task_id, task_description, result["cost_usd"])
         elif result["status"] in ("failed", "error"):
             self.events.emit(
-                EVENT_ERROR, result["output"][:200],
+                EVENT_ERROR,
+                result["output"][:200],
                 task_id=task_id,
                 metadata={
                     "error": result["output"][:5000],
@@ -699,15 +874,16 @@ class JarvisOrchestrator:
         """Return last known model/provider preflight result."""
         return dict(self._preflight_status)
 
-    async def run_model_preflight(self, *, live_check: bool = False, timeout_seconds: int = 25) -> dict:
+    async def run_model_preflight(
+        self, *, live_check: bool = False, timeout_seconds: int = 25
+    ) -> dict:
         """Validate provider+models before serving requests."""
         errors: list[str] = []
         warnings: list[str] = []
         provider = {
             "base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
             "token_present": bool(
-                os.environ.get("ANTHROPIC_AUTH_TOKEN")
-                or os.environ.get("ANTHROPIC_API_KEY")
+                os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
             ),
         }
         models = {
@@ -731,12 +907,14 @@ class JarvisOrchestrator:
         live_probe = {"attempted": bool(live_check), "ok": False, "error": ""}
         if live_check and not errors:
             try:
+
                 async def _probe() -> None:
                     async with ClaudeSDKClient(options=self._build_options()) as client:
                         await client.query("Respond with exactly: JARVIS_PREFLIGHT_OK")
                         async for msg in client.receive_response():
                             if isinstance(msg, ResultMessage) and msg.is_error:
                                 raise RuntimeError(str(msg.result or "live_probe_failed"))
+
                 await asyncio.wait_for(_probe(), timeout=max(5, timeout_seconds))
                 live_probe["ok"] = True
             except Exception as exc:
@@ -785,6 +963,12 @@ class JarvisOrchestrator:
             metadata={"message": user_message[:5000]},
         )
 
+        # Route to local model if provider_type is foundation or lmstudio
+        provider_type = getattr(self.config.models, "provider_type", "anthropic")
+        model_id = self.config.models.executor
+        if provider_type in ("foundation", "lmstudio"):
+            return await self._chat_local(user_message, provider_type, model_id)
+
         async with self._chat_lock:
             try:
                 client = await self._ensure_chat_client()
@@ -806,11 +990,15 @@ class JarvisOrchestrator:
                         result["cost_usd"] = message.total_cost_usd or 0.0
                         result["turns"] = message.num_turns
                         result["status"] = "completed" if not message.is_error else "failed"
-                        result["diagnostics"] = {
-                            "sdk_result": message.result,
-                            "structured_output": message.structured_output,
-                            "usage": message.usage,
-                        } if message.is_error else {}
+                        result["diagnostics"] = (
+                            {
+                                "sdk_result": message.result,
+                                "structured_output": message.structured_output,
+                                "usage": message.usage,
+                            }
+                            if message.is_error
+                            else {}
+                        )
                         if message.result and not result["reply"].strip():
                             result["reply"] = str(message.result).strip()
                         self.budget.record_cost(
@@ -955,9 +1143,18 @@ class JarvisOrchestrator:
             return False  # Pipeline needs container access (T2+)
 
         complexity_signals = [
-            "build", "implement", "create", "refactor", "migrate",
-            "add feature", "full stack", "end to end", "e2e",
-            "rewrite", "redesign", "architecture",
+            "build",
+            "implement",
+            "create",
+            "refactor",
+            "migrate",
+            "add feature",
+            "full stack",
+            "end to end",
+            "e2e",
+            "rewrite",
+            "redesign",
+            "architecture",
         ]
         task_lower = task_description.lower()
         return any(signal in task_lower for signal in complexity_signals)
@@ -991,8 +1188,8 @@ class JarvisOrchestrator:
                 for s in result.subtask_results[:100]
             ],
             "output": f"Pipeline {result.status}. "
-                      f"Subtasks: {len(result.subtask_results)}. "
-                      f"Cost: ${result.total_cost_usd:.2f}",
+            f"Subtasks: {len(result.subtask_results)}. "
+            f"Cost: ${result.total_cost_usd:.2f}",
         }
 
     async def run_autonomous(self, description: str, callback=None, resume: bool = False) -> dict:

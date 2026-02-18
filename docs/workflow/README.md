@@ -10,6 +10,9 @@ Distilled research articles and patterns.
 | [vercel-agents-md.md](vercel-agents-md.md) | Vercel | Passive context beats skills, 100% vs 79% |
 | [apple-container.md](apple-container.md) | Apple GitHub | Linux containers as VMs, XPC architecture |
 | [context-learning-loop.md](context-learning-loop.md) | Internal proposal | Traces → hooks → rules; verdict: Adapt (use existing skills, add hook enforcement) |
+| [draw-io-diagram-generation.md](draw-io-diagram-generation.md) | Process guide | Diagram generation workflow with draw.io (Mermaid/XML/CSV) |
+| [apple-mlx-frameworks.md](apple-mlx-frameworks.md) | DeepWiki Research | MLX for local LLM inference, LM Studio for Claude SDK integration |
+| [local-models-integration.md](local-models-integration.md) | Internal — debug session 2026-02-18 | `run_until_complete()` inside async silently breaks `switch_model`; `chat()` needs provider_type check |
 
 ## Reading Order
 
