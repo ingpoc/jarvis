@@ -38,16 +38,24 @@ class BudgetConfig:
 class ModelConfig:
     """Model routing.
 
-    Supports standard Claude model IDs and GLM 4.7 proxy IDs.
-    When using GLM 4.7 (z.ai proxy), set via:
-        jarvis config models.executor=glm-4.7
-        jarvis config models.planner=glm-4.7
+    Supports standard Claude model IDs and z.ai GLM models via environment variables.
+
+    For z.ai/GLM models, use model aliases (opus/sonnet/haiku) and set environment:
+        export ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic
+        export ANTHROPIC_AUTH_TOKEN=<your-z.ai-api-key>
+        export ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5
+        export ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5
+        export ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5
+
+    Then set Jarvis to use aliases:
+        jarvis config models.executor=sonnet
+        jarvis config models.planner=opus
     """
 
-    planner: str = "claude-opus-4-6"
-    executor: str = "claude-sonnet-4-5-20250929"
-    reviewer: str = "claude-sonnet-4-5-20250929"
-    quick: str = "claude-haiku-4-5-20251001"
+    planner: str = "opus"
+    executor: str = "sonnet"
+    reviewer: str = "sonnet"
+    quick: str = "haiku"
 
 
 @dataclass
@@ -128,6 +136,7 @@ class JarvisConfig:
     idle: IdleConfig = field(default_factory=IdleConfig)
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     trust_tier: int = 1  # Default T1 (Assistant)
+    workspace_root: str | None = None  # Default workspace directory
 
     @classmethod
     def load(cls) -> "JarvisConfig":

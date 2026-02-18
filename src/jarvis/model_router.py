@@ -26,6 +26,7 @@ Router Logic:
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -359,18 +360,42 @@ class ModelRouter:
 
         return self._heuristic_filter_context(task_description, context_files)
 
+    def _is_simple_task(self, task_description: str, context_files: list[str] | None = None) -> bool:
+        """Check if a task is simple enough for local model execution."""
+        task_lower = task_description.lower()
+
+        simple_keywords = [
+            "fix typo", "rename", "add comment", "update string", "format",
+            "lint", "quick fix", "simple change", "small bug",
+        ]
+        complex_keywords = [
+            "refactor", "redesign", "architecture", "implement feature",
+            "build", "create new", "full stack", "end to end", "migrate",
+        ]
+
+        if any(kw in task_lower for kw in complex_keywords):
+            return False
+        if context_files and len(context_files) > 3:
+            return False
+        if any(kw in task_lower for kw in simple_keywords):
+            return True
+        # Default: simple if few or no files
+        return len(context_files or []) <= 1
+
     def _heuristic_filter_context(
         self, task_description: str, context_files: list[str]
     ) -> list[str]:
         """Heuristic context filtering based on keywords (fallback)."""
         task_lower = task_description.lower()
+        task_words = set(re.findall(r'\b\w+\b', task_lower))
 
         relevant = []
         for file_path in context_files:
             file_name = file_path.split("/")[-1].lower()
             file_base = file_name.split(".")[0]
 
-            if file_name in task_lower or file_base in task_lower:
+            # Match whole filename or basename as a word (min 2 chars to avoid false positives)
+            if file_name in task_lower or (len(file_base) >= 2 and file_base in task_words):
                 relevant.append(file_path)
 
         if not relevant:

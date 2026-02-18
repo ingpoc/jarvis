@@ -20,7 +20,6 @@ from jarvis.notifications import set_slack_bot, set_voice_client
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.ws_server import JarvisWSServer
 from jarvis.mcp_health import health_check_all_servers, filter_healthy_servers, notify_health_failures
-from jarvis.model_router import get_model_router
 from jarvis.a2a.server import JarvisA2AServer
 
 logger = logging.getLogger(__name__)
@@ -275,14 +274,43 @@ class JarvisDaemon:
         except Exception as e:
             logger.warning(f"Bootstrap skills install failed: {e}")
 
-        # Initialize 3-tier model router (loads MLX + Foundation Models if available)
+        # Initialize model router only when MLX local inference is configured
+        if self.config.models.executor.startswith("mlx") or os.environ.get("JARVIS_MLX_ENABLED"):
+            try:
+                from jarvis.model_router import get_model_router
+                router = get_model_router()
+                init_result = await router.initialize()
+                logger.info(f"Model router initialized: MLX={init_result.get('mlx')}, "
+                            f"Foundation={init_result.get('foundation')}")
+            except Exception as e:
+                logger.warning(f"Model router initialization failed: {e}")
+
+        # Seed universal heuristics once at startup (idempotent)
         try:
-            router = get_model_router()
-            init_result = await router.initialize()
-            logger.info(f"Model router initialized: MLX={init_result.get('mlx')}, "
-                        f"Foundation={init_result.get('foundation')}")
+            from jarvis.universal_heuristics import auto_seed_project
+            seed_result = await auto_seed_project(
+                self.orchestrator.memory, self.orchestrator.project_path
+            )
+            if seed_result.get("seeded", 0) > 0:
+                logger.info(
+                    f"Seeded {seed_result['seeded']} universal heuristics "
+                    f"for {seed_result.get('languages', [])}"
+                )
+        except Exception:
+            pass  # Seeding is best-effort
+
+        # Idle introspection processor (must be set before IOKit check below)
+        try:
+            from jarvis.introspection_processor import IntrospectionProcessor
+            from jarvis.mlx_inference import get_mlx_engine
+            self._idle_processor = IntrospectionProcessor(
+                memory=self.orchestrator.memory,
+                mlx_engine=get_mlx_engine(),
+                project_path=str(self.orchestrator.project_path) if self.orchestrator else None,
+            )
+            logger.info("Idle introspection processor initialized")
         except Exception as e:
-            logger.warning(f"Model router initialization failed: {e}")
+            logger.debug(f"Introspection processor not loaded: {e}")
 
         # macOS native integrations
         try:
@@ -360,8 +388,12 @@ class JarvisDaemon:
                     if self._idle_processor:
                         self._idle_processor.trigger_hibernate()
                     # Also unload MLX model to free memory
-                    router = get_model_router()
-                    await router.shutdown()
+                    try:
+                        from jarvis.model_router import get_model_router
+                        router = get_model_router()
+                        await router.shutdown()
+                    except Exception:
+                        pass
                     logger.warning(
                         f"Memory pressure CRITICAL ({pressure.get('free_mb', '?')}MB free) "
                         "— hibernated + unloaded local models"
@@ -376,8 +408,9 @@ class JarvisDaemon:
         """Gracefully stop all services."""
         logger.info("Jarvis daemon stopping")
 
-        # Shutdown model router (unload MLX)
+        # Shutdown model router (unload MLX) if it was initialized
         try:
+            from jarvis.model_router import get_model_router
             router = get_model_router()
             await router.shutdown()
         except Exception as e:

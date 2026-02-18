@@ -30,6 +30,10 @@ def hash_error_pattern(error_message: str) -> str:
     # Normalize error message
     normalized = error_message.lower()
 
+    # Remove timestamps (before line numbers to avoid :\d+: matching time components)
+    normalized = re.sub(r'\d{4}-\d{2}-\d{2}', 'DATE', normalized)
+    normalized = re.sub(r'\d{2}:\d{2}:\d{2}', 'TIME', normalized)
+
     # Remove line numbers
     normalized = re.sub(r'line \d+', 'line N', normalized)
     normalized = re.sub(r':\d+:', ':N:', normalized)
@@ -37,10 +41,6 @@ def hash_error_pattern(error_message: str) -> str:
     # Remove file paths, keep only filenames
     normalized = re.sub(r'/[\w/.-]+/(\w+\.\w+)', r'\1', normalized)
     normalized = re.sub(r'[a-z]:\\[\w\\.-]+\\(\w+\.\w+)', r'\1', normalized)
-
-    # Remove timestamps
-    normalized = re.sub(r'\d{4}-\d{2}-\d{2}', 'DATE', normalized)
-    normalized = re.sub(r'\d{2}:\d{2}:\d{2}', 'TIME', normalized)
 
     # Remove memory addresses
     normalized = re.sub(r'0x[0-9a-f]+', '0xADDR', normalized)

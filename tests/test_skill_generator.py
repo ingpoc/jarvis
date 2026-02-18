@@ -165,33 +165,25 @@ class TestCopyBootstrapSkills:
     """Test bootstrap skill installation."""
 
     def test_copies_skills(self, tmp_path):
-        # Create bootstrap source
+        # Create bootstrap source matching the path structure
+        # copy_bootstrap_skills uses Path(__file__).parent.parent.parent / "bootstrap/skills/coding"
+        # So we create a fake module location and bootstrap dir relative to it
+        fake_module = tmp_path / "src" / "jarvis" / "skill_generator.py"
+        fake_module.parent.mkdir(parents=True, exist_ok=True)
+        fake_module.write_text("")
+
         bootstrap = tmp_path / "bootstrap" / "skills" / "coding"
         bootstrap.mkdir(parents=True)
         (bootstrap / "skill-a.md").write_text("Skill A")
         (bootstrap / "skill-b.md").write_text("Skill B")
 
+        import jarvis.skill_generator as sg
+
         with (
             patch("jarvis.skill_generator.Path.home", return_value=tmp_path),
-            patch("jarvis.skill_generator.Path.__file__", str(tmp_path / "src" / "jarvis" / "skill_generator.py")),
+            patch.object(sg, "__file__", str(fake_module)),
         ):
-            # We need to patch the bootstrap_dir calculation
-            import jarvis.skill_generator as sg
-            original_func = sg.copy_bootstrap_skills
-
-            def patched_copy(project_path=None):
-                import shutil
-                skills_dir = tmp_path / ".claude" / "skills"
-                skills_dir.mkdir(parents=True, exist_ok=True)
-                copied = []
-                for skill_file in bootstrap.glob("*.md"):
-                    dest = skills_dir / skill_file.name
-                    if not dest.exists():
-                        shutil.copy2(skill_file, dest)
-                        copied.append(skill_file.stem)
-                return copied
-
-            result = patched_copy()
+            result = sg.copy_bootstrap_skills()
             assert len(result) == 2
             assert "skill-a" in result
             assert "skill-b" in result

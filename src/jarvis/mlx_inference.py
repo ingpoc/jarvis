@@ -167,6 +167,10 @@ class MLXInferenceEngine:
 
         start = time.monotonic()
 
+        # Build a sampler with the requested temperature
+        from mlx_lm.sample_utils import make_sampler
+        sampler = make_sampler(temp=temperature)
+
         # Run inference in thread pool to avoid blocking
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
@@ -176,7 +180,7 @@ class MLXInferenceEngine:
                 self._tokenizer,
                 prompt=formatted,
                 max_tokens=max_tokens or self.max_tokens,
-                temperature=temperature,
+                sampler=sampler,
             ),
         )
 

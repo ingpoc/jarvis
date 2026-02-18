@@ -599,11 +599,37 @@ class JarvisWSServer:
             default=str,
         )
 
+        # Check if we're in an async context with a running event loop
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running event loop - schedule broadcast from the main loop
+            logger.debug(f"No running loop, scheduling broadcast for {event_data.get('event_type')}")
+            # Use call_soon_threadsafe if we have a reference to the loop
+            if self._server:
+                asyncio.run_coroutine_threadsafe(
+                    self._broadcast_to_clients(message),
+                    asyncio.get_event_loop()
+                )
+            return
+
         stale: set = set()
         for ws in self._clients:
             try:
-                asyncio.ensure_future(ws.send(message))
-            except Exception:
+                asyncio.ensure_future(ws.send(message), loop=loop)
+            except Exception as e:
+                logger.debug(f"Broadcast failed for client: {e}")
                 stale.add(ws)
 
+        self._clients -= stale
+
+    async def _broadcast_to_clients(self, message: str) -> None:
+        """Async helper to broadcast message to all clients."""
+        stale: set = set()
+        for ws in self._clients:
+            try:
+                await ws.send(message)
+            except Exception as e:
+                logger.debug(f"Broadcast failed for client: {e}")
+                stale.add(ws)
         self._clients -= stale

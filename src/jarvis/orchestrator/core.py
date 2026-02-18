@@ -59,9 +59,7 @@ from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
 from jarvis.session_manager import SessionManager
 from jarvis.agents import MultiAgentPipeline
-from jarvis.model_router import get_model_router
 from jarvis.self_learning import learn_from_task
-from jarvis.universal_heuristics import auto_seed_project
 # Subpackage modules
 from jarvis.orchestrator.capabilities import DynamicCapabilitiesManager
 from jarvis.orchestrator.mcp_loader import MCPConfigLoader
@@ -496,58 +494,6 @@ class JarvisOrchestrator:
         if callback:
             callback("task_started", {"id": task_id, "description": task_description})
 
-        # Seed universal heuristics on first task (idempotent)
-        try:
-            seed_result = await auto_seed_project(self.memory, self.project_path)
-            if seed_result.get("seeded", 0) > 0:
-                self.events.emit(
-                    "heuristics_seeded",
-                    f"Seeded {seed_result['seeded']} universal heuristics for {seed_result.get('languages', [])}",
-                    task_id=task_id,
-                    metadata=seed_result,
-                )
-        except Exception:
-            pass  # Seeding is best-effort
-
-        # Query decision traces for precedents
-        try:
-            precedents = await self.tracer.query_precedents(
-                task_description,
-                category=TraceCategory.TASK_EXECUTION,
-                limit=3,
-            )
-            recommendation = DecisionTracer.get_recommendation(precedents)
-            if recommendation["action"] != "new_decision" and recommendation["trace"]:
-                trace = recommendation["trace"]
-                task_description = (
-                    f"{task_description}\n\n"
-                    f"[Decision Trace] Previous similar task ({recommendation['action']}): "
-                    f"{trace.description} → {trace.decision} (outcome: {trace.outcome})"
-                )
-        except Exception:
-            pass  # Don't block task on trace failure
-
-        # Model routing: log routing decision for observability
-        try:
-            router = get_model_router()
-            routing = await router.route_task(
-                task_description=task_description,
-                budget_remaining_usd=self.config.budget.max_per_session_usd - self.budget._session_spent,
-            )
-            self.events.emit(
-                "model_routing",
-                f"Routed to {routing.tier.value}: {routing.reason}",
-                task_id=task_id,
-                metadata={
-                    "tier": routing.tier.value,
-                    "model": routing.model,
-                    "reason": routing.reason,
-                    "estimated_cost": routing.estimated_cost_usd,
-                },
-            )
-        except Exception:
-            pass  # Don't block task on routing failure
-
         options = self._build_options()
         result = {
             "task_id": task_id,
@@ -810,8 +756,17 @@ class JarvisOrchestrator:
         self._preflight_status = status
         return dict(status)
 
-    async def chat(self, user_message: str) -> dict:
-        """Run a conversational turn and return assistant text."""
+    async def chat(self, user_message: str, *, origin: str = "message") -> dict:
+        """Conversational entrypoint (single-pass).
+
+        Every user message goes directly to the chat model. The model itself
+        decides when to ask questions vs. invoke tools.
+
+        Returns:
+            Dict with status, route, reply, decision (backward-compat shape).
+        """
+        self._ingest_research_urls_from_text(user_message, source=f"chat:{origin}")
+
         result = {
             "status": "unknown",
             "reply": "",
@@ -882,49 +837,26 @@ class JarvisOrchestrator:
                 result["tools"] = sorted(tools_used)
                 result["diagnostics"] = {"exception": str(e)}
 
-        if result["status"] == "completed" and result["reply"]:
+        reply = result["reply"]
+        status = "completed" if (result["status"] == "completed" and reply) else "failed"
+
+        if status == "completed" and reply:
             self.events.emit(
                 "chat_assistant",
-                result["reply"][:200],
+                reply[:200],
                 cost_usd=result["cost_usd"],
-                metadata={"reply": result["reply"][:5000], "tools": result["tools"]},
+                metadata={"reply": reply[:5000], "tools": result["tools"]},
             )
         else:
             self.events.emit(
                 EVENT_ERROR,
-                (result["reply"] or "Chat failed")[:200],
+                (reply or "Chat failed")[:200],
                 metadata={
-                    "error": (result["reply"] or "Chat failed")[:5000],
+                    "error": (reply or "Chat failed")[:5000],
                     "diagnostics": result.get("diagnostics") or {},
                 },
             )
 
-        append_project_turn(
-            self.project_path,
-            actor="chat",
-            message=user_message,
-            outcome=(result["reply"] or result["status"])[:500],
-        )
-
-        return result
-
-    async def handle_message(
-        self,
-        user_message: str,
-        *,
-        origin: str = "message",
-    ) -> dict:
-        """Conversational entrypoint (single-pass).
-
-        Every user message goes directly to the chat model. The model itself
-        decides when to ask questions vs. invoke tools. This removes the extra
-        router model call and cuts latency for normal chat interactions.
-        """
-        self._ingest_research_urls_from_text(user_message, source=f"chat:{origin}")
-        chat_result = await self.chat(user_message)
-        reply = (chat_result.get("reply") or "").strip()
-        status = "completed" if (chat_result.get("status") == "completed" and reply) else "failed"
-        # Keep decision payload for API backward compatibility with existing clients.
         decision = {
             "mode": "chat",
             "confidence": 1.0 if status == "completed" else 0.0,
@@ -936,12 +868,29 @@ class JarvisOrchestrator:
             metadata={"decision": decision, "origin": origin},
         )
         self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
+
+        append_project_turn(
+            self.project_path,
+            actor=f"chat:{origin}",
+            message=user_message,
+            outcome=(reply or status)[:500],
+        )
+
         return {
             "status": status,
             "route": "chat",
             "reply": reply,
             "decision": decision,
         }
+
+    async def handle_message(
+        self,
+        user_message: str,
+        *,
+        origin: str = "message",
+    ) -> dict:
+        """Backward-compat alias for chat(). Callers: ws_server, slack_bot."""
+        return await self.chat(user_message, origin=origin)
 
     async def _cleanup_containers(self) -> None:
         """Stop and remove all active containers."""

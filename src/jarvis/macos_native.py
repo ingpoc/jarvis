@@ -451,14 +451,25 @@ def get_neural_engine_available() -> bool:
         return False
 
     try:
-        # All M-series chips have Neural Engine
+        # Try the specific sysctl first
         result = subprocess.run(
             ["sysctl", "hw.optional.arm.FEAT_ANE"],
             capture_output=True, text=True, timeout=5,
         )
-        return "1" in result.stdout
+        if result.returncode == 0 and "1" in result.stdout:
+            return True
+
+        # Fallback: check via ioreg for ANE device
+        result = subprocess.run(
+            ["ioreg", "-c", "AppleANEDevice", "-r", "-d", "1"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if "AppleANE" in result.stdout:
+            return True
+
+        # All Apple Silicon M-series chips have Neural Engine
+        return True
     except Exception:
-        # Fallback: all M4 chips have ANE
         return IS_APPLE_SILICON
 
 

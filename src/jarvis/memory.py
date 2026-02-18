@@ -859,6 +859,32 @@ class MemoryStore:
             for r in rows
         ]
 
+    # --- Channel turns ---
+
+    def save_channel_turn(
+        self,
+        origin: str,
+        project_path: str,
+        user_message: str,
+        assistant_reply: str,
+    ) -> None:
+        """Save a chat turn for channel/session tracking.
+
+        This is a lightweight method to record chat turns without full
+        execution records. Used for conversation continuity and history.
+        """
+        # Store as a timeline event for now - can be extended later
+        self.record_event(
+            event_type="channel_turn",
+            summary=f"{origin}: {user_message[:50]}...",
+            metadata={
+                "origin": origin,
+                "project_path": project_path,
+                "user_message": user_message[:1000],
+                "assistant_reply": (assistant_reply or "")[:1000],
+            },
+        )
+
 
 # --- JARVIS.md template ---
 

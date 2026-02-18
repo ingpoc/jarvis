@@ -314,7 +314,20 @@ start_daemon_with_launchctl() {
         echo "  Daemon PID: $pid"
         STARTED_DAEMON_PID="$pid"
     else
-        echo "❌ Daemon failed: launchctl did not report a running PID"
+        # launchctl can be slow to report PID even when the service is already healthy.
+        # Prefer failing on health, not on launchctl introspection.
+        if lsof -n -P -iTCP:9847 -sTCP:LISTEN >/dev/null 2>&1; then
+            pid="$(lsof -n -P -iTCP:9847 -sTCP:LISTEN | awk 'NR==2 {print $2; exit}')"
+            cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+            if echo "$cmd" | rg -q "jarvis\\.daemon|run_jarvis_daemon\\.sh"; then
+                echo "⚠️  Daemon started but launchctl did not report PID yet; using port PID: $pid"
+                write_pid "$PID_DIR/daemon.pid" "$pid"
+                STARTED_DAEMON_PID="$pid"
+                return 0
+            fi
+        fi
+
+        echo "❌ Daemon failed: launchctl did not report a running PID and port 9847 is not healthy"
         if [ -n "$bootstrap_err" ]; then
             echo "Bootstrap error: $bootstrap_err"
         fi
@@ -348,6 +361,16 @@ start_menubar_with_launchctl() {
         echo "  Menu bar PID: $pid"
         STARTED_MENUBAR_PID="$pid"
     else
+        # Same as daemon: launchctl introspection can lag. If a JarvisApp process exists,
+        # treat that as started but log the mismatch.
+        pid="$(pgrep -f \"JarvisApp\" | head -n 1 || true)"
+        if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+            echo "⚠️  Menu bar started but launchctl did not report PID yet; using process PID: $pid"
+            write_pid "$PID_DIR/menubar.pid" "$pid"
+            STARTED_MENUBAR_PID="$pid"
+            return 0
+        fi
+
         echo "❌ Menu bar app failed: launchctl did not report a running PID"
         if [ -n "$bootstrap_err" ]; then
             echo "Bootstrap error: $bootstrap_err"
@@ -405,9 +428,14 @@ fi
 export JARVIS_API_TOKEN="${JARVIS_API_TOKEN:-jarvis-voice-token}"
 export ELEVENLABS_API_KEY="${ELEVENLABS_API_KEY:-}"
 export ELEVENLABS_AGENT_ID="${ELEVENLABS_AGENT_ID:-}"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-glm-4.7}"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-glm-4.7}"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-glm-4.7}"
+# Model Configuration:
+# - For standard Anthropic Claude: leave ANTHROPIC_BASE_URL unset and set ANTHROPIC_API_KEY
+# - For z.ai (GLM models): set ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN
+# - With z.ai, use model aliases (opus/sonnet/haiku) which get mapped via ANTHROPIC_DEFAULT_*_MODEL env vars
+# - Current default: GLM-5 for all tiers (high performance)
+export ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-glm-5}"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-glm-5}"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-glm-5}"
 export JARVIS_ENABLE_TUNNEL="${JARVIS_ENABLE_TUNNEL:-0}"
 # Container system (Apple `container` CLI) is a hard dependency for containerized workflows.
 # Keep it explicit and fail-fast: if required and not running, try to start it; if that fails, abort.

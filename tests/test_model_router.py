@@ -1,8 +1,27 @@
 """Tests for jarvis.model_router — 3-tier intelligence routing."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from jarvis.model_router import ModelRouter, ModelTier, RoutingDecision, get_model_router
+
+
+def _mock_mlx_engine():
+    """Create a mock MLX engine for testing."""
+    engine = MagicMock()
+    engine.loaded = True
+    return engine
+
+
+def _mock_foundation_client():
+    """Create a mock Foundation Models client for testing."""
+    client = AsyncMock()
+    client.classify_task_complexity = AsyncMock(return_value={
+        "label": "classification",
+        "latency_ms": 50.0,
+    })
+    return client
 
 
 class TestModelRouter:
@@ -21,6 +40,7 @@ class TestModelRouter:
     @pytest.mark.asyncio
     async def test_classification_with_foundation(self, router):
         router.foundation_available = True
+        router._foundation_client = _mock_foundation_client()
         decision = await router.route_task("classify this error as build or runtime")
         assert decision.tier == ModelTier.FOUNDATION
         assert decision.estimated_cost_usd == 0.0
@@ -34,6 +54,7 @@ class TestModelRouter:
     @pytest.mark.asyncio
     async def test_simple_task_with_qwen3(self, router):
         router.qwen3_available = True
+        router._mlx_engine = _mock_mlx_engine()
         decision = await router.route_task(
             "fix typo in readme",
             context_files=["README.md"],
@@ -52,6 +73,7 @@ class TestModelRouter:
     @pytest.mark.asyncio
     async def test_complex_task_bypasses_local(self, router):
         router.qwen3_available = True
+        router._mlx_engine = _mock_mlx_engine()
         decision = await router.route_task(
             "refactor the entire authentication system",
             context_files=["a.py", "b.py", "c.py", "d.py", "e.py"],
@@ -61,6 +83,7 @@ class TestModelRouter:
     @pytest.mark.asyncio
     async def test_offline_with_qwen3(self, router):
         router.qwen3_available = True
+        router._mlx_engine = _mock_mlx_engine()
         decision = await router.route_task(
             "fix a bug in main.py",
             offline_mode=True,
