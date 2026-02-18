@@ -1,18 +1,22 @@
 # AGENTS.md
 
 ## Scope
+
 This file contains only Jarvis-core, repository-specific rules.
 Global operating policy lives in `~/.codex/AGENTS.md` and `~/.codex/rules/*`.
 
 ## Context Contract
+
 - Apply global baseline first from `~/.codex/AGENTS.md`.
 - Use this file only for rules specific to this repository.
 - Do not duplicate global policy text here; add short references when needed.
 
 ## Mission (Jarvis Core)
+
 Improve Jarvis reliability and capability while keeping failures explicit and diagnosable.
 
 ## Jarvis-Core Mandatory Rules
+
 - Startup checks are fail-fast only:
   - If daemon launch env cannot be loaded, abort startup with explicit `FATAL` log.
   - Do not add fallback paths that mask broken launch/permissions state.
@@ -26,16 +30,30 @@ Improve Jarvis reliability and capability while keeping failures explicit and di
   - Validate via launchctl service state + port readiness, then refresh/write current PID.
 
 ## Verification Standard (Jarvis Core)
+
 After startup or daemon lifecycle changes:
+
 - `stop-jarvis.sh` then `start-jarvis.sh` must pass with clean logs.
 - Confirm daemon WebSocket port is listening.
 - Confirm menu bar process is running and connected.
 
+## WebSocket API Rules (CRITICAL)
+
+- **Message format**: All WebSocket messages MUST use `data` wrapper:
+  - Correct: `{"action": "chat", "data": {"message": "..."}, "id": "..."}`
+  - Wrong: `{"action": "chat", "message": "..."}` (returns "Missing 'message'" error)
+- **Actions requiring data wrapper**: chat, run_task, message, read_file, git_status, build_project, run_tests
+- **Actions exempt**: get_status, get_timeline, get_capabilities, get_containers
+- **Run lint before testing**: `python3 scripts/jarvis_api_lint.py`
+- **Debug locations**: See `.claude/rules/jarvis-debugging.md` for daemon log paths and restart sequences.
+
 ## Scope Routing (Jarvis)
+
 - Jarvis-core implementation policy stays in this repo (`AGENTS.md`, `.agent/*`).
 - `JARVIS.md` is only for non-core target repos where Jarvis executes user tasks.
 
 ## Harness Governance (.agent)
+
 - `.agent/ARCHITECTURE.md` contains stable, agreed/approved decisions only (no in-flight chatter).
 - `.agent/inflight-communication/ANALYSIS_IMPROVEMENT.md` contains open items only.
 - Promotion rule:
@@ -46,7 +64,9 @@ After startup or daemon lifecycle changes:
   - `python3 scripts/agent_docs_lint.py`
 
 ## Trace Requirement
+
 Use global Context Graph workflow from:
+
 - `~/.codex/rules/WORKFLOW.md`
 - `~/.codex/rules/TOOLS-POLICY.md`
 
