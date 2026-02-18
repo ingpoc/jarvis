@@ -7,14 +7,16 @@ enum MenuView: String, CaseIterable, Identifiable {
     case timeline = "Timeline"
     case commandCenter = "Command Center"
     case quickActions = "Quick Actions"
+    case models = "Models"
 
     var id: String { rawValue }
 
     var icon: String {
         switch self {
-        case .timeline: "clock.arrow.circlepath"
-        case .commandCenter: "chart.bar.doc.horizontal"
-        case .quickActions: "bolt.circle"
+        case .timeline: return "clock.arrow.circlepath"
+        case .commandCenter: return "chart.bar.doc.horizontal"
+        case .quickActions: return "bolt.circle"
+        case .models: return "cpu"
         }
     }
 }
@@ -107,6 +109,8 @@ struct JarvisMenuView: View {
                     CommandCenterView()
                 case .quickActions:
                     QuickActionsGrid()
+                case .models:
+                    ModelSelectionView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

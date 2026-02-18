@@ -12,7 +12,7 @@ Distilled research articles and patterns.
 | [context-learning-loop.md](context-learning-loop.md) | Internal proposal | Traces → hooks → rules; verdict: Adapt (use existing skills, add hook enforcement) |
 | [draw-io-diagram-generation.md](draw-io-diagram-generation.md) | Process guide | Diagram generation workflow with draw.io (Mermaid/XML/CSV) |
 | [apple-mlx-frameworks.md](apple-mlx-frameworks.md) | DeepWiki Research | MLX for local LLM inference, LM Studio for Claude SDK integration |
-| [local-models-integration.md](local-models-integration.md) | Internal — debug session 2026-02-18 | `run_until_complete()` inside async silently breaks `switch_model`; `chat()` needs provider_type check |
+| [local-models-integration.md](local-models-integration.md) | Internal — debug sessions 2026-02-18 | `run_until_complete()` inside async silently breaks `switch_model`; `is_running` ≠ service available — use `is_api_available()` for externally-started services; `load_model()` requires valid request body |
 
 ## Reading Order
 

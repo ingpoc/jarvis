@@ -204,7 +204,7 @@ class OrchestratorHooks:
         if "_tool_start_time" in context:
             duration_ms = (time.monotonic() - context["_tool_start_time"]) * 1000
 
-        # Record execution (best effort)
+        # Record execution (best effort - required for learning loop)
         try:
             self.memory.record_execution(
                 task_id=task_id,
@@ -218,8 +218,9 @@ class OrchestratorHooks:
                 duration_ms=duration_ms,
                 project_path=self.project_path,
             )
-        except Exception:
-            logger.debug("Failed to record execution")
+        except Exception as e:
+            # Log warning instead of silent failure - execution records are critical for learning
+            logger.warning(f"Failed to record execution for task {task_id}, tool {tool_name}: {e}")
 
         # Loop detection
         loop_response = self._check_loop_detection(tool_name, tool_input, tool_response, task_id)

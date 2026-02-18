@@ -131,6 +131,7 @@ final class WebSocketClient: WebSocketClientProtocol {
     var currentFeature: String?
     var currentSession: String?
     var lastError: String?
+    var modelStatus: ModelStatusInfo?
 
     private var task: URLSessionWebSocketTask?
     private let session: URLSession = .shared
@@ -454,6 +455,12 @@ final class WebSocketClient: WebSocketClientProtocol {
                 idleInfo = resp.idleInfo
                 currentFeature = resp.currentFeature
                 currentSession = resp.currentSession
+            }
+        case "get_model_status":
+            if let data = json["data"] as? [String: Any],
+               let payload = try? JSONSerialization.data(withJSONObject: data),
+               let resp = try? JSONDecoder().decode(ModelStatusInfo.self, from: payload) {
+                modelStatus = resp
             }
         case "get_containers":
             if let data = json["data"] as? [String: Any],

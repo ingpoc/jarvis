@@ -251,7 +251,7 @@ class JarvisWSServer:
                     provider = "lmstudio"
 
                 afm_available = is_afm_available()
-                lm_running = lm_mgr.is_running
+                lm_running = lm_mgr.is_running or lm_mgr.is_api_available()
 
                 result = {
                     "current_model": current_model,

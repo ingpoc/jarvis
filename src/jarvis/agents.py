@@ -49,6 +49,7 @@ from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
 from jarvis.jarvis_hooks import build_deny_response
 from jarvis.events import EventCollector, EVENT_TOOL_USE
+from jarvis.self_learning import learn_from_task
 
 
 # --- Agent Definitions ---
@@ -576,6 +577,34 @@ Report progress at each step."""
             )
         except Exception:
             pass
+
+        # Self-learning: extract patterns from execution records
+        if self.config.knowledge.enable_learning:
+            try:
+                import logging
+                logger = logging.getLogger(__name__)
+                
+                # Check if we have execution records to learn from
+                records = self.memory.get_execution_records(task_id=task_id, limit=1)
+                if records:
+                    learning_stats = await learn_from_task(
+                        task_id=task_id,
+                        project_path=self.project_path,
+                        memory=self.memory,
+                    )
+                    if learning_stats.get("errors_found", 0) > 0:
+                        logger.info(
+                            f"Learning loop (pipeline): Task {task_id} - "
+                            f"{learning_stats['errors_found']} errors found, "
+                            f"{learning_stats['learnings_saved']} patterns saved, "
+                            f"{learning_stats['skills_flagged']} skill candidates flagged"
+                        )
+                else:
+                    logger.debug(f"Learning loop (pipeline): Task {task_id} - No execution records to analyze")
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Learning extraction failed for pipeline task {task_id}: {e}", exc_info=True)
 
         if callback:
             callback("pipeline_completed", {

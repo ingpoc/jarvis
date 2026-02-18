@@ -10,7 +10,7 @@ Jarvis supports 3 local model providers:
 
 ## Architecture
 
-### Files Created
+### Files
 
 | File | Purpose |
 |------|---------|
@@ -20,10 +20,11 @@ Jarvis supports 3 local model providers:
 
 ### Key Design Decisions
 
-1. **Memory Optimization**: LM Studio only starts when a model is selected
--unload**: Model2.**Auto unloads after 5 minutes idle to free RAM
-2. **Direct Python**: Foundation Models uses direct Python package (no HTTP bridge)
-3. **Provider Detection**: Model ID patterns determine provider type
+1. **Memory Optimization**: Models only load into memory when explicitly selected via menu bar
+2. **Auto-unload**: Model unloads after 5 minutes idle to free RAM
+3. **Direct Python**: Foundation Models uses direct Python package (no HTTP bridge)
+4. **Provider Detection**: Model ID patterns determine provider type
+5. **External-process-aware**: `is_api_available()` detects LM Studio regardless of who started it
 
 ## Implementation Details
 
@@ -32,7 +33,6 @@ Jarvis supports 3 local model providers:
 ```python
 from jarvis.afm_integration import is_afm_available, generate
 
-# Check availability
 if is_afm_available():
     result = generate("What is 2+2?")
     # Returns: {"content": "4.", "latency_ms": 1130, "model": "apple-foundation-models"}
@@ -50,17 +50,17 @@ from jarvis.lm_studio_manager import get_lm_studio_manager
 
 lm = get_lm_studio_manager()
 
-# On-demand startup
-await lm.ensure_running()  # Starts LM Studio if not running
+# Detects running LM Studio (Jarvis-managed or externally-started)
+await lm.ensure_running()
 
-# Load model
+# Loads model into memory via minimal inference request
 await lm.load_model("qwen2.5-coder-3b-instruct-mlx")
 
-# Auto-unload after idle
-lm.record_usage()  # Resets idle timer
+# Resets idle timer
+lm.record_usage()
 
-# Shutdown when done
-await lm.stop()  # Stops LM Studio and frees RAM
+# Stops LM Studio and frees RAM (Jarvis-managed only)
+await lm.stop()
 ```
 
 **Memory Management:**
@@ -68,7 +68,43 @@ await lm.stop()  # Stops LM Studio and frees RAM
 - Idle timeout: 300 seconds (5 minutes)
 - Check interval: 30 seconds
 - Auto-unloads model when idle
-- Full process cleanup on stop
+- `unload_model()` guards on `_model_loaded`, not `is_running`
+
+**Service Detection:**
+
+```python
+@property
+def is_running(self) -> bool:
+    """True only for Jarvis-managed process."""
+    return self._process is not None and self._process.poll() is None
+
+def is_api_available(self) -> bool:
+    """True if LM Studio API is reachable — regardless of who started it."""
+    try:
+        req = urllib.request.Request(f"{LM_STUDIO_BASE_URL}/v1/models")
+        urllib.request.urlopen(req, timeout=2)
+        return True
+    except Exception:
+        return False
+```
+
+Use `is_running` to track Jarvis-owned processes. Use `is_api_available()` for all user-facing availability checks.
+
+**Model Loading:**
+
+`load_model()` sends a minimal valid inference request to trigger LM Studio to load the model:
+
+```python
+payload = json.dumps({
+    "model": model_id,
+    "messages": [{"role": "user", "content": "."}],
+    "max_tokens": 1,
+}).encode()
+# Non-blocking — large models take 60–120s
+await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=120))
+```
+
+LM Studio requires a valid request body (`messages` field mandatory) to trigger model loading.
 
 ### 3. Local Model Manager (`local_model_manager.py`)
 
@@ -77,11 +113,9 @@ from jarvis.local_model_manager import get_local_model_manager
 
 mgr = get_local_model_manager()
 
-# Switch between providers
-await mgr.switch_model("foundation-models")  # Direct AFM
+await mgr.switch_model("foundation-models")               # Direct AFM
 await mgr.switch_model("qwen2.5-coder-3b-instruct-mlx")  # LM Studio
 
-# Generate
 result = await mgr.generate("Hello")
 ```
 
@@ -96,7 +130,7 @@ LM_STUDIO_MODEL_PATTERNS = [
 def get_provider_from_model(self, model_id: str) -> ModelProviderType:
     if model_id == "foundation-models":
         return ModelProviderType.FOUNDATION
-    elif any(p in model_id.lower() for p in self.LM_STUDIO_MODEL_PATTERNS):
+    elif "/" in model_id or any(p in model_id.lower() for p in self.LM_STUDIO_MODEL_PATTERNS):
         return ModelProviderType.LMSTUDIO
     else:
         return ModelProviderType.ANTHROPIC
@@ -106,17 +140,14 @@ def get_provider_from_model(self, model_id: str) -> ModelProviderType:
 
 ### WebSocket Protocol
 
-**Request:**
+**get_model_status request/response:**
 
 ```json
 {"action": "get_model_status"}
 ```
 
-**Response:**
-
 ```json
 {
-  "action": "get_model_status",
   "current_model": "claude-sonnet-4-5-20250929",
   "provider": "anthropic",
   "foundation_available": true,
@@ -127,29 +158,26 @@ def get_provider_from_model(self, model_id: str) -> ModelProviderType:
 }
 ```
 
+`lmstudio_running` = `lm_mgr.is_running or lm_mgr.is_api_available()` — detects externally-started instances.
+
 ### Swift Implementation
 
 **ModelSelectionView.swift:**
 
-- `foundationAvailable` - Default to `true` on macOS 26+
-- Reads LM Studio status from WebSocket via `modelStatus`
+- Sends `get_model_status` on `onAppear`
+- Renders LM Studio model rows when `lmstudioAvailableModels` is non-empty
 - Model switching via `webSocket.sendCommand(action: "switch_model", data: [...])`
 
-**WebSocketClient.swift:**
-
-- Handles `get_model_status` response in `handleLegacyResponse`
-- Stores in `modelStatus: ModelStatusInfo?`
-
-**ModelStatusInfo.swift:**
+**ModelStatusInfo (CodingKeys):**
 
 ```swift
 struct ModelStatusInfo: Codable {
-    let currentModel: String?
+    let currentModel: String?           // "current_model"
     let provider: String?
-    let foundationAvailable: Bool?
-    let lmstudioRunning: Bool?
-    let lmstudioModelLoaded: String?
-    let lmstudioAvailableModels: [String]?
+    let foundationAvailable: Bool?      // "foundation_available"
+    let lmstudioRunning: Bool?          // "lmstudio_running"
+    let lmstudioModelLoaded: String?    // "lmstudio_model_loaded"
+    let lmstudioAvailableModels: [String]?  // "lmstudio_available_models"
 }
 ```
 
@@ -158,10 +186,6 @@ struct ModelStatusInfo: Codable {
 ### Environment Variables
 
 ```bash
-# LM Studio (via .env)
-ANTHROPIC_BASE_URL=http://localhost:1234
-ANTHROPIC_AUTH_TOKEN=lmstudio
-
 # Model Config (config.py)
 models.provider_type: "anthropic" | "foundation" | "lmstudio" | "mlx"
 ```
@@ -169,7 +193,7 @@ models.provider_type: "anthropic" | "foundation" | "lmstudio" | "mlx"
 ### Port Configuration
 
 | Service | Port |
-|---------|------|
+| ------- | ---- |
 | LM Studio | 1234 |
 | WebSocket (Jarvis) | 9847 |
 | A2A Server | 9848 |
@@ -180,18 +204,19 @@ models.provider_type: "anthropic" | "foundation" | "lmstudio" | "mlx"
 # Test AFM availability
 python -c "from jarvis.afm_integration import is_afm_available; print(is_afm_available())"
 
-# Test LM Studio manager
+# Test LM Studio detection (works for externally-started instances)
 python -c "
 import asyncio
 from jarvis.lm_studio_manager import get_lm_studio_manager
 async def test():
     lm = get_lm_studio_manager()
-    await lm.ensure_running()
-    print('LM Studio running:', lm.is_running)
+    print('is_running:', lm.is_running)
+    print('is_api_available:', lm.is_api_available())
+    print('available_models:', lm.available_models)
 asyncio.run(test())
 "
 
-# Test WebSocket
+# Test get_model_status via WebSocket
 python -c "
 import asyncio, websockets, json
 async def test():
@@ -206,7 +231,7 @@ asyncio.run(test())
 
 CLI and menu bar use **separate orchestrator instances** — they do not share state at runtime.
 
-```
+```text
 CLI (jarvis run / jarvis chat)
     └─ new JarvisOrchestrator() per command  (cli.py:101, 172, 648)
        - ephemeral: dies when command finishes
@@ -221,56 +246,20 @@ Daemon (start-jarvis.sh → jarvis.daemon)
 
 **Implication for `switch_model`**: calling `switch_model` from the menu bar mutates the daemon's in-memory config and saves to disk. A subsequent CLI invocation will re-read the saved config from disk and pick up the local model setting correctly.
 
-## Bugs Fixed (2026-02-18)
-
-### Bug 1: `chat()` never checked `provider_type`
-
-`chat()` in `orchestrator/core.py` went directly to `ClaudeSDKClient` regardless of `provider_type`. `run_task()` had the local model routing, `chat()` did not.
-
-**Fix**: Added provider check + `_chat_local()` in `orchestrator/core.py`:
-
-```python
-# In chat(), after emitting chat_user event:
-provider_type = getattr(self.config.models, "provider_type", "anthropic")
-model_id = self.config.models.executor
-if provider_type in ("foundation", "lmstudio"):
-    return await self._chat_local(user_message, provider_type, model_id)
-```
-
-### Bug 2: `switch_model` used `loop.run_until_complete()` inside async context
-
-The `switch_model` handler in `ws_server.py` called:
-
-```python
-# WRONG — raises RuntimeError: This event loop is already running
-loop = asyncio.get_event_loop()
-switch_result = loop.run_until_complete(local_mgr.switch_model(model))
-```
-
-`_handle_command()` is `async`, so calling `run_until_complete()` inside it throws silently. The `except` block returned `{"error": "..."}`, `provider_type` was never set to `"foundation"`, and every chat still hit the Anthropic API with the full tool list — producing:
-
-```
-API Error: 400 invalid_request_error — request.tools.21.input_schema.properties: Required
-```
-
-**Fix**: Replace with `await`:
-
-```python
-# CORRECT
-switch_result = await local_mgr.switch_model(model)
-```
-
-**Rule**: Never call `loop.run_until_complete()` from inside an `async def`. Always `await` coroutines directly.
+**Implication for `chat()`**: must check `provider_type` before routing. Both `chat()` and `run_task()` go through the same provider check — if `provider_type` is `foundation` or `lmstudio`, route to `_chat_local()` instead of the Claude SDK.
 
 ## Gotchas
 
-1. **PYTHONPATH**: Swift Process doesn't inherit PYTHONPATH - use absolute paths
-2. **macOS 26+**: Foundation Models requires macOS 26+ with Apple Intelligence
-3. **LM Studio startup**: First model selection triggers on-demand startup (~10s)
-4. **Memory**: LM Studio models use significant RAM - auto-unload prevents exhaustion
+1. **PYTHONPATH**: Swift Process doesn't inherit PYTHONPATH — use absolute paths
+2. **macOS 26+**: Foundation Models requires macOS 26+ with Apple Intelligence enabled
+3. **LM Studio startup**: If Jarvis starts LM Studio, first model selection takes ~10s
+4. **Memory**: LM Studio models use significant RAM — auto-unload prevents exhaustion
 5. **Port conflicts**: 9847 for WebSocket, 9848 for A2A (different services)
-6. **`run_until_complete()` inside async**: Raises `RuntimeError: This event loop is already running`. Always `await` coroutines inside async functions — never `loop.run_until_complete()`.
-7. **Env var override stomps config**: `ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5` in `start-jarvis.sh` overwrites `config.models.executor` at load time. Switch model changes only survive if `provider_type` is also persisted (it is, as of the fix above).
+6. **`run_until_complete()` inside async**: Raises `RuntimeError: This event loop is already running` — always `await` coroutines directly inside `async def`
+7. **Env var override**: `ANTHROPIC_DEFAULT_SONNET_MODEL` in `start-jarvis.sh` overwrites `config.models.executor` at load time — `provider_type` must also be persisted on switch
+8. **`is_running` ≠ service available**: `is_running` tracks Jarvis-owned processes only — always use `is_api_available()` for user-facing checks
+9. **`load_model()` requires valid request body**: LM Studio returns 422 without `messages` field — send minimal valid inference request to trigger loading
+10. **Large model load timeout**: 20B+ models take 60–120s to load — use `run_in_executor` with `timeout=120`
 
 ## Verified End-to-End Test
 
@@ -287,7 +276,7 @@ asyncio.run(test())
 "
 # Expected: switch: True foundation
 
-# 2. Chat via WebSocket (collect events until chat_assistant arrives)
+# 2. Chat via WebSocket
 python3 -c "
 import asyncio, websockets, json
 async def test():

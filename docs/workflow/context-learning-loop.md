@@ -120,6 +120,22 @@ This converts the existing CLAUDE.md rule into enforced behavior. The 0.75/0.60 
 | Context graph queried manually when remembered | Pre-decision hook forces query before architecture/implementation decisions |
 | Introspect skill run on-demand | Scheduled weekly or triggered at session end by orchestrator |
 | CLAUDE.md edited manually when pattern noticed | Draft rule generated at 3+ occurrences, human reviews, promotes at 5+ validated |
+| Bug history written into `docs/workflow/*.md` | Bug + fix stored in context graph (`troubleshooting`); doc updated to current state only |
+
+## Docs vs Context Graph
+
+| Content | Location |
+|---------|----------|
+| Current architecture, API contracts, design decisions in effect | `docs/workflow/*.md` |
+| Bug history, what broke, root cause, fix applied | `context_store_trace` (category: `troubleshooting`) |
+
+**Docs = current truth. Context graph = history.**
+
+Workflow after fixing a bug:
+
+1. Fix the code
+2. `context_store_trace(decision="<what broke> → <root cause> → <fix>", category="troubleshooting", outcome="success")`
+3. Rewrite the affected doc section to reflect current correct behavior only — no "Bugs Fixed" sections
 
 ## Anti-Patterns
 
@@ -129,6 +145,7 @@ This converts the existing CLAUDE.md rule into enforced behavior. The 0.75/0.60 
 | Cross-project traces without filtering | Unicode regex lint for Jarvis from JS stock-extraction errors |
 | New introspection scripts instead of existing skills | Duplicate tooling, skill registry ignored |
 | Raw occurrence count without session dedup | One bad session triggers premature rule generation |
+| Writing "Bugs Fixed" sections in `docs/workflow/*.md` | Docs become debug logs; current architecture is buried in history |
 
 ---
 

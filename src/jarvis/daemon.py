@@ -168,6 +168,10 @@ class JarvisDaemon:
         )
         await self._ws_server.start()
 
+        # Mark daemon as running before starting background loops/tasks.
+        # (e.g. the IOKit idle loop checks this flag in its while condition.)
+        self._running = True
+
         # Remote WSS server (if enabled)
         if self._remote_enabled():
             await self._start_remote_server()
@@ -341,7 +345,6 @@ class JarvisDaemon:
         except Exception as e:
             logger.debug(f"macOS native init: {e}")
 
-        self._running = True
         logger.info("Jarvis daemon started")
 
         # Block until stop is requested

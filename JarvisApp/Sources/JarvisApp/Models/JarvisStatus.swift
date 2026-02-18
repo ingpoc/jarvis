@@ -106,3 +106,27 @@ struct IdleInfo: Codable {
         case lastActivity = "last_activity"
     }
 }
+
+struct ModelStatusInfo: Codable {
+    let currentModel: String?
+    let provider: String?
+    let availableModels: [String]?
+    let error: String?
+    let mlxAvailable: Bool?
+    let foundationAvailable: Bool?
+    let lmstudioRunning: Bool?
+    let lmstudioModelLoaded: String?
+    let lmstudioAvailableModels: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case currentModel = "current_model"
+        case provider
+        case availableModels = "available_models"
+        case error
+        case mlxAvailable = "mlx_available"
+        case foundationAvailable = "foundation_available"
+        case lmstudioRunning = "lmstudio_running"
+        case lmstudioModelLoaded = "lmstudio_model_loaded"
+        case lmstudioAvailableModels = "lmstudio_available_models"
+    }
+}

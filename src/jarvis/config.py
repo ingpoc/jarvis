@@ -50,12 +50,17 @@ class ModelConfig:
     Then set Jarvis to use aliases:
         jarvis config models.executor=sonnet
         jarvis config models.planner=opus
+
+    Local models (use provider_type to switch):
+        - foundation-models: Apple Foundation Models (direct Python)
+        - qwen2.5-coder-3b-instruct-mlx: LM Studio (local)
     """
 
     planner: str = "opus"
     executor: str = "sonnet"
     reviewer: str = "sonnet"
     quick: str = "haiku"
+    provider_type: str = "anthropic"  # anthropic, foundation, lmstudio, mlx
 
 
 @dataclass
@@ -232,6 +237,7 @@ class JarvisConfig:
                 "executor": self.models.executor,
                 "reviewer": self.models.reviewer,
                 "quick": self.models.quick,
+                "provider_type": getattr(self.models, "provider_type", "anthropic"),
             },
             "slack": {
                 "bot_token": self.slack.bot_token,

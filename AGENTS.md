@@ -14,8 +14,11 @@ Agent-first development. Humans steer, agents execute.
 |adding API → jarvis/api-reference.md
 |tests failing → principles/determinism.md
 |large data → principles/token-efficiency.md
+|need a diagram / architecture diagram → workflow/draw-io-diagram-generation.md
+|local models / LM Studio / Foundation Models → workflow/local-models-integration.md
 |principles:{agent-first.md,progressive-disclosure.md,determinism.md,token-efficiency.md}
-|workflow:{openai-harness.md,vercel-agents-md.md}
+|updating docs / storing bugs / context graph → workflow/context-learning-loop.md
+|workflow:{openai-harness.md,vercel-agents-md.md,local-models-integration.md,context-learning-loop.md}
 |architecture:{layers.md,taste-invariants.md}
 |jarvis:{debugging.md,api-reference.md,conventions.md}
 ```
@@ -30,6 +33,34 @@ Agent-first development. Humans steer, agents execute.
 | Stop | `./stop-jarvis.sh` |
 | Test WS | `python scripts/test_ws_client.py` |
 | Lint | `python3 scripts/jarvis_api_lint.py` |
+
+---
+
+## Scripts
+
+### Validation Scripts
+
+Run these **before submitting changes** to ensure everything works:
+
+| Script | When to Run | Purpose |
+|--------|-------------|---------|
+| `python3 scripts/validate_jarvis.py` | After any Python/Swift changes | Full validation: config, DB, ports, API lint |
+| `python3 scripts/validate_local_models.py` | After local model changes | Validate AFM, LM Studio, WebSocket integration |
+| `python3 scripts/test_local_models.py` | Debugging local models | Detailed end-to-end testing of models |
+| `bash scripts/build_jarvis_app.sh` | After Swift changes | Clean Swift build with fresh DerivedData |
+
+### Linting Scripts
+
+| Script | When to Run | Purpose |
+|--------|-------------|---------|
+| `python3 scripts/jarvis_api_lint.py` | After API changes | Python API lint (21 files) |
+| `python3 scripts/agent_docs_lint.py` | After doc changes | Agent docs lint |
+
+### Local Models
+
+| Script | When to Run | Purpose |
+|--------|-------------|---------|
+| `python3 scripts/test_local_models.py` | Testing AFM/LM Studio | Tests: AFM availability, LM Studio startup, WebSocket response |
 
 ---
 
