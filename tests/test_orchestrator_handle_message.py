@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from jarvis.orchestrator import JarvisOrchestrator
@@ -28,6 +29,12 @@ def _make_orch():
     """Create a minimal orchestrator with stubs for chat() dependencies."""
     orch = object.__new__(JarvisOrchestrator)
     orch.project_path = "/tmp/project"
+    orch.config = SimpleNamespace(
+        models=SimpleNamespace(
+            executor="claude-sonnet-4-5-20250929",
+            provider_type="anthropic",
+        )
+    )
     orch.events = _DummyEvents()
     orch.memory = _DummyMemory()
     orch._ingest_research_urls_from_text = lambda *_args, **_kwargs: None

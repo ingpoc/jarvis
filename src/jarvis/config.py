@@ -191,17 +191,24 @@ class JarvisConfig:
         if workspace_root:
             config.workspace_root = workspace_root
 
-        # Env var overrides (supports GLM 4.7 / z.ai proxy)
+        # Env var overrides (supports GLM 4.7 / z.ai proxy).
+        # Only apply alias-based overrides when the current value is still an alias.
+        # This preserves explicit model selections saved by the menu-bar model picker
+        # (for example: foundation-models or a concrete Claude model ID).
+        def _is_alias(value: str, alias: str) -> bool:
+            return str(value or "").strip().lower() == alias
+
         opus_model = os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL")
         sonnet_model = os.environ.get("ANTHROPIC_DEFAULT_SONNET_MODEL")
         haiku_model = os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
 
-        if opus_model:
+        if opus_model and _is_alias(config.models.planner, "opus"):
             config.models.planner = opus_model
-        if sonnet_model:
+        if sonnet_model and _is_alias(config.models.executor, "sonnet"):
             config.models.executor = sonnet_model
+        if sonnet_model and _is_alias(config.models.reviewer, "sonnet"):
             config.models.reviewer = sonnet_model
-        if haiku_model:
+        if haiku_model and _is_alias(config.models.quick, "haiku"):
             config.models.quick = haiku_model
 
         # A2A env var overrides

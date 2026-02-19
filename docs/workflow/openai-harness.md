@@ -1,8 +1,8 @@
 # OpenAI Harness Engineering (Distilled)
 
-**Source**: [OpenAI Blog - Harness Engineering](https://openai.com/index/harness-engineering/) (Feb 2025)
+**Source**: [OpenAI Blog - Harness Engineering](https://openai.com/index/harness-engineering/) (Feb 11, 2026 — Ryan Lopopolo, OpenAI)
 
-**TL;DR**: 5 months, 0 lines of manual code, ~1M lines generated, 1,500 PRs, 3 engineers → 7 engineers. Throughput increased as team grew.
+**TL;DR**: 5 months, 0 lines of manual code, ~1M lines generated, 1,500 PRs, 3 → 7 engineers. Throughput *increased* as team grew (not just maintained).
 
 ---
 
@@ -14,6 +14,14 @@
 | **Environment > Capability** | Early slowness was underspecified environment, not agent limitation |
 | **Repository as system of record** | If not in repo, doesn't exist to agent |
 | **Enforce invariants, not implementations** | Boundaries enforced, implementation free |
+
+---
+
+## Key Quote
+
+> "What capability is missing, and how do we make it both legible and enforceable for the agent?"
+
+This is the primary engineering question. Never "try harder." Always add capability.
 
 ---
 
@@ -66,7 +74,23 @@ Types → Config → Repo → Service → Runtime → UI
 
 **Enables prompts like**: "Ensure startup < 800ms" or "No span exceeds 2s in critical journeys"
 
-### 5. Garbage Collection (Not Bursts)
+### 5. Ralph Wiggum Loop (Agent Self-Review)
+
+Codex reviews its own PRs in a loop until all agent reviewers are satisfied. Humans may review but aren't required to. All review effort pushed to agent-to-agent.
+
+```
+Codex opens PR → requests agent reviews (local + cloud) → responds to feedback → loops until satisfied → merges
+```
+
+**Key**: Humans interact "almost entirely through prompts." No copy-pasting context into CLI — agent uses standard tools directly (`gh`, local scripts, repository-embedded skills).
+
+### 6. Repository-Embedded Skills
+
+Codex gathers context via skills embedded in the repo — not by humans providing context manually. This is the mechanism that makes "repository as system of record" work in practice.
+
+**Directly validates**: Our `.claude/skills/` directory approach and trigger-based progressive disclosure.
+
+### 7. Garbage Collection (Not Bursts)
 
 | Before | After |
 |--------|-------|
@@ -127,12 +151,15 @@ Types → Config → Repo → Service → Runtime → UI
 
 | From OpenAI | Jarvis Implementation | Status |
 |-------------|----------------------|--------|
-| Short AGENTS.md | CLAUDE.md ~100 lines | ⚠️ Too long currently |
+| Short AGENTS.md | CLAUDE.md 72 lines, 3-question gate enforced | ✅ Done |
 | Architecture layers | Not formalized | ❌ Missing |
 | Custom linters | `jarvis_api_lint.py` | ✅ Started |
 | Observability | Logs exist, not queryable | ⚠️ Partial |
 | Garbage collection | No recurring cleanup | ❌ Missing |
 | Repo as record | Some context external | ⚠️ Partial |
+| Repository-embedded skills | `.claude/skills/` — research-evaluator, claude-md-creator etc. | ✅ Done |
+| Ralph Wiggum Loop | Pre-commit hook wired, no agent self-review loop on PRs yet | ⚠️ Partial |
+| Agent-to-agent review | research-evaluator Advocate/Skeptic team | ✅ Started |
 
 ---
 
@@ -150,13 +177,15 @@ Types → Config → Repo → Service → Runtime → UI
 
 ## Integration Notes
 
-**Tier**: 1 (Reference) → 2 (Tested) - Partially validated
-**Created**: 2025-02-17
-**Sessions Used**: 2
+**Tier**: 2 (Tested)
+**Created**: 2026-02-17
+**Sessions Used**: 3
+**Additional source**: [Anthropic — Effective Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) (Feb 2026)
 **Outcomes**:
 
 - Session 1: Created docs structure based on progressive disclosure
 - Session 2: Shortened CLAUDE.md/AGENTS.md to ~125 lines
+- Session 3: CLAUDE.md/AGENTS.md trimmed to 59→75 lines. 3-question gate rule added to Principles. `claude-md-creator` skill enforcement updated. `research-evaluator` skill built (replaces `agent-context-repo`).
 
 ### Reasoning
 

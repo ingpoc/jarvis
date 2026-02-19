@@ -306,15 +306,20 @@ class JarvisDaemon:
         # Idle introspection processor (must be set before IOKit check below)
         try:
             from jarvis.introspection_processor import IntrospectionProcessor
-            from jarvis.mlx_inference import get_mlx_engine
+            mlx_engine = None
+            try:
+                from jarvis.mlx_inference import get_mlx_engine
+                mlx_engine = get_mlx_engine()
+            except Exception as mlx_err:
+                logger.warning(f"MLX engine unavailable, using TF-IDF fallback: {mlx_err}")
             self._idle_processor = IntrospectionProcessor(
                 memory=self.orchestrator.memory,
-                mlx_engine=get_mlx_engine(),
+                mlx_engine=mlx_engine,
                 project_path=str(self.orchestrator.project_path) if self.orchestrator else None,
             )
             logger.info("Idle introspection processor initialized")
         except Exception as e:
-            logger.debug(f"Introspection processor not loaded: {e}")
+            logger.warning(f"Introspection processor not loaded: {e}")
 
         # macOS native integrations
         try:

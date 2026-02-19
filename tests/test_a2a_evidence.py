@@ -381,7 +381,10 @@ class TestA2AServerLifecycle:
         # Find an available port
         def find_free_port():
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(('', 0))
+                try:
+                    s.bind(("", 0))
+                except PermissionError as exc:
+                    pytest.skip(f"Socket bind not permitted in this environment: {exc}")
                 s.listen(1)
                 port = s.getsockname()[1]
             return port
@@ -556,7 +559,10 @@ class TestJSONRPCExamples:
 
         def find_free_port():
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(('', 0))
+                try:
+                    s.bind(("", 0))
+                except PermissionError as exc:
+                    pytest.skip(f"Socket bind not permitted in this environment: {exc}")
                 s.listen(1)
                 port = s.getsockname()[1]
             return port
@@ -613,7 +619,10 @@ class TestJSONRPCExamples:
 
         def find_free_port():
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(('', 0))
+                try:
+                    s.bind(("", 0))
+                except PermissionError as exc:
+                    pytest.skip(f"Socket bind not permitted in this environment: {exc}")
                 s.listen(1)
                 port = s.getsockname()[1]
             return port

@@ -110,6 +110,7 @@ struct IdleInfo: Codable {
 struct ModelStatusInfo: Codable {
     let currentModel: String?
     let provider: String?
+    let providerType: String?
     let availableModels: [String]?
     let error: String?
     let mlxAvailable: Bool?
@@ -121,6 +122,7 @@ struct ModelStatusInfo: Codable {
     enum CodingKeys: String, CodingKey {
         case currentModel = "current_model"
         case provider
+        case providerType = "provider_type"
         case availableModels = "available_models"
         case error
         case mlxAvailable = "mlx_available"

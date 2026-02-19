@@ -95,6 +95,23 @@ wait_for_port_listen() {
     return 1
 }
 
+wait_for_http_health() {
+    local url="$1"
+    local timeout_seconds="${2:-20}"
+    local elapsed=0
+    if ! command -v curl >/dev/null 2>&1; then
+        return 1
+    fi
+    while [ "$elapsed" -lt "$timeout_seconds" ]; do
+        if curl -fsS "$url" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    return 1
+}
+
 print_failure_log_tail() {
     local log_file="$1"
     local label="$2"
@@ -127,6 +144,12 @@ launchctl_service_pid() {
     local label="$1"
     local gui_domain="gui/$(id -u)"
     launchctl print "$gui_domain/$label" 2>/dev/null | awk -F'= ' '/pid = / {gsub(/;/, "", $2); print $2; exit}'
+}
+
+launchctl_service_loaded() {
+    local label="$1"
+    local gui_domain="gui/$(id -u)"
+    launchctl print "$gui_domain/$label" >/dev/null 2>&1
 }
 
 verify_launchctl_service_started() {
@@ -292,14 +315,33 @@ start_daemon_with_launchctl() {
     write_daemon_launch_env
     write_daemon_launch_agent
     local gui_domain="gui/$(id -u)"
-
-    launchctl bootout "$gui_domain/$DAEMON_LABEL" >/dev/null 2>&1 || true
-    local bootstrap_err=""
-    if ! bootstrap_err="$(launchctl bootstrap "$gui_domain" "$DAEMON_AGENT_PLIST" 2>&1)"; then
-        echo "⚠️  Daemon bootstrap reported error: $bootstrap_err"
-        echo "    Attempting kickstart of existing daemon service..."
+    local action_msg=""
+    local err=""
+    if launchctl_service_loaded "$DAEMON_LABEL"; then
+        action_msg="kickstart existing"
+        if ! err="$(launchctl kickstart -k "$gui_domain/$DAEMON_LABEL" 2>&1)"; then
+            echo "❌ Daemon failed: launchctl kickstart error"
+            echo "$err"
+            print_failure_log_tail "$LOG_DIR/daemon.log" "Daemon"
+            exit 1
+        fi
+    else
+        action_msg="bootstrap + kickstart"
+        if ! err="$(launchctl bootstrap "$gui_domain" "$DAEMON_AGENT_PLIST" 2>&1)"; then
+            echo "⚠️  Daemon bootstrap reported error: $err"
+            if ! launchctl_service_loaded "$DAEMON_LABEL"; then
+                echo "❌ Daemon failed: launchctl bootstrap did not load service"
+                print_failure_log_tail "$LOG_DIR/daemon.log" "Daemon"
+                exit 1
+            fi
+        fi
+        if ! err="$(launchctl kickstart -k "$gui_domain/$DAEMON_LABEL" 2>&1)"; then
+            echo "❌ Daemon failed: launchctl kickstart error after bootstrap"
+            echo "$err"
+            print_failure_log_tail "$LOG_DIR/daemon.log" "Daemon"
+            exit 1
+        fi
     fi
-    launchctl kickstart -k "$gui_domain/$DAEMON_LABEL" >/dev/null 2>&1 || true
 
     local pid=""
     for _ in {1..25}; do
@@ -328,25 +370,56 @@ start_daemon_with_launchctl() {
         fi
 
         echo "❌ Daemon failed: launchctl did not report a running PID and port 9847 is not healthy"
-        if [ -n "$bootstrap_err" ]; then
-            echo "Bootstrap error: $bootstrap_err"
-        fi
+        echo "Launchctl action used: $action_msg"
         print_failure_log_tail "$LOG_DIR/daemon.log" "Daemon"
         exit 1
     fi
 }
 
+start_daemon_direct() {
+    # Ensure launchctl-managed daemon does not immediately respawn and conflict.
+    launchctl bootout "gui/$(id -u)/$DAEMON_LABEL" >/dev/null 2>&1 || true
+
+    nohup env PYTHONPATH="$JARVIS_DIR/src${PYTHONPATH:+:$PYTHONPATH}" \
+        "$PYTHON_BIN" -m jarvis.daemon >> "$LOG_DIR/daemon.log" 2>&1 &
+    local pid=$!
+    write_pid "$PID_DIR/daemon.pid" "$pid"
+    echo "  Daemon PID: $pid (direct)"
+    STARTED_DAEMON_PID="$pid"
+
+    verify_service_started "Daemon" "$pid" "$LOG_DIR/daemon.log" "9847"
+}
+
 start_menubar_with_launchctl() {
     write_menubar_launch_agent
     local gui_domain="gui/$(id -u)"
-
-    launchctl bootout "$gui_domain/$MENUBAR_LABEL" >/dev/null 2>&1 || true
-    local bootstrap_err=""
-    if ! bootstrap_err="$(launchctl bootstrap "$gui_domain" "$MENUBAR_AGENT_PLIST" 2>&1)"; then
-        echo "⚠️  Menu bar bootstrap reported error: $bootstrap_err"
-        echo "    Attempting kickstart of existing menu bar service..."
+    local action_msg=""
+    local err=""
+    if launchctl_service_loaded "$MENUBAR_LABEL"; then
+        action_msg="kickstart existing"
+        if ! err="$(launchctl kickstart -k "$gui_domain/$MENUBAR_LABEL" 2>&1)"; then
+            echo "❌ Menu bar app failed: launchctl kickstart error"
+            echo "$err"
+            print_failure_log_tail "$LOG_DIR/menubar.log" "Menu bar app"
+            exit 1
+        fi
+    else
+        action_msg="bootstrap + kickstart"
+        if ! err="$(launchctl bootstrap "$gui_domain" "$MENUBAR_AGENT_PLIST" 2>&1)"; then
+            echo "⚠️  Menu bar bootstrap reported error: $err"
+            if ! launchctl_service_loaded "$MENUBAR_LABEL"; then
+                echo "❌ Menu bar app failed: launchctl bootstrap did not load service"
+                print_failure_log_tail "$LOG_DIR/menubar.log" "Menu bar app"
+                exit 1
+            fi
+        fi
+        if ! err="$(launchctl kickstart -k "$gui_domain/$MENUBAR_LABEL" 2>&1)"; then
+            echo "❌ Menu bar app failed: launchctl kickstart error after bootstrap"
+            echo "$err"
+            print_failure_log_tail "$LOG_DIR/menubar.log" "Menu bar app"
+            exit 1
+        fi
     fi
-    launchctl kickstart -k "$gui_domain/$MENUBAR_LABEL" >/dev/null 2>&1 || true
 
     local pid=""
     for _ in {1..25}; do
@@ -372,12 +445,23 @@ start_menubar_with_launchctl() {
         fi
 
         echo "❌ Menu bar app failed: launchctl did not report a running PID"
-        if [ -n "$bootstrap_err" ]; then
-            echo "Bootstrap error: $bootstrap_err"
-        fi
+        echo "Launchctl action used: $action_msg"
         print_failure_log_tail "$LOG_DIR/menubar.log" "Menu bar app"
         exit 1
     fi
+}
+
+start_menubar_direct() {
+    # Ensure launchctl-managed menubar does not respawn and conflict.
+    launchctl bootout "gui/$(id -u)/$MENUBAR_LABEL" >/dev/null 2>&1 || true
+
+    nohup "$MENUBAR_BIN" >> "$LOG_DIR/menubar.log" 2>&1 &
+    local pid=$!
+    write_pid "$PID_DIR/menubar.pid" "$pid"
+    echo "  Menu bar PID: $pid (direct)"
+    STARTED_MENUBAR_PID="$pid"
+
+    verify_service_started "Menu bar app" "$pid" "$LOG_DIR/menubar.log" ""
 }
 
 echo -e "${BLUE}=== Jarvis Startup ===${NC}"
@@ -437,6 +521,9 @@ export ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-glm-5}"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-glm-5}"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-glm-5}"
 export JARVIS_ENABLE_TUNNEL="${JARVIS_ENABLE_TUNNEL:-0}"
+# Default to launchctl for persistent, auto-restarting user services.
+export JARVIS_DAEMON_START_MODE="${JARVIS_DAEMON_START_MODE:-launchctl}"
+export JARVIS_MENUBAR_START_MODE="${JARVIS_MENUBAR_START_MODE:-launchctl}"
 # Container system (Apple `container` CLI) is a hard dependency for containerized workflows.
 # Keep it explicit and fail-fast: if required and not running, try to start it; if that fails, abort.
 export JARVIS_REQUIRE_CONTAINERS="${JARVIS_REQUIRE_CONTAINERS:-1}"
@@ -513,21 +600,57 @@ if [ -f "$PID_DIR/daemon.pid" ] && is_pid_alive "$(cat "$PID_DIR/daemon.pid")"; 
     echo -e "${YELLOW}⚠️  Daemon already running (PID: $(cat "$PID_DIR/daemon.pid"))${NC}"
 else
     # Start Jarvis daemon in background
-    echo -e "${GREEN}▶ Starting Jarvis daemon...${NC}"
+    echo -e "${GREEN}▶ Starting Jarvis daemon (mode: ${JARVIS_DAEMON_START_MODE})...${NC}"
     cd "$JARVIS_DIR"
-    start_daemon_with_launchctl
-    verify_launchctl_service_started "Daemon" "$DAEMON_LABEL" "$PID_DIR/daemon.pid" "$LOG_DIR/daemon.log" "9847" "30"
+    daemon_mode="$(printf '%s' "${JARVIS_DAEMON_START_MODE}" | tr '[:upper:]' '[:lower:]')"
+    case "${daemon_mode}" in
+        launchctl)
+            start_daemon_with_launchctl
+            verify_launchctl_service_started "Daemon" "$DAEMON_LABEL" "$PID_DIR/daemon.pid" "$LOG_DIR/daemon.log" "9847" "30"
+            ;;
+        direct)
+            start_daemon_direct
+            ;;
+        *)
+            echo -e "${RED}FATAL: Invalid JARVIS_DAEMON_START_MODE='${JARVIS_DAEMON_START_MODE}'. Use 'direct' or 'launchctl'.${NC}"
+            exit 1
+            ;;
+    esac
+
+    # Verify A2A health too (port listen + /health when curl is available).
+    if ! wait_for_port_listen 9848 25; then
+        echo "❌ Daemon failed: A2A port 9848 did not become ready"
+        print_failure_log_tail "$LOG_DIR/daemon.log" "Daemon"
+        exit 1
+    fi
+    if command -v curl >/dev/null 2>&1 && ! wait_for_http_health "http://127.0.0.1:9848/health" 25; then
+        echo "❌ Daemon failed: A2A health endpoint did not become ready"
+        print_failure_log_tail "$LOG_DIR/daemon.log" "Daemon"
+        exit 1
+    fi
 fi
 
 if [ -f "$PID_DIR/menubar.pid" ] && is_pid_alive "$(cat "$PID_DIR/menubar.pid")"; then
     echo -e "${YELLOW}⚠️  Menu bar already running (PID: $(cat "$PID_DIR/menubar.pid"))${NC}"
 else
     # Start menu bar app
-    echo -e "${GREEN}▶ Starting menu bar app...${NC}"
+    echo -e "${GREEN}▶ Starting menu bar app (mode: ${JARVIS_MENUBAR_START_MODE})...${NC}"
     # Always build before launching so UI changes are picked up (incremental build is fast).
     swift build --package-path JarvisApp >> "$LOG_DIR/menubar.log" 2>&1
-    start_menubar_with_launchctl
-    verify_launchctl_service_started "Menu bar app" "$MENUBAR_LABEL" "$PID_DIR/menubar.pid" "$LOG_DIR/menubar.log" "" "30"
+    menubar_mode="$(printf '%s' "${JARVIS_MENUBAR_START_MODE}" | tr '[:upper:]' '[:lower:]')"
+    case "${menubar_mode}" in
+        launchctl)
+            start_menubar_with_launchctl
+            verify_launchctl_service_started "Menu bar app" "$MENUBAR_LABEL" "$PID_DIR/menubar.pid" "$LOG_DIR/menubar.log" "" "30"
+            ;;
+        direct)
+            start_menubar_direct
+            ;;
+        *)
+            echo -e "${RED}FATAL: Invalid JARVIS_MENUBAR_START_MODE='${JARVIS_MENUBAR_START_MODE}'. Use 'direct' or 'launchctl'.${NC}"
+            exit 1
+            ;;
+    esac
 fi
 
 echo ""

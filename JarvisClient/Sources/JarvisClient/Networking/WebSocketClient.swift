@@ -18,7 +18,7 @@ public enum WebSocketError: LocalizedError {
 
 @available(macOS 14, iOS 17, *)
 @Observable
-public final class WebSocketClient: Starscream.WebSocketDelegate {
+public final class JarvisWebSocketClient: Starscream.WebSocketDelegate {
     public private(set) var isConnected = false
     public private(set) var status: JarvisStatus = .idle
     public private(set) var connectionError: Error?

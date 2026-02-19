@@ -166,11 +166,47 @@ struct ModelSelectionView: View {
             .padding(.vertical, 8)
         }
         .onAppear {
+            syncFromModelStatus(modelStatus)
             webSocket.sendCommand(action: "get_model_status")
             checkLocalModels()
         }
+        .onChange(of: modelStatus?.currentModel) { _ in
+            syncFromModelStatus(modelStatus)
+        }
+        .onChange(of: modelStatus?.provider) { _ in
+            syncFromModelStatus(modelStatus)
+        }
+        .onChange(of: modelStatus?.providerType) { _ in
+            syncFromModelStatus(modelStatus)
+        }
     }
     
+    private func syncFromModelStatus(_ status: ModelStatusInfo?) {
+        guard let status else { return }
+
+        if let currentModel = status.currentModel, !currentModel.isEmpty {
+            selectedModelId = currentModel
+        }
+        if let provider = status.providerType ?? status.provider, !provider.isEmpty {
+            currentProvider = provider
+        }
+        if let available = status.foundationAvailable {
+            foundationAvailable = available
+        }
+        if let running = status.lmstudioRunning {
+            lmstudioRunning = running
+            if running == false {
+                lmstudioModelLoaded = nil
+            }
+        }
+        if let loaded = status.lmstudioModelLoaded {
+            lmstudioModelLoaded = loaded
+        }
+        if let discovered = status.lmstudioAvailableModels {
+            lmstudioModels = discovered
+        }
+    }
+
     private func checkLocalModels() {
         // Directly check Foundation Models availability via Python
         DispatchQueue.global().async {
@@ -224,7 +260,6 @@ struct ModelSelectionView: View {
     private func modelRow(model: ModelInfo) -> some View {
         Button(action: {
             if model.isAvailable {
-                selectedModelId = model.id
                 switchModel(model.id)
             }
         }) {
@@ -301,9 +336,14 @@ struct ModelSelectionView: View {
     private func switchModel(_ modelId: String) {
         isLoading = true
         webSocket.sendCommand(action: "switch_model", data: ["model": modelId])
-        
+
+        // Refresh from daemon so selection reflects actual active model/provider.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            webSocket.sendCommand(action: "get_model_status")
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             isLoading = false
+            webSocket.sendCommand(action: "get_model_status")
         }
     }
 }

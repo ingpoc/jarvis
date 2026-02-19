@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "token-efficient": {
+      "type": "local",
+      "command": ["node", "/Users/gurusharan/Documents/remote-claude/mcp-servers/token-efficient-mcp/dist/index.js"]
+    },
+    "context-graph": {
+      "type": "local",
+      "command": ["uv", "--directory", "/Users/gurusharan/Documents/remote-claude/mcp-servers/context-graph-mcp", "run", "python", "server.py"],
+      "environment": {
+        "VOYAGE_API_KEY": "{env:VOYAGE_API_KEY}"
+      }
+    },
+    "deepwiki": {
+      "type": "remote",
+      "url": "https://mcp.deepwiki.com/mcp"
+    },
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp"
+    }
+  }
+}

@@ -11,7 +11,8 @@ Checks:
 3. Import Validation - All imports resolve correctly
 4. Port Availability - WS (9847) and A2A (9848) ports
 5. Database Integrity - SQLite schema validation
-6. Test Suite - Core tests pass
+6. Governance Lint - Agent docs/research/memory contracts
+7. Test Suite - Core tests pass
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -55,6 +57,23 @@ def check_api_lint() -> CheckResult:
         return CheckResult("API Lint", False, "API lint errors found", result.stderr)
     except Exception as e:
         return CheckResult("API Lint", False, f"Failed to run: {e}")
+
+
+def check_agent_docs_lint() -> CheckResult:
+    """Run governance/docs lint checks (research + memory gates)."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "scripts/agent_docs_lint.py"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            return CheckResult("Governance Lint", True, "Governance docs + memory checks passed")
+        return CheckResult("Governance Lint", False, "Governance lint errors found", result.stderr)
+    except Exception as e:
+        return CheckResult("Governance Lint", False, f"Failed to run: {e}")
 
 
 def check_imports() -> CheckResult:
@@ -156,14 +175,23 @@ def check_database_integrity() -> CheckResult:
         return CheckResult("Database Integrity", False, f"Error: {e}")
 
 
-def check_port_available(port: int) -> bool:
-    """Check if port is available (not in use)."""
+def _can_connect(port: int) -> bool:
+    """Return True when something is listening on localhost:port."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(1.0)
     try:
-        sock.bind(("127.0.0.1", port))
+        sock.connect(("127.0.0.1", port))
         sock.close()
         return True
-    except OSError:
+    except PermissionError:
+        sock.close()
+        result = subprocess.run(
+            ["lsof", "-n", "-P", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0 and bool(result.stdout.strip())
+    except Exception:
         sock.close()
         return False
 
@@ -173,21 +201,19 @@ def check_ports() -> CheckResult:
     ws_port = 9847
     a2a_port = 9848
 
-    ws_available = check_port_available(ws_port)
-    a2a_available = check_port_available(a2a_port)
+    ws_open = _can_connect(ws_port)
+    a2a_open = _can_connect(a2a_port)
 
-    # Ports should be in use if daemon is running, available if not
-    # For validation, we just check they can be bound (no conflict)
-    if ws_available and a2a_available:
-        return CheckResult("Port Validation", True, "Both ports available (daemon not running)")
-    elif not ws_available and not a2a_available:
+    # Both ports should be open together when daemon is healthy.
+    if ws_open and a2a_open:
         return CheckResult("Port Validation", True, "Both ports in use (daemon running)")
-    else:
-        return CheckResult(
-            "Port Validation",
-            False,
-            f"Inconsistent port state: WS={ws_available}, A2A={a2a_available}",
-        )
+    if not ws_open and not a2a_open:
+        return CheckResult("Port Validation", True, "Both ports closed (daemon not running)")
+    return CheckResult(
+        "Port Validation",
+        False,
+        f"Inconsistent port state: WS_open={ws_open}, A2A_open={a2a_open}",
+    )
 
 
 def check_core_tests() -> CheckResult:
@@ -218,14 +244,29 @@ def check_core_tests() -> CheckResult:
 
 def check_daemon_health() -> CheckResult:
     """Check if daemon is running and healthy."""
-    try:
-        import httpx
+    # Prefer live endpoint checks first; tolerate launch race by retrying briefly.
+    deadline = time.time() + 12
+    while time.time() < deadline:
+        try:
+            import httpx
 
-        response = httpx.get("http://localhost:9848/health", timeout=5)
-        if response.status_code == 200:
-            return CheckResult("Daemon Health", True, "Daemon responding on A2A port")
-    except Exception:
-        pass
+            response = httpx.get("http://127.0.0.1:9848/health", timeout=2)
+            if response.status_code == 200:
+                return CheckResult("Daemon Health", True, "Daemon responding on A2A port")
+        except Exception:
+            pass
+
+        if _can_connect(9847):
+            return CheckResult("Daemon Health", True, "Daemon responding on WS port")
+
+        if _can_connect(9848):
+            return CheckResult(
+                "Daemon Health",
+                True,
+                "Daemon process listening on A2A port (health probe unavailable)",
+            )
+
+        time.sleep(0.5)
 
     # Check process
     result = subprocess.run(
@@ -282,6 +323,7 @@ def run_all_checks(full: bool = False) -> list[CheckResult]:
         check_config_integrity,
         check_database_integrity,
         check_ports,
+        check_agent_docs_lint,
         check_api_lint,
     ]
 

@@ -17,6 +17,25 @@ from typing import Iterable
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+MEMORY_DIR_TO_CATEGORY = {
+    "decisions": "decision",
+    "preferences": "preference",
+    "relationships": "relationship",
+    "commitments": "commitment",
+    "lessons": "lesson",
+    "handoffs": "handoff",
+}
+MEMORY_REQUIRED_KEYS = {
+    "title",
+    "date",
+    "category",
+    "priority",
+    "status",
+    "source",
+    "tags",
+}
+MEMORY_ALLOWED_PRIORITIES = {"critical", "notable", "background"}
+MEMORY_ALLOWED_STATUSES = {"active", "superseded"}
 
 
 @dataclass(frozen=True)
@@ -214,6 +233,218 @@ def lint_agent_path_references_exist(agent_root: Path) -> list[Finding]:
     return findings
 
 
+def _check_required_substrings(path: Path, lines: list[str], required: list[str]) -> list[Finding]:
+    findings: list[Finding] = []
+    for needle in required:
+        if not any(needle in line for line in lines):
+            findings.append(Finding(path, 1, f"Missing required section/content: {needle!r}"))
+    return findings
+
+
+def _parse_frontmatter(
+    path: Path, lines: list[str]
+) -> tuple[dict[str, str], dict[str, int], int] | tuple[None, None, None]:
+    """
+    Parse simple YAML frontmatter (`key: value`) for markdown notes.
+    Returns (data, key_line_map, body_start_line_index) or (None, None, None).
+    """
+    if not lines or lines[0].strip() != "---":
+        return None, None, None
+
+    end_idx = -1
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end_idx = i
+            break
+    if end_idx == -1:
+        return None, None, None
+
+    data: dict[str, str] = {}
+    key_lines: dict[str, int] = {}
+    for i in range(1, end_idx):
+        raw = lines[i].strip()
+        if not raw:
+            continue
+        if ":" not in raw:
+            continue
+        key, value = raw.split(":", 1)
+        key = key.strip()
+        value = value.strip().strip('"')
+        data[key] = value
+        key_lines[key] = i + 1
+
+    return data, key_lines, end_idx + 1
+
+
+def lint_memory_repository(repo_root: Path) -> list[Finding]:
+    """
+    Enforce typed long-term memory repository contract.
+
+    Required structure:
+    - memory/README.md
+    - memory/INDEX.md
+    - memory/_templates/MEMORY_NOTE.md
+    - memory/{decisions,preferences,relationships,commitments,lessons,handoffs}/
+    """
+    findings: list[Finding] = []
+    memory_root = repo_root / "memory"
+
+    if not memory_root.exists():
+        return [Finding(memory_root, 1, "Missing required folder: memory/")]
+
+    required_paths = [
+        memory_root / "README.md",
+        memory_root / "INDEX.md",
+        memory_root / "_templates" / "MEMORY_NOTE.md",
+    ]
+    for req in required_paths:
+        if not req.exists():
+            findings.append(Finding(req, 1, f"Missing required file: {req.relative_to(repo_root)}"))
+
+    note_paths: list[str] = []
+    for dir_name, expected_category in MEMORY_DIR_TO_CATEGORY.items():
+        category_dir = memory_root / dir_name
+        if not category_dir.exists():
+            findings.append(Finding(category_dir, 1, f"Missing required folder: {category_dir.relative_to(repo_root)}"))
+            continue
+
+        for note in sorted(category_dir.glob("*.md")):
+            rel = note.relative_to(repo_root).as_posix()
+            note_paths.append(rel)
+            lines = _read_lines(note)
+
+            if not re.match(r"^\d{4}-\d{2}-\d{2}-", note.name):
+                findings.append(Finding(note, 1, "Filename must start with YYYY-MM-DD-"))
+
+            fm, key_lines, body_start = _parse_frontmatter(note, lines)
+            if fm is None or key_lines is None or body_start is None:
+                findings.append(Finding(note, 1, "Missing or invalid YAML frontmatter"))
+                continue
+
+            missing_keys = MEMORY_REQUIRED_KEYS - set(fm.keys())
+            for key in sorted(missing_keys):
+                findings.append(Finding(note, 1, f"Missing frontmatter key: {key}"))
+
+            category = fm.get("category", "")
+            if category and category != expected_category:
+                findings.append(
+                    Finding(
+                        note,
+                        key_lines.get("category", 1),
+                        f"Frontmatter category must be '{expected_category}' for folder '{dir_name}'",
+                    )
+                )
+
+            date_value = fm.get("date", "")
+            if date_value and not re.match(r"^\d{4}-\d{2}-\d{2}$", date_value):
+                findings.append(Finding(note, key_lines.get("date", 1), "Frontmatter date must be YYYY-MM-DD"))
+
+            priority = fm.get("priority", "")
+            if priority and priority not in MEMORY_ALLOWED_PRIORITIES:
+                findings.append(
+                    Finding(
+                        note,
+                        key_lines.get("priority", 1),
+                        f"Frontmatter priority must be one of {sorted(MEMORY_ALLOWED_PRIORITIES)}",
+                    )
+                )
+
+            status = fm.get("status", "")
+            if status and status not in MEMORY_ALLOWED_STATUSES:
+                findings.append(
+                    Finding(
+                        note,
+                        key_lines.get("status", 1),
+                        f"Frontmatter status must be one of {sorted(MEMORY_ALLOWED_STATUSES)}",
+                    )
+                )
+
+            source = fm.get("source", "")
+            if source == "":
+                findings.append(Finding(note, key_lines.get("source", 1), "Frontmatter source must be non-empty"))
+
+            tags = fm.get("tags", "")
+            if tags and not (tags.startswith("[") and tags.endswith("]")):
+                findings.append(
+                    Finding(
+                        note,
+                        key_lines.get("tags", 1),
+                        "Frontmatter tags must use list syntax: [tag1, tag2]",
+                    )
+                )
+
+            body_lines = lines[body_start:]
+            findings.extend(
+                _check_required_substrings(
+                    note,
+                    body_lines,
+                    ["## Context", "## Memory", "## Retrieval Cues"],
+                )
+            )
+
+    index_file = memory_root / "INDEX.md"
+    if index_file.exists():
+        index_lines = _read_lines(index_file)
+        for path in sorted(note_paths):
+            if not any(path in line for line in index_lines):
+                findings.append(Finding(index_file, 1, f"INDEX.md missing note entry: {path}"))
+    return findings
+
+
+def lint_research_workflow_artifacts(repo_root: Path) -> list[Finding]:
+    """
+    Enforce research-evaluator output contracts.
+
+    Scope:
+    - Any file under docs/workflow/skipped/*.md (skip template required)
+    - Any file under docs/workflow/*.md that declares:
+      "**Evaluation**: research-evaluator"
+    """
+    findings: list[Finding] = []
+    workflow_root = repo_root / "docs" / "workflow"
+    skipped_root = workflow_root / "skipped"
+
+    # Enforce skip template in skipped/.
+    if skipped_root.exists():
+        for p in sorted(skipped_root.glob("*.md")):
+            lines = _read_lines(p)
+            required = [
+                "**Source**:",
+                "**Date**:",
+                "**Score**:",
+                "## Why skipped",
+                "| Dimension | Score | Notes |",
+                "## Revisit if",
+            ]
+            findings.extend(_check_required_substrings(p, lines, required))
+
+    # Enforce adopt/adapt template only for files explicitly tagged as evaluator output.
+    eval_marker = re.compile(r"^\s*\*\*Evaluation\*\*:\s*research-evaluator\s*$")
+    if workflow_root.exists():
+        for p in sorted(workflow_root.glob("*.md")):
+            if p.name == "README.md":
+                continue
+            lines = _read_lines(p)
+            if not any(eval_marker.match(line) for line in lines):
+                continue
+            required = [
+                "(Distilled)",
+                "**Source**:",
+                "**Date**:",
+                "**Score**:",
+                "## Verdict",
+                "| Dimension | Score | Notes |",
+                "## Claims Analysis",
+                "## What to Take",
+                "## What to Modify / Watch Out For",
+                "## Memory Promotion",
+                "**Memory Action**:",
+                "## Integration Notes",
+            ]
+            findings.extend(_check_required_substrings(p, lines, required))
+    return findings
+
+
 def main() -> int:
     agent_root = REPO_ROOT / ".agent"
     if not agent_root.exists():
@@ -225,6 +456,8 @@ def main() -> int:
     findings.extend(lint_inflight_status_consistency(agent_root))
     findings.extend(lint_agent_path_references_exist(agent_root))
     findings.extend(lint_no_stale_paths(agent_root))
+    findings.extend(lint_memory_repository(REPO_ROOT))
+    findings.extend(lint_research_workflow_artifacts(REPO_ROOT))
 
     if findings:
         print("AGENT DOCS LINT FAILED\n", file=sys.stderr)

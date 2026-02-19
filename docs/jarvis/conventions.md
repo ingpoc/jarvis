@@ -118,6 +118,8 @@ After startup or daemon lifecycle changes:
 | Promotion | When APPROVED, move to ARCHITECTURE.md |
 | Progressive disclosure | Keep stable docs short |
 | Governance lint | `python3 scripts/agent_docs_lint.py` |
+| Research artifact gate | Enforces `research-evaluator` output sections in `docs/workflow/` |
+| Memory gate | Enforces typed `memory/` structure + note schema + index coverage |
 
 ---
 

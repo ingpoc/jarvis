@@ -349,13 +349,46 @@ class JarvisOrchestrator:
         context["model"] = self.config.models.executor
         return await self._hooks.post_message_hook(input_data, context)
 
+    def _derive_provider_from_model(self, model_id: str) -> str:
+        """Infer provider from model ID for config-coherency checks."""
+        model = str(model_id or "")
+        lower = model.lower()
+        if model == "foundation-models":
+            return "foundation"
+        if "/" in model or model.startswith("lmstudio-") or "qwen" in lower or "deepseek" in lower:
+            return "lmstudio"
+        if model.startswith("mlx-"):
+            return "mlx"
+        return "anthropic"
+
+    def _effective_provider_type(self) -> str:
+        """Resolve a coherent provider_type from configured provider + current model."""
+        model_id = self.config.models.executor
+        derived = self._derive_provider_from_model(model_id)
+        configured = str(getattr(self.config.models, "provider_type", "")).strip().lower()
+
+        valid = {"anthropic", "foundation", "lmstudio", "mlx"}
+        if configured not in valid:
+            return derived
+        if configured == derived:
+            return configured
+
+        # Mismatch: prefer derived provider so runtime doesn't route tasks incorrectly.
+        logger.warning(
+            "provider_type mismatch (configured=%s, derived=%s, model=%s); using derived provider",
+            configured,
+            derived,
+            model_id,
+        )
+        return derived
+
     def _build_options(self) -> ClaudeAgentOptions:
         """Build Agent SDK options with all Jarvis integrations."""
 
         # Determine env vars for model provider
         env = {}
         model_id = self.config.models.executor
-        provider_type = getattr(self.config.models, "provider_type", "anthropic")
+        provider_type = self._effective_provider_type()
 
         # Local models need custom base URLs
         if (
@@ -637,7 +670,7 @@ class JarvisOrchestrator:
             callback("task_started", {"id": task_id, "description": task_description})
 
         # Check if using local model (Foundation or LM Studio) - route to local model handler
-        provider_type = getattr(self.config.models, "provider_type", "anthropic")
+        provider_type = self._effective_provider_type()
         model_id = self.config.models.executor
 
         if provider_type == "foundation" or provider_type == "lmstudio":
@@ -964,7 +997,7 @@ class JarvisOrchestrator:
         )
 
         # Route to local model if provider_type is foundation or lmstudio
-        provider_type = getattr(self.config.models, "provider_type", "anthropic")
+        provider_type = self._effective_provider_type()
         model_id = self.config.models.executor
         if provider_type in ("foundation", "lmstudio"):
             return await self._chat_local(user_message, provider_type, model_id)

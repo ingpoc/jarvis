@@ -9,8 +9,6 @@ struct VoiceView: View {
     @State private var transcript = ""
     @State private var lastCommand = ""
     @State private var voiceRecorder: VoiceRecorder?
-    @State private var wsClient: JarvisWebSocketClient = .shared
-
     var body: some View {
         VStack(spacing: 32) {
             VStack(spacing: 8) {
@@ -164,7 +162,7 @@ struct VoiceButton: View {
     private func sendTranscript(_ text: String) {
         lastCommand = text
         // Send to WebSocket (fire-and-forget)
-        JarvisWebSocketClient.shared.sendVoiceNoWait(text: text)
+        WebSocketClient.shared.sendVoiceNoWait(text: text)
     }
 }
 

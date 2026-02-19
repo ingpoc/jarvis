@@ -1,9 +1,7 @@
 import SwiftUI
-import JarvisClient
 
 struct ApprovalView: View {
-    @Environment(AuthManager.self) private var auth
-    @Environment(JarvisWebSocketClient.self) private var ws
+    @Environment(\.webSocket) private var ws
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

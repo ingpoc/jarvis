@@ -1,12 +1,15 @@
 import SwiftUI
 import CoreSpotlight
+import JarvisClient
 
 // MARK: - App Container
 
 @main
 struct JarvisApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @State private var webSocket = WebSocketClient()
+    @State private var webSocket = WebSocketClient.shared
+    @State private var authManager = AuthManager.shared
+    @State private var router = NavigationRouter()
 
     var body: some Scene {
         // Hidden window - opened via menu bar or hotkey
@@ -14,7 +17,7 @@ struct JarvisApp: App {
             ContentView()
                 .environment(authManager)
                 .environment(router)
-                .environment(webSocketClient)
+                .environment(webSocket)
                 .frame(minWidth: 800, minHeight: 600)
         }
         .windowStyle(.hiddenTitleBar)
@@ -75,8 +78,8 @@ extension EnvironmentValues {
 
 @Observable
 @available(macOS 14, *)
-public final class NavigationRouter {
-    public enum Tab: String, CaseIterable {
+final class NavigationRouter {
+    enum Tab: String, CaseIterable {
         case dashboard = "Dashboard"
         case timeline = "Timeline"
         case commands = "Commands"
@@ -84,14 +87,14 @@ public final class NavigationRouter {
         case settings = "Settings"
     }
 
-    public private(set) var selectedTab: Tab = .dashboard
-    public private(set) var currentStatus: JarvisStatus = .idle
+    private(set) var selectedTab: Tab = .dashboard
+    private(set) var currentStatus: JarvisStatus = .idle
 
-    public func selectTab(_ tab: Tab) {
+    func selectTab(_ tab: Tab) {
         selectedTab = tab
     }
 
-    public func updateStatus(_ status: JarvisStatus) {
+    func updateStatus(_ status: JarvisStatus) {
         currentStatus = status
     }
 }
@@ -265,4 +268,13 @@ extension View {
         self
             .shadow(color: .primary.opacity(0.3), radius: radius)
     }
+}
+
+// Placeholder views until dashboard/settings are reintroduced.
+private struct DashboardView: View {
+    var body: some View { CommandCenterView() }
+}
+
+private struct SettingsView: View {
+    var body: some View { Text("Settings").padding() }
 }

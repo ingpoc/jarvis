@@ -16,11 +16,20 @@ Agent-first development. Humans steer, agents execute.
 |large data → principles/token-efficiency.md
 |need a diagram / architecture diagram → workflow/draw-io-diagram-generation.md
 |local models / LM Studio / Foundation Models → workflow/local-models-integration.md
+|scripts/validation/build → jarvis/scripts.md
+|research paper/article/URL shared → load research-evaluator skill
+|X/LinkedIn/Threads post shared → workflow/social-post-intake.md then research-evaluator
+|memory/continuity/decisions/preferences requested → memory/README.md
+|tool failure / tool discovery / rule placement → workflow/harness-governance.md
+|harness complexity / overengineering concerns → workflow/harness-purpose-map.md
+|optimizing codex / claude code / claude agent sdk capabilities → capabilities/README.md
+|new optimization proposal / should we add this capability → capabilities/checklist.md
 |principles:{agent-first.md,progressive-disclosure.md,determinism.md,token-efficiency.md}
 |updating docs / storing bugs / context graph → workflow/context-learning-loop.md
-|workflow:{openai-harness.md,vercel-agents-md.md,local-models-integration.md,context-learning-loop.md}
+|workflow:{openai-harness.md,openai-unrolling-codex-agent-loop.md,openai-unlocking-codex-harness.md,langchain-improving-deep-agents-harness-engineering.md,vercel-agents-md.md,local-models-integration.md,context-learning-loop.md,harness-governance.md,harness-purpose-map.md,social-post-intake.md}
+|capabilities:{README.md,checklist.md,codex.md,claude-code.md,claude-agent-sdk-python.md}
 |architecture:{layers.md,taste-invariants.md}
-|jarvis:{debugging.md,api-reference.md,conventions.md}
+|jarvis:{debugging.md,api-reference.md,conventions.md,scripts.md}
 ```
 
 ---
@@ -36,63 +45,31 @@ Agent-first development. Humans steer, agents execute.
 
 ---
 
-## Scripts
-
-### Validation Scripts
-
-Run these **before submitting changes** to ensure everything works:
-
-| Script | When to Run | Purpose |
-|--------|-------------|---------|
-| `python3 scripts/validate_jarvis.py` | After any Python/Swift changes | Full validation: config, DB, ports, API lint |
-| `python3 scripts/validate_local_models.py` | After local model changes | Validate AFM, LM Studio, WebSocket integration |
-| `python3 scripts/test_local_models.py` | Debugging local models | Detailed end-to-end testing of models |
-| `bash scripts/build_jarvis_app.sh` | After Swift changes | Clean Swift build with fresh DerivedData |
-
-### Linting Scripts
-
-| Script | When to Run | Purpose |
-|--------|-------------|---------|
-| `python3 scripts/jarvis_api_lint.py` | After API changes | Python API lint (21 files) |
-| `python3 scripts/agent_docs_lint.py` | After doc changes | Agent docs lint |
-
-### Local Models
-
-| Script | When to Run | Purpose |
-|--------|-------------|---------|
-| `python3 scripts/test_local_models.py` | Testing AFM/LM Studio | Tests: AFM availability, LM Studio startup, WebSocket response |
-
----
-
 ## Critical Rules
 
 ### WebSocket Format
 
-```
+```text
 {"action": "<name>", "data": {...}, "id": "optional"}
 ```
 
 **Common error**: Putting `message` at top level. Wrap in `data`.
 
-### Logs & Cache
-
-| Path | Use |
-|------|-----|
-| `~/.jarvis/logs/daemon.log` | Runtime |
-| `/tmp/jarvis-daemon.log` | Startup |
-
-```bash
-# After Python changes
-find src -name "*.pyc" -delete && find src -name "__pycache__" -type d -exec rm -rf {} +
-```
-
 ---
 
-## Verification
+## Principles
 
-- [ ] Tests pass (exit code 0)
-- [ ] Lint passes
-- [ ] Daemon healthy
+| Principle | Rule |
+|-----------|------|
+| Expert judgment | Apply expertise proactively. If there's a better way, say so — don't just execute. |
+| Best idea wins | Reason with the user. Challenge assumptions. Right answer can come from either side. |
+| Judgment over filing | Research gets evaluated, not just stored. Always load `research-evaluator` skill. |
+| Research gate | For URL/article research tasks: produce scored verdict first (`Adopt/Adapt/Skip`) before updating rules/docs. |
+| CLAUDE.md gate | Add here only if: silent failure without it + needed ≥80% sessions + fits ≤3 lines. Otherwise → `docs/` + trigger. |
+| Self-improving harness | When agent struggles → identify what's missing → agent writes the fix into repo. |
+| Fail loud | On tool/data failures: fallback or report blocker. Never continue with missing evidence. |
+| Learn every fix | After non-trivial failure→fix, store a project-scoped context trace. |
+| Memory-first continuity | Promote repeated durable learnings to `memory/` with typed notes and priorities. |
 
 ---
 
@@ -103,3 +80,4 @@ find src -name "*.pyc" -delete && find src -name "__pycache__" -type d -exec rm 
 | Git | No force-push main, no amend, no --no-verify |
 | Tools | Token-efficient MCP for large data |
 | Security | T2 (developer) - no prod deploys |
+| Verify | Tests pass (exit 0), lint passes, daemon healthy |

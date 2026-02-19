@@ -38,6 +38,7 @@ public struct TimelineEvent: Identifiable, Codable, Sendable {
         self.taskId = taskId
         self.featureId = featureId
         self.costUsd = costUsd
+        self.metadata = metadata
     }
 
     enum CodingKeys: String, CodingKey {
@@ -47,6 +48,7 @@ public struct TimelineEvent: Identifiable, Codable, Sendable {
         case taskId = "task_id"
         case featureId = "feature_id"
         case costUsd = "cost_usd"
+        case metadata
     }
 
     public init(from decoder: Decoder) throws {

@@ -1,6 +1,6 @@
 # Draw.io Diagram Generation (Distilled)
 
-**Source**: `draw-io.md` (root)
+**Source**: Internal process note (original root source removed during docs cleanup)
 **TL;DR**: Process guide for generating visual diagrams using draw.io with Mermaid, XML, or CSV formats, delivered via HTML artifacts.
 
 ## Opinion

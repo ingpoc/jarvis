@@ -1,5 +1,4 @@
 import SwiftUI
-import JarvisClient
 
 /// Command View: Execute tasks and manage approvals
 /// Design: Clear input, prominent actions, minimal friction
@@ -87,13 +86,10 @@ struct CommandInputCard: View {
         let command = input
         isExecuting = true
 
-        Task {
-            _ = try? await ws.runTask(description: command)
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                isExecuting = false
-                input = ""
-            }
+        ws.runTask(description: command)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            isExecuting = false
+            input = ""
         }
     }
 }

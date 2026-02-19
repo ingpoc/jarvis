@@ -8,7 +8,9 @@ Progressive disclosure: Start here, dive deeper as needed.
 |------|----------|-------|
 | How to work in this repo | [../CLAUDE.md](../CLAUDE.md) | ~100 |
 | Core principles | [principles/README.md](principles/README.md) | Index |
+| Platform capabilities | [capabilities/README.md](capabilities/README.md) | Index |
 | Research distillations | [workflow/README.md](workflow/README.md) | Index |
+| Long-term continuity memory | [../memory/README.md](../memory/README.md) | Contract |
 | Architecture rules | [architecture/README.md](architecture/README.md) | Index |
 | Jarvis-specific | [jarvis/README.md](jarvis/README.md) | Index |
 
@@ -17,6 +19,11 @@ Progressive disclosure: Start here, dive deeper as needed.
 ```
 docs/
 ├── README.md              # This file - master index
+├── capabilities/          # Platform capability maps (use-before-build)
+│   ├── checklist.md       # Proposal gate before adding new harness logic
+│   ├── codex.md           # Codex built-ins and limits
+│   ├── claude-code.md     # Claude Code built-ins and enforcement model
+│   └── claude-agent-sdk-python.md # SDK extension points and app boundaries
 ├── principles/            # Core philosophy (timeless)
 │   ├── agent-first.md     # Humans steer, agents execute
 │   ├── progressive-disclosure.md  # Map not manual
@@ -39,8 +46,9 @@ docs/
 ## Reading Order
 
 1. **New to project**: CLAUDE.md → principles/agent-first.md → jarvis/conventions.md
-2. **Debugging issue**: jarvis/debugging.md → architecture/taste-invariants.md
-3. **Research background**: workflow/openai-harness.md → principles/progressive-disclosure.md
+2. **Capability planning**: capabilities/README.md → capabilities/{platform}.md
+3. **Debugging issue**: jarvis/debugging.md → architecture/taste-invariants.md
+4. **Research background**: workflow/openai-harness.md → principles/progressive-disclosure.md
 
 ## Maintenance
 

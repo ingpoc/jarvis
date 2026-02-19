@@ -113,6 +113,7 @@ private struct AvailableToolsResponse: Decodable {
 
 @Observable
 final class WebSocketClient: WebSocketClientProtocol {
+    static let shared = WebSocketClient()
     var connectionState: ConnectionState = .disconnected
     weak var delegate: WebSocketDelegate?
 
@@ -301,6 +302,10 @@ final class WebSocketClient: WebSocketClientProtocol {
 
     func runTask(description: String) {
         sendCommand(action: "run_task", data: ["description": description])
+    }
+
+    func sendVoiceNoWait(text: String) {
+        sendCommand(action: "send_voice", data: ["text": text])
     }
 
     func approve(taskId: String) {

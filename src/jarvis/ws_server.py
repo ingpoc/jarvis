@@ -244,11 +244,39 @@ class JarvisWSServer:
                 config = self._orchestrator.config if self._orchestrator else None
                 current_model = config.models.executor if config else "unknown"
 
-                provider = "anthropic"
-                if current_model == "foundation-models":
-                    provider = "foundation"
-                elif "/" in current_model or current_model.startswith("lmstudio-"):
-                    provider = "lmstudio"
+                def _provider_from_model(model_id: str) -> str:
+                    model_id = str(model_id or "")
+                    if model_id == "foundation-models":
+                        return "foundation"
+                    if (
+                        "/" in model_id
+                        or model_id.startswith("lmstudio-")
+                        or "qwen" in model_id.lower()
+                        or "deepseek" in model_id.lower()
+                    ):
+                        return "lmstudio"
+                    if model_id.startswith("mlx-"):
+                        return "mlx"
+                    return "anthropic"
+
+                derived_provider_type = _provider_from_model(current_model)
+                configured_provider_type = (
+                    str(getattr(config.models, "provider_type", "")).strip().lower()
+                    if config
+                    else ""
+                )
+                if configured_provider_type not in {"anthropic", "foundation", "lmstudio", "mlx"}:
+                    configured_provider_type = ""
+
+                provider_type = (
+                    configured_provider_type
+                    if configured_provider_type and configured_provider_type == derived_provider_type
+                    else derived_provider_type
+                )
+
+                provider = (
+                    provider_type if provider_type in {"foundation", "lmstudio", "mlx"} else "anthropic"
+                )
 
                 afm_available = is_afm_available()
                 lm_running = lm_mgr.is_running or lm_mgr.is_api_available()
@@ -256,9 +284,7 @@ class JarvisWSServer:
                 result = {
                     "current_model": current_model,
                     "provider": provider,
-                    "provider_type": local_mgr.provider.value
-                    if local_mgr.provider
-                    else "anthropic",
+                    "provider_type": provider_type,
                     "available_models": [
                         "claude-sonnet-4-5-20250929",
                         "claude-opus-4-6",
@@ -280,6 +306,11 @@ class JarvisWSServer:
                             "available_models": lm_mgr.available_models if lm_running else [],
                         },
                     },
+                    "runtime_provider": (
+                        local_mgr.provider.value
+                        if local_mgr.provider and provider_type in {"foundation", "lmstudio", "mlx"}
+                        else None
+                    ),
                 }
 
             elif action == "switch_model":
@@ -315,13 +346,19 @@ class JarvisWSServer:
                                 "success": True,
                                 "current_model": model,
                                 "provider": provider,
+                                "provider_type": provider,
                                 "info": switch_result.get("info", ""),
                             }
                     else:
                         self._orchestrator.config.models.executor = model
                         self._orchestrator.config.models.provider_type = "anthropic"
                         self._orchestrator.config.save()
-                        result = {"success": True, "current_model": model, "provider": "anthropic"}
+                        result = {
+                            "success": True,
+                            "current_model": model,
+                            "provider": "anthropic",
+                            "provider_type": "anthropic",
+                        }
                 else:
                     result = {"error": "Orchestrator not connected"}
 

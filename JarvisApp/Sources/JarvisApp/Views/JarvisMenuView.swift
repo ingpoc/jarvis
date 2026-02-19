@@ -251,7 +251,6 @@ struct JarvisMenuView: View {
         } catch {
             ErrorHandler.shared.handle(error, context: "processDroppedFile")
         }
-        .frame(width: 200)
     }
 }
 

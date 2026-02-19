@@ -1,5 +1,4 @@
 import SwiftUI
-import JarvisClient
 
 struct StatusBadge: View {
     @Environment(\.webSocket) private var webSocket
