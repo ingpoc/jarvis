@@ -26,7 +26,7 @@
       "defaultTimeoutSec": {
         "type": "number",
         "minimum": 5,
-        "maximum": 3600
+        "maximum": 18000
       },
       "pollIntervalMs": {
         "type": "number",

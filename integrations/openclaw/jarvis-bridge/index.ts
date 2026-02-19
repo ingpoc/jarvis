@@ -39,7 +39,7 @@ const JarvisTaskSchema = {
     timeoutSec: {
       type: "number",
       minimum: 5,
-      maximum: 3600,
+      maximum: 18000,
       description: "Max wait duration when wait=true.",
     },
     pollIntervalMs: {
