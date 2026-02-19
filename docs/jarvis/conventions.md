@@ -53,20 +53,22 @@ Project-specific patterns and rules.
 ## File Organization
 
 ```
-jarvis/
-├── daemon.py          # Background service (port 9847)
-├── ws_server.py       # WebSocket server
-├── orchestrator/      # Message handling pipeline
-│   └── core.py        # Main orchestrator
-├── memory.py          # Vector store (ChromaDB)
-├── model_router.py    # LLM routing (local/cloud)
-├── mlx_inference.py   # Local MLX inference
-├── config.py          # Configuration
-└── self_learning.py   # Learning loops
+src/jarvis/
+├── daemon.py                  # Background service (port 9847 WS, 9848 A2A)
+├── ws_server.py               # WebSocket API surface
+├── orchestrator/              # Message handling pipeline
+│   └── core.py                # Main orchestrator
+├── local_model_manager.py     # AFM / LM Studio switching
+├── lm_studio_manager.py       # LM Studio process/model status
+├── afm_integration.py         # Apple Foundation Models integration
+├── config.py                  # Configuration
+└── self_learning.py           # Learning loops
 
 scripts/
-├── jarvis_api_lint.py # WebSocket format linter
-└── test_ws_client.py  # WebSocket test client
+├── validate_jarvis.py         # Full project validation
+├── validate_local_models.py   # Local models validation
+├── test_local_models.py       # Local model integration smoke tests
+└── jarvis_api_lint.py         # WebSocket format linter
 
 tests/
 ├── test_model_router.py
@@ -103,8 +105,9 @@ tests/
 
 After startup or daemon lifecycle changes:
 
-- [ ] `stop-jarvis.sh` then `start-jarvis.sh` pass with clean logs
-- [ ] Daemon WebSocket port listening
+- [ ] `./stop-jarvis.sh` then `./start-jarvis.sh` completes, or service health is verified manually
+- [ ] `launchctl print gui/$(id -u)/com.jarvis.daemon` reports running state
+- [ ] Daemon WebSocket port 9847 and A2A port 9848 are listening
 - [ ] Menu bar process running and connected
 
 ---
@@ -123,6 +126,9 @@ After startup or daemon lifecycle changes:
 
 ---
 
-## Current Branch
+## Runtime Default
 
-`jarvis-ui-enhancement-log-viewer`
+`start-jarvis.sh` defaults to `launchctl` for both daemon and menu bar:
+
+- `JARVIS_DAEMON_START_MODE=launchctl`
+- `JARVIS_MENUBAR_START_MODE=launchctl`

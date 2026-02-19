@@ -1,132 +1,96 @@
 # WebSocket API Reference
 
----
-
 ## Connection
 
+```text
+ws://127.0.0.1:9847
 ```
-ws://localhost:9847
-```
-
----
 
 ## Message Format
 
-All messages use this structure:
+All client requests use:
 
 ```json
 {
   "action": "<action_name>",
-  "data": { /* action-specific params */ },
-  "id": "<optional_request_id>"
-}
-```
-
----
-
-## Actions
-
-### chat
-
-Send a message to Jarvis.
-
-```json
-{
-  "action": "chat",
-  "data": {
-    "message": "Hello Jarvis"
-  },
-  "id": "msg-001"
-}
-```
-
-### run_task
-
-Execute a task.
-
-```json
-{
-  "action": "run_task",
-  "data": {
-    "task": "build the project"
-  },
-  "id": "task-001"
-}
-```
-
-### get_status
-
-Get daemon status.
-
-```json
-{
-  "action": "get_status",
   "data": {},
-  "id": "status-001"
+  "id": "optional-request-id"
 }
 ```
 
-### read_file
+Use the `data` wrapper for action parameters.
 
-Read a file.
+## Common Actions
+
+| Action | Required `data` fields | Notes |
+|--------|-------------------------|-------|
+| `chat` | `message` | Non-blocking conversational chat |
+| `message` | `message` | Alias of `chat` with intent event emission |
+| `send_voice` | `text` | Voice transcript in, direct reply out |
+| `run_task` | `description` | Optional `mode`: `pipeline` or default single-agent |
+| `get_status` | none | Daemon/task/preflight status |
+| `get_timeline` | none (optional `limit`) | Timeline events |
+| `get_model_status` | none | Active model/provider plus local-model availability |
+| `switch_model` | `model` | Persists model/provider selection |
+| `read_file` | `file_path` | Reads local file content (truncated at 20k chars) |
+| `run_tests` | none | Queues test task |
+| `build_project` | none | Queues build task |
+
+For full action list, see `src/jarvis/ws_server.py`.
+
+## Voice Request Example
 
 ```json
 {
-  "action": "read_file",
+  "action": "send_voice",
+  "id": "voice-001",
   "data": {
-    "path": "/path/to/file"
-  },
-  "id": "read-001"
+    "text": "what is the status of my current work"
+  }
 }
 ```
-
----
 
 ## Response Format
 
+Server responses include a wrapped payload and mirrored top-level fields:
+
 ```json
 {
-  "id": "<request_id>",
-  "status": "success" | "error",
-  "data": { /* response data */ },
-  "error": "<error_message_if_any>"
+  "type": "response",
+  "id": "voice-001",
+  "action": "send_voice",
+  "data": {
+    "success": true,
+    "reply": "Status is ...",
+    "_meta": {
+      "request_id": "voice-001",
+      "action": "send_voice",
+      "duration_ms": 812
+    }
+  },
+  "success": true,
+  "reply": "Status is ..."
 }
 ```
 
----
+If an action fails, `data.error` is populated.
 
-## Events (Broadcast)
+## Broadcast Events
 
-| Event | When | Data |
-|-------|------|------|
-| `chat_user` | User message | `{message}` |
-| `chat_assistant` | AI response | `{message}` |
-| `chat_route` | Routing decision | `{model, reason}` |
-| `chat_async_complete` | Background done | `{message}` |
-| `tool_use` | Tool invoked | `{tool, params}` |
-
----
-
-## Error Handling
-
-| Error Code | Meaning |
-|------------|---------|
-| 400 | Invalid message format |
-| 404 | Action not found |
-| 500 | Internal error |
-
----
+| Event | Meaning |
+|-------|---------|
+| `chat_user` | User message received |
+| `chat_assistant` | Assistant response generated |
+| `chat_route` | Routing/provider decision |
+| `chat_async_complete` | Async response complete |
+| `chat_intent` | Intent decision from `message` action |
+| `voice_command` | Voice transcript accepted |
+| `tool_use` | Tool invocation emitted by orchestrator |
 
 ## Lint Rule
 
-Run before testing WebSocket changes:
+Run after any WS contract change:
 
 ```bash
 python3 scripts/jarvis_api_lint.py
 ```
-
-Checks:
-
-- All actions have `data` wrapper
-- Required fields present
-- No top-level params

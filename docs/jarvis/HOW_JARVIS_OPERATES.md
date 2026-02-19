@@ -23,6 +23,7 @@ Jarvis accepts tasks from multiple interfaces:
 |-----------|-------------|--------------|---------------|
 | **CLI** | `jarvis run "task"` | Auto-selects | `-p` (pipeline) or `-s` (single) |
 | **WebSocket** | Menu bar app / Full app | Single-agent | `mode="pipeline"` in request |
+| **Voice (WebSocket)** | `send_voice` action | Single-agent, direct reply | No (always immediate conversational path) |
 | **A2A Protocol** | External agents (OpenClaw) | Single-agent | Via orchestrator config |
 | **Slack Bot** | Slack channel | Single-agent | Not configurable |
 | **Chat Mode** | WebSocket `chat` action | Single-agent | N/A (conversational) |
@@ -99,6 +100,16 @@ Task Completes
   - Conversational tasks
 - **Tools Available**: Based on trust tier (T0-T4)
 - **Session**: Maintains conversation context
+
+### Voice Path (Current)
+
+Voice in the app uses this path:
+
+1. macOS recorder captures audio.
+2. Local MLX Whisper transcribes speech.
+3. Client sends `send_voice` with `data.text` over WS.
+4. Server calls `JarvisOrchestrator.handle_message(...)` directly.
+5. Reply is returned in the same WS response and spoken in-app.
 
 ### Example Flow
 

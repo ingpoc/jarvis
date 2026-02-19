@@ -1,5 +1,12 @@
 # Jarvis Scripts Reference
 
+## Startup / Runtime
+
+| Script | When to Run | Purpose |
+|--------|-------------|---------|
+| `./start-jarvis.sh` | Normal startup | Starts daemon + menu bar (launchctl by default) |
+| `./stop-jarvis.sh` | Before restart / shutdown | Stops daemon, menu bar, optional tunnel |
+
 ## Validation Scripts
 
 Run these **before submitting changes**:
@@ -23,14 +30,23 @@ Run these **before submitting changes**:
 
 | Script | When to Run | Purpose |
 |--------|-------------|---------|
-| `python3 scripts/test_local_models.py` | Testing AFM/LM Studio | Tests: AFM availability, LM Studio startup, WebSocket response |
+| `python3 scripts/test_local_models.py` | Testing AFM/LM Studio routing | Checks model availability and WS behavior |
+| `python3 scripts/validate_local_models.py` | Before merge of model changes | Sanity checks for model manager integration |
+
+## Voice Runtime Dependencies (macOS)
+
+| Dependency | Verify |
+|------------|--------|
+| `mlx-whisper` in project `.venv` | `.venv/bin/python -c "import mlx_whisper"` |
+| `ffmpeg` on PATH | `ffmpeg -version` |
 
 ## Logs & Cache
 
 | Path | Use |
 |------|-----|
 | `~/.jarvis/logs/daemon.log` | Runtime |
-| `/tmp/jarvis-daemon.log` | Startup |
+| `~/.jarvis/logs/menubar.log` | Menu bar app build/runtime |
+| `~/.jarvis/logs/tunnel.log` | Localtunnel logs (when enabled) |
 
 Clear bytecode cache after Python changes:
 

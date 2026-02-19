@@ -7,18 +7,20 @@ Project-specific conventions and references.
 | [conventions.md](conventions.md) | Container, git, tools | Working in repo |
 | [debugging.md](debugging.md) | Common issues, fixes | Debugging |
 | [api-reference.md](api-reference.md) | WebSocket API | Integrating |
+| [scripts.md](scripts.md) | Validation/build scripts | Verifying changes |
+| [HOW_JARVIS_OPERATES.md](HOW_JARVIS_OPERATES.md) | End-to-end execution model | Architecture deep dive |
 
 ## Quick Start
 
 ```bash
-# Start daemon
+# Start daemon + menu bar
 ./start-jarvis.sh
 
-# Test WebSocket
-python scripts/test_ws_client.py
+# Stop everything
+./stop-jarvis.sh
 
-# Run lint
-python scripts/jarvis_api_lint.py
+# Full validation (recommended before commit)
+python3 scripts/validate_jarvis.py
 ```
 
 ## Key Files
@@ -33,10 +35,21 @@ python scripts/jarvis_api_lint.py
 ## Architecture
 
 ```
-jarvis/
-├── daemon.py          # Background service
-├── ws_server.py       # WebSocket server
-├── orchestrator/      # Message handling
-├── memory.py          # Vector store
-└── model_router.py    # LLM routing
+src/jarvis/
+├── daemon.py                  # Background service
+├── ws_server.py               # WebSocket server (port 9847)
+├── orchestrator/              # Message handling + routing
+├── local_model_manager.py     # AFM / LM Studio provider switching
+└── a2a/server.py              # A2A server (port 9848)
+```
+
+## Voice Path (Current)
+
+```
+Voice tab (JarvisApp)
+  -> VoiceRecorder (records + MLX Whisper transcription on macOS)
+  -> WebSocket action: send_voice
+  -> JarvisOrchestrator.handle_message(...)
+  -> immediate reply payload
+  -> app text-to-speech playback
 ```

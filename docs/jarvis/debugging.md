@@ -2,31 +2,22 @@
 
 Common issues and fixes.
 
----
-
-## WebSocket Message Format (CRITICAL)
+## WebSocket Message Format (Critical)
 
 | Wrong | Correct |
 |-------|---------|
-| `{"action": "chat", "message": "..."}` | `{"action": "chat", "data": {"message": "..."}, "id": "..."}` |
+| `{"action":"chat","message":"..."}` | `{"action":"chat","data":{"message":"..."},"id":"..."}` |
 
-**All messages MUST use `data` wrapper** for action parameters.
-
-### Actions Requiring Data Wrapper
-
-chat, run_task, message, read_file, git_status, build_project, run_tests
-
----
+All actions must use the `data` wrapper.
 
 ## Log Locations
 
 | Log | Path |
 |-----|------|
 | Daemon log | `~/.jarvis/logs/daemon.log` |
-| Startup log | `/tmp/jarvis-daemon.log` |
+| Menu bar log | `~/.jarvis/logs/menubar.log` |
+| Tunnel log (optional) | `~/.jarvis/logs/tunnel.log` |
 | Database | `~/.jarvis/jarvis.db` |
-
----
 
 ## Event Verification
 
@@ -37,35 +28,22 @@ ORDER BY timestamp DESC
 LIMIT 10;
 ```
 
----
-
-## Bytecode Cache Issues
-
-After modifying Python files:
+## Reliable Restart Sequence
 
 ```bash
-find src -name "*.pyc" -delete && \
-find src -name "__pycache__" -type d -exec rm -rf {} +
+./stop-jarvis.sh
+./start-jarvis.sh
 ```
 
----
-
-## Daemon Restart Sequence
+Verify service health with launchctl and ports:
 
 ```bash
-# Kill existing
-kill $(pgrep -f "jarvis.daemon")
-sleep 2
-
-# Start fresh
-nohup .venv/bin/python -m jarvis.daemon > /tmp/jarvis-daemon.log 2>&1 &
-sleep 3
-
-# Verify
-ps aux | grep jarvis.daemon
+launchctl print "gui/$(id -u)/com.jarvis.daemon" | rg "state =|pid ="
+lsof -n -P -iTCP:9847 -sTCP:LISTEN
+lsof -n -P -iTCP:9848 -sTCP:LISTEN
 ```
 
----
+Note: `start-jarvis.sh` can report a launchctl health timeout even when the service comes up a few seconds later. Confirm with `launchctl print` plus listening ports before declaring failure.
 
 ## Common Errors
 
@@ -73,10 +51,10 @@ ps aux | grep jarvis.daemon
 |-------|-------|-----|
 | `Missing 'message'` | Message at top level | Move to `data.message` |
 | `Orchestrator not connected` | Daemon not running | Restart daemon |
+| `Unknown action: send_voice` | Daemon not restarted after code update | Run `./stop-jarvis.sh && ./start-jarvis.sh` |
+| Voice transcript generated but no reply | `send_voice` response path failing | Check `daemon.log` for `send_voice` response/error |
+| Voice does not transcribe | `mlx-whisper` or `ffmpeg` missing | Install dependencies in project env |
 | Events not broadcast | Wrong message format | Use `data` wrapper |
-| `'MemoryStore' has no attribute` | Stale bytecode | Clear `__pycache__` |
-
----
 
 ## Event Types Broadcast
 
@@ -86,21 +64,26 @@ ps aux | grep jarvis.daemon
 | `chat_assistant` | AI response generated |
 | `chat_route` | Routing decision made |
 | `chat_async_complete` | Background chat done |
+| `chat_intent` | Intent decision emitted |
+| `voice_command` | Voice input accepted |
 | `tool_use` | Tool invocation |
-
----
 
 ## Pre-Test Checklist
 
 - [ ] Message uses `{"action": "...", "data": {...}}` format
-- [ ] Daemon running (`ps aux | grep jarvis.daemon`)
+- [ ] Daemon running (`launchctl print gui/$(id -u)/com.jarvis.daemon`)
 - [ ] Port 9847 listening (`lsof -i :9847`)
-- [ ] Bytecode cache cleared after code changes
-
----
+- [ ] Port 9848 listening (`lsof -i :9848`)
 
 ## Run Lint Before Testing
 
 ```bash
 python3 scripts/jarvis_api_lint.py
+```
+
+## Voice Dependency Check (macOS)
+
+```bash
+.venv/bin/python -c "import mlx_whisper; print(mlx_whisper.__version__)"
+ffmpeg -version
 ```
