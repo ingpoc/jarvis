@@ -447,6 +447,35 @@ class JarvisWSServer:
                         },
                     )
 
+            elif action == "send_voice":
+                message = data.get("text", "") or data.get("message", "")
+                if not message:
+                    result = {"error": "Missing 'text'"}
+                elif not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    origin_tag = f"voice:ws:{ws.remote_address[0]}:{ws.remote_address[1]}"
+                    self._events.emit(
+                        "voice_command",
+                        f"voice input: {str(message)[:120]}",
+                        metadata={"origin": origin_tag, "request_id": request_id},
+                    )
+
+                    # Voice interactions should return a direct reply for speech-to-speech UX.
+                    voice_result = await self._orchestrator.handle_message(
+                        str(message),
+                        origin=origin_tag,
+                    )
+                    reply = (voice_result.get("reply") or "").strip()
+                    result = {
+                        "success": voice_result.get("status") != "failed",
+                        "transcript": str(message),
+                        "reply": reply,
+                        "status": voice_result.get("status"),
+                        "route": voice_result.get("route"),
+                        "decision": voice_result.get("decision", {}),
+                    }
+
             elif action == "run_code_orchestration":
                 if not self._orchestrator:
                     result = {"error": "Orchestrator not connected"}

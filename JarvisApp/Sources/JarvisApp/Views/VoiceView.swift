@@ -89,6 +89,7 @@ struct VoiceButton: View {
 
     @State private var pulseScale: CGFloat = 1.0
     @State private var voiceRecorder: VoiceRecorder?
+    private static let speechSynthesizer = AVSpeechSynthesizer()
 
     var body: some View {
         ZStack {
@@ -118,9 +119,6 @@ struct VoiceButton: View {
                 }
             }
             .buttonStyle(.plain)
-        }
-        .onTapGesture {
-            toggleRecording()
         }
     }
 
@@ -166,8 +164,26 @@ struct VoiceButton: View {
 
     private func sendTranscript(_ text: String) {
         lastCommand = text
-        // Send to WebSocket (fire-and-forget)
-        WebSocketClient.shared.sendVoiceNoWait(text: text)
+        Task { @MainActor in
+            do {
+                let response = try await WebSocketClient.shared.sendVoice(text: text)
+                if let reply = response.reply?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !reply.isEmpty {
+                    speak(reply)
+                }
+            } catch {
+                speak("I could not process that voice command.")
+            }
+        }
+    }
+
+    private func speak(_ text: String) {
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.9
+        utterance.pitchMultiplier = 1.0
+        utterance.volume = 1.0
+        Self.speechSynthesizer.stopSpeaking(at: .immediate)
+        Self.speechSynthesizer.speak(utterance)
     }
 }
 

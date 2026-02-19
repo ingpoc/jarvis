@@ -109,6 +109,15 @@ private struct AvailableToolsResponse: Decodable {
     let tools: [String]
 }
 
+struct VoiceResponse: Decodable {
+    let success: Bool?
+    let transcript: String?
+    let reply: String?
+    let status: String?
+    let route: String?
+    let error: String?
+}
+
 // MARK: - WebSocket Client Implementation
 
 @Observable
@@ -306,6 +315,10 @@ final class WebSocketClient: WebSocketClientProtocol {
 
     func sendVoiceNoWait(text: String) {
         sendCommand(action: "send_voice", data: ["text": text])
+    }
+
+    func sendVoice(text: String) async throws -> VoiceResponse {
+        try await send(action: "send_voice", data: ["text": text], timeout: 75)
     }
 
     func approve(taskId: String) {
