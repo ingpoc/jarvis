@@ -1,5 +1,7 @@
 # Local Model Integration Guide
 
+For Apple/MLX repo lookup strategy, use `../apple-mlx/README.md` first.
+
 ## Overview
 
 Jarvis supports 3 local model providers:

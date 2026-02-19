@@ -1,5 +1,8 @@
 # Apple MLX & On-Device AI Framework Research
 
+> Status: archived research snapshot.
+> Active routing guidance now lives in `README.md` (use that first, then DeepWiki target repo on demand).
+
 **TL;DR**: MLX is Apple's ML framework for Apple Silicon with first-party support for LLMs (mlx-lm), Swift (mlx-swift), and data loading (mlx-data). Apple Foundation Models provides on-device text generation (4K context, tool calling). MLX embeddings available separately.
 
 ---
