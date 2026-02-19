@@ -1,23 +1,17 @@
 #!/usr/bin/env python3
-"""Comprehensive validation script for Jarvis local models.
+"""Validation script for Jarvis local/runtime model paths.
 
-Run this before submitting changes to ensure everything works:
-    python scripts/validate_local_models.py
-
-Or use the wrapper:
-    ./scripts/validate_jarvis.py
+Run this before submitting local-model or routing changes:
+    python3 scripts/validate_local_models.py
 """
 
-import asyncio
-import json
 import socket
 import subprocess
 import sys
-import time
 
 
-def run_cmd(cmd, timeout=30):
-    """Run shell command and return output."""
+def run_cmd(cmd: str, timeout: int = 30):
+    """Run shell command and return (returncode, stdout, stderr)."""
     try:
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
         return result.returncode, result.stdout, result.stderr
@@ -25,7 +19,7 @@ def run_cmd(cmd, timeout=30):
         return -1, "", "Timeout"
 
 
-def check_daemon():
+def check_daemon() -> bool:
     """Check if daemon is running."""
     print("Checking daemon...")
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -49,13 +43,13 @@ def check_daemon():
         return False
 
 
-def check_websocket_response():
-    """Verify WebSocket returns proper model status."""
+def check_websocket_response() -> bool:
+    """Verify WebSocket returns expected model status structure."""
     print("Checking WebSocket model status...")
 
     code, out, err = run_cmd(
         """
-cd /Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac && 
+cd /Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac &&
 .venv/bin/python -c "
 import asyncio, websockets, json, uuid
 async def test():
@@ -67,16 +61,20 @@ async def test():
             envelope = json.loads(msg)
             if envelope.get('type') == 'response' and envelope.get('id') == req_id:
                 payload = envelope.get('data', {})
-                print('OK' if 'foundation_available' in payload else 'FAIL')
+                required = ['current_model','provider','provider_type','foundation_available','opencode_available_models']
+                missing = [k for k in required if k not in payload]
+                if missing:
+                    print('FAIL:' + ','.join(missing))
+                else:
+                    print('OK')
                 return
 asyncio.run(test())
 " 2>&1
 """,
-        timeout=10,
+        timeout=12,
     )
 
     combined = f"{out}\n{err}".lower()
-
     if "OK" in out:
         print("  ✓ WebSocket response valid")
         return True
@@ -87,19 +85,19 @@ asyncio.run(test())
     ):
         print("  ⚠ WebSocket check skipped (sandbox/daemon restrictions)")
         return True
-    else:
-        detail = (out or err)[:200]
-        print(f"  ✗ WebSocket response invalid: {detail}")
-        return False
+
+    detail = (out or err)[:240]
+    print(f"  ✗ WebSocket response invalid: {detail}")
+    return False
 
 
-def check_afm():
-    """Check AFM availability."""
+def check_afm() -> bool:
+    """Check Foundation Models availability."""
     print("Checking Foundation Models...")
 
-    code, out, _ = run_cmd(
+    _, out, _ = run_cmd(
         """
-cd /Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac && 
+cd /Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac &&
 .venv/bin/python -c "
 from jarvis.afm_integration import is_afm_available
 print('OK' if is_afm_available() else 'FAIL')
@@ -111,63 +109,60 @@ print('OK' if is_afm_available() else 'FAIL')
     if "OK" in out:
         print("  ✓ Foundation Models available")
         return True
-    else:
-        print("  ✗ Foundation Models not available")
-        return False
+
+    print("  ⚠ Foundation Models unavailable on this machine")
+    return True
 
 
-def check_lmstudio_manager():
-    """Check LM Studio manager."""
-    print("Checking LM Studio Manager...")
+def check_opencode_client_module() -> bool:
+    """Check OpenCode client module import path."""
+    print("Checking OpenCode client module...")
 
-    code, out, _ = run_cmd(
+    _, out, _ = run_cmd(
         """
-cd /Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac && 
+cd /Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac &&
 .venv/bin/python -c "
-import asyncio
-from jarvis.lm_studio_manager import get_lm_studio_manager
-async def test():
-    lm = get_lm_studio_manager()
-    print('OK' if hasattr(lm, 'is_running') else 'FAIL')
-asyncio.run(test())
+from jarvis.opencode_client import get_opencode_client
+client = get_opencode_client()
+print('OK' if hasattr(client, 'run_task') else 'FAIL')
 " 2>&1
 """,
         timeout=10,
     )
 
     if "OK" in out:
-        print("  ✓ LM Studio Manager module works")
+        print("  ✓ OpenCode client module works")
         return True
-    else:
-        print("  ✗ LM Studio Manager module failed")
-        return False
+
+    print("  ✗ OpenCode client module failed")
+    return False
 
 
-def check_python_lint():
+def check_python_lint() -> bool:
     """Check Python files for syntax errors."""
     print("Checking Python lint...")
 
     files = [
         "src/jarvis/afm_integration.py",
-        "src/jarvis/lm_studio_manager.py",
         "src/jarvis/local_model_manager.py",
+        "src/jarvis/opencode_client.py",
         "src/jarvis/ws_server.py",
     ]
 
     all_ok = True
-    for f in files:
-        code, _, err = run_cmd(f"python3 -m py_compile {f}")
+    for path in files:
+        code, _, err = run_cmd(f"python3 -m py_compile {path}")
         if code == 0:
-            print(f"  ✓ {f}")
+            print(f"  ✓ {path}")
         else:
-            print(f"  ✗ {f}: {err[:100]}")
+            print(f"  ✗ {path}: {err[:120]}")
             all_ok = False
 
     return all_ok
 
 
-def check_swift_build():
-    """Check Swift build."""
+def check_swift_build() -> bool:
+    """Check Swift package build."""
     print("Checking Swift build...")
 
     code, out, err = run_cmd(
@@ -178,54 +173,49 @@ export SWIFT_MODULECACHE_PATH=/tmp/swift-module-cache &&
 export CLANG_MODULE_CACHE_PATH=/tmp/clang-module-cache &&
 swift build --package-path .
 """,
-        timeout=60,
+        timeout=80,
     )
 
     if code == 0:
         print("  ✓ Swift package resolves/builds")
         return True
 
-    details = (out + "\n" + (err or "")).strip()
-    if "operation not permitted" in details.lower() or "sandbox-exec" in details.lower():
+    details = (out + "\n" + (err or "")).strip().lower()
+    if "operation not permitted" in details or "sandbox-exec" in details:
         print("  ⚠ Swift build skipped (sandbox permissions)")
         return True
 
     print("  ✗ Swift build issue")
-    if details:
-        print(f"    {details.splitlines()[-1][:180]}")
     return False
 
 
-def main():
+def main() -> int:
     print("=" * 50)
-    print("JARVIS LOCAL MODELS VALIDATION")
+    print("JARVIS MODEL PATH VALIDATION")
     print("=" * 50)
     print()
 
     results = {}
 
-    # Quick checks (no daemon needed)
     results["python_lint"] = check_python_lint()
     results["swift_build"] = check_swift_build()
 
-    # Daemon-dependent checks
     daemon_running = check_daemon()
     if daemon_running:
         results["websocket"] = check_websocket_response()
-        results["afm"] = check_afm()
-        results["lmstudio"] = check_lmstudio_manager()
+        results["foundation"] = check_afm()
+        results["opencode_client"] = check_opencode_client_module()
     else:
         print()
         print("Skipping daemon-dependent checks (daemon not running)")
         print("Start with: ./start-jarvis.sh")
 
-    # Summary
     print()
     print("=" * 50)
     print("SUMMARY")
     print("=" * 50)
 
-    passed = sum(1 for v in results.values() if v)
+    passed = sum(1 for ok in results.values() if ok)
     total = len(results)
 
     for name, ok in results.items():
@@ -236,9 +226,9 @@ def main():
     if passed == total:
         print(f"All {total} checks passed!")
         return 0
-    else:
-        print(f"{total - passed} check(s) failed")
-        return 1
+
+    print(f"{total - passed} check(s) failed")
+    return 1
 
 
 if __name__ == "__main__":

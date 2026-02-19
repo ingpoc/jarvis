@@ -39,11 +39,44 @@ Verify service health with launchctl and ports:
 
 ```bash
 launchctl print "gui/$(id -u)/com.jarvis.daemon" | rg "state =|pid ="
+launchctl print "gui/$(id -u)/com.jarvis.menubar" | rg "state =|pid =|program =|successive crashes|last terminating signal"
 lsof -n -P -iTCP:9847 -sTCP:LISTEN
 lsof -n -P -iTCP:9848 -sTCP:LISTEN
 ```
 
 Note: `start-jarvis.sh` can report a launchctl health timeout even when the service comes up a few seconds later. Confirm with `launchctl print` plus listening ports before declaring failure.
+
+## Menu Bar Not Visible / Crash Loop
+
+If daemon is healthy but no menu bar icon appears:
+
+1. Confirm launchctl target and crash state:
+
+```bash
+launchctl print "gui/$(id -u)/com.jarvis.menubar" | rg "program =|state =|job state =|successive crashes|last terminating signal"
+```
+
+2. Confirm the target binary is the app-bundle executable:
+
+```bash
+launchctl print "gui/$(id -u)/com.jarvis.menubar" | rg "program ="
+# Expected suffix:
+# JarvisApp/.build/debug/JarvisApp.app/Contents/MacOS/JarvisApp
+```
+
+3. Restart cleanly:
+
+```bash
+./stop-jarvis.sh
+./start-jarvis.sh
+```
+
+4. If needed, inspect latest crash report:
+
+```bash
+ls -1t ~/Library/Logs/DiagnosticReports | grep '^JarvisApp-.*\.ips$' | head -n 3
+sed -n '1,160p' ~/Library/Logs/DiagnosticReports/<latest-file>.ips
+```
 
 ## Common Errors
 

@@ -28,6 +28,28 @@ Jarvis accepts tasks from multiple interfaces:
 | **Slack Bot** | Slack channel | Single-agent | Not configurable |
 | **Chat Mode** | WebSocket `chat` action | Single-agent | N/A (conversational) |
 
+### OpenClaw -> Jarvis A2A Bridge
+
+Jarvis exposes A2A on `http://127.0.0.1:9848` and requires Bearer auth from `~/.jarvis/a2a_token`.
+
+Use these CLI wrappers when wiring OpenClaw plugin methods:
+
+```bash
+jarvis a2a health -j
+jarvis a2a card -j
+jarvis a2a send "review this repo" --non-blocking -j
+jarvis a2a get <task-id> -j
+jarvis a2a wait <task-id> --timeout 300 -j
+jarvis a2a cancel <task-id> -j
+```
+
+Environment overrides:
+
+```bash
+export JARVIS_A2A_URL=http://127.0.0.1:9848
+export JARVIS_A2A_TOKEN="$(cat ~/.jarvis/a2a_token)"
+```
+
 ---
 
 ## Decision Flow: Single-Agent vs Pipeline

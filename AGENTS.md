@@ -15,7 +15,7 @@ Agent-first development. Humans steer, agents execute.
 |tests failing → principles/determinism.md
 |large data → principles/token-efficiency.md
 |need a diagram / architecture diagram → workflow/draw-io-diagram-generation.md
-|local models / LM Studio / Foundation Models → workflow/local-models-integration.md
+|local models / OpenCode / Foundation Models → workflow/local-models-integration.md
 |scripts/validation/build → jarvis/scripts.md
 |research paper/article/URL shared → load research-evaluator skill
 |X/LinkedIn/Threads post shared → workflow/social-post-intake.md then research-evaluator

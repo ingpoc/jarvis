@@ -17,7 +17,9 @@ PID_DIR="$JARVIS_HOME/pids"
 LOG_DIR="$JARVIS_HOME/logs"
 LOCK_FILE="$PID_DIR/start.lock"
 DAEMON_LAUNCH_ENV="$JARVIS_HOME/launch.env"
-MENUBAR_BIN="$JARVIS_DIR/JarvisApp/.build/debug/JarvisApp"
+MENUBAR_BUILD_BIN="$JARVIS_DIR/JarvisApp/.build/debug/JarvisApp"
+MENUBAR_APP_BIN="$JARVIS_DIR/JarvisApp/.build/debug/JarvisApp.app/Contents/MacOS/JarvisApp"
+MENUBAR_BIN="$MENUBAR_APP_BIN"
 MENUBAR_LABEL="com.jarvis.menubar"
 MENUBAR_AGENT_PLIST="$HOME/Library/LaunchAgents/${MENUBAR_LABEL}.plist"
 DAEMON_LABEL="com.jarvis.daemon"
@@ -156,6 +158,39 @@ print_failure_log_tail() {
     fi
 }
 
+sync_menubar_binary_into_app_bundle() {
+    if [ ! -f "$MENUBAR_BUILD_BIN" ]; then
+        echo "❌ Menu bar app failed: built binary missing at $MENUBAR_BUILD_BIN"
+        exit 1
+    fi
+    if [ ! -d "$(dirname "$MENUBAR_APP_BIN")" ]; then
+        echo "❌ Menu bar app failed: app bundle executable directory missing at $(dirname "$MENUBAR_APP_BIN")"
+        exit 1
+    fi
+    cp -f "$MENUBAR_BUILD_BIN" "$MENUBAR_APP_BIN"
+    chmod +x "$MENUBAR_APP_BIN"
+    if ! cmp -s "$MENUBAR_BUILD_BIN" "$MENUBAR_APP_BIN"; then
+        echo "❌ Menu bar app failed: app bundle executable is out of sync with build output"
+        echo "  build: $MENUBAR_BUILD_BIN"
+        echo "  app:   $MENUBAR_APP_BIN"
+        exit 1
+    fi
+}
+
+verify_launchctl_program_target() {
+    local label="$1"
+    local expected_program="$2"
+    local gui_domain="gui/$(id -u)"
+    local current_program=""
+    current_program="$(launchctl print "$gui_domain/$label" 2>/dev/null | awk -F'= ' '/program = / {gsub(/;/, "", $2); print $2; exit}')"
+    if [ -n "$current_program" ] && [ "$current_program" != "$expected_program" ]; then
+        echo "❌ Menu bar app failed: launchctl program mismatch"
+        echo "  expected: $expected_program"
+        echo "  actual:   $current_program"
+        exit 1
+    fi
+}
+
 verify_service_started() {
     local service_name="$1"
     local pid="$2"
@@ -250,7 +285,7 @@ write_daemon_launch_agent() {
     cat > "$DAEMON_WRAPPER" <<EOF
 #!/bin/bash
 set -euo pipefail
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
+export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
 if [ -f "$DAEMON_LAUNCH_ENV" ]; then
   set -a
   # shellcheck disable=SC1090
@@ -341,6 +376,7 @@ export ELEVENLABS_API_KEY=$(printf '%q' "${ELEVENLABS_API_KEY:-}")
 export ELEVENLABS_AGENT_ID=$(printf '%q' "${ELEVENLABS_AGENT_ID:-}")
 export X_BOOKMARKS_ACCESS_TOKEN=$(printf '%q' "${X_BOOKMARKS_ACCESS_TOKEN:-}")
 export X_BOOKMARKS_USER_ID=$(printf '%q' "${X_BOOKMARKS_USER_ID:-}")
+export JARVIS_OPENCODE_BIN=$(printf '%q' "${JARVIS_OPENCODE_BIN:-$HOME/.bun/bin/opencode}")
 EOF
     chmod 600 "$DAEMON_LAUNCH_ENV"
 }
@@ -684,11 +720,13 @@ else
     echo -e "${GREEN}▶ Starting menu bar app (mode: ${JARVIS_MENUBAR_START_MODE})...${NC}"
     # Always build before launching so UI changes are picked up (incremental build is fast).
     swift build --package-path JarvisApp >> "$LOG_DIR/menubar.log" 2>&1
+    sync_menubar_binary_into_app_bundle
     menubar_mode="$(printf '%s' "${JARVIS_MENUBAR_START_MODE}" | tr '[:upper:]' '[:lower:]')"
     case "${menubar_mode}" in
         launchctl)
             start_menubar_with_launchctl
             verify_launchctl_service_started "Menu bar app" "$MENUBAR_LABEL" "$PID_DIR/menubar.pid" "$LOG_DIR/menubar.log" "" "30"
+            verify_launchctl_program_target "$MENUBAR_LABEL" "$MENUBAR_BIN"
             ;;
         direct)
             start_menubar_direct

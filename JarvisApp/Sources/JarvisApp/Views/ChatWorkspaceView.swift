@@ -8,6 +8,20 @@ private struct ChatModelOption: Identifiable, Hashable {
     let icon: String
 }
 
+private enum ChatProviderKey: String, CaseIterable {
+    case anthropic
+    case foundation
+    case opencode
+
+    var label: String {
+        switch self {
+        case .anthropic: return "Anthropic"
+        case .foundation: return "Foundation"
+        case .opencode: return "OpenCode"
+        }
+    }
+}
+
 private struct ChatWorkspaceMessage: Identifiable {
     let id = UUID()
     let role: String
@@ -35,7 +49,9 @@ struct ChatWorkspaceView: View {
     @State private var isSending = false
     @State private var activeSendToken: UUID?
     @State private var selectedModelId = "claude-sonnet-4-5-20250929"
+    @State private var selectedProvider: ChatProviderKey = .anthropic
     @State private var inputFocused = false
+    @State private var seenEventIds: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,12 +61,21 @@ struct ChatWorkspaceView: View {
 
                 Spacer()
 
-                if let provider = webSocket.modelStatus?.providerType ?? webSocket.modelStatus?.provider,
-                   !provider.isEmpty {
-                    Text(provider.uppercased())
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                Picker("Provider", selection: Binding(
+                    get: { selectedProvider },
+                    set: { newValue in
+                        guard newValue != selectedProvider else { return }
+                        selectedProvider = newValue
+                        selectDefaultModelForProvider(newValue)
+                    }
+                )) {
+                    ForEach(providerOptions, id: \.self) { provider in
+                        Text(provider.label).tag(provider)
+                    }
                 }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(minWidth: 120)
 
                 Picker("Model", selection: Binding(
                     get: { selectedModelId },
@@ -60,7 +85,7 @@ struct ChatWorkspaceView: View {
                         switchModel(newValue)
                     }
                 )) {
-                    ForEach(modelOptions) { option in
+                    ForEach(modelOptionsForSelectedProvider) { option in
                         Label("\(option.name) · \(option.provider)", systemImage: option.icon)
                             .tag(option.id)
                     }
@@ -137,6 +162,7 @@ struct ChatWorkspaceView: View {
         .background(Color(nsColor: .textBackgroundColor))
         .onAppear {
             webSocket.connect()
+            seenEventIds = Set(webSocket.events.map(\.id))
             syncFromModelStatus(webSocket.modelStatus)
             webSocket.sendCommand(action: "get_model_status")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -152,9 +178,20 @@ struct ChatWorkspaceView: View {
         .onChange(of: webSocket.modelStatus?.providerType) { _ in
             syncFromModelStatus(webSocket.modelStatus)
         }
+        .onChange(of: webSocket.events.count) { _ in
+            consumeIncomingChatEvents()
+        }
     }
 
-    private var modelOptions: [ChatModelOption] {
+    private var providerOptions: [ChatProviderKey] {
+        var options: [ChatProviderKey] = [.anthropic, .opencode]
+        if webSocket.modelStatus?.foundationAvailable ?? true {
+            options.append(.foundation)
+        }
+        return options
+    }
+
+    private var allModelOptions: [ChatModelOption] {
         var options: [ChatModelOption] = [
             .init(id: "claude-sonnet-4-5-20250929", name: "Claude Sonnet 4.5", provider: "Anthropic", icon: "brain"),
             .init(id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "Anthropic", icon: "brain"),
@@ -165,14 +202,24 @@ struct ChatWorkspaceView: View {
             options.append(.init(id: "foundation-models", name: "Foundation Models", provider: "Apple", icon: "apple.logo"))
         }
 
-        let lmModels = webSocket.modelStatus?.lmstudioAvailableModels ?? []
-        for modelId in lmModels {
-            let displayName = modelId
-                .replacingOccurrences(of: "lmstudio-community/", with: "")
-                .replacingOccurrences(of: "qwen2.5-coder-3b-instruct-mlx", with: "Qwen2.5 Coder 3B")
-                .replacingOccurrences(of: "openai/gpt-oss-20b", with: "GPT-OSS 20B")
-                .replacingOccurrences(of: "deepseek/deepseek-r1-0528-qwen3-8b", with: "DeepSeek R1 8B")
-            options.append(.init(id: modelId, name: displayName, provider: "LM Studio", icon: "laptopcomputer"))
+        let fallbackOpenCodeModels = [
+            "minimax-m2.5-free",
+            "glm-5-free",
+            "kimi-k2.5-free",
+            "big-pickle",
+            "openai/gpt-5-nano",
+        ]
+        let rawOpenCodeModels = webSocket.modelStatus?.opencodeAvailableModels ?? fallbackOpenCodeModels
+        for rawModel in rawOpenCodeModels {
+            let normalized = rawModel.hasPrefix("opencode/") ? rawModel : "opencode/\(rawModel)"
+            options.append(
+                .init(
+                    id: normalized,
+                    name: rawModel,
+                    provider: "OpenCode",
+                    icon: "shippingbox.fill"
+                )
+            )
         }
 
         // Preserve picker validity if daemon reports a model not in default options.
@@ -185,10 +232,48 @@ struct ChatWorkspaceView: View {
         return options
     }
 
+    private var modelOptionsForSelectedProvider: [ChatModelOption] {
+        switch selectedProvider {
+        case .anthropic:
+            return allModelOptions.filter { $0.provider == "Anthropic" }
+        case .foundation:
+            return allModelOptions.filter { $0.id == "foundation-models" }
+        case .opencode:
+            return allModelOptions.filter { $0.provider == "OpenCode" }
+        }
+    }
+
     private func syncFromModelStatus(_ status: ModelStatusInfo?) {
         guard let status else { return }
         guard let model = status.currentModel, !model.isEmpty else { return }
         selectedModelId = model
+        selectedProvider = providerForModel(model, providerHint: status.providerType ?? status.provider)
+    }
+
+    private func providerForModel(_ modelId: String, providerHint: String?) -> ChatProviderKey {
+        let hint = (providerHint ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if hint == "opencode" {
+            return .opencode
+        }
+        if hint == "foundation" {
+            return .foundation
+        }
+        if modelId == "foundation-models" {
+            return .foundation
+        }
+        if modelId.hasPrefix("opencode/") || modelId.hasPrefix("opencode:") || modelId == "opencode" {
+            return .opencode
+        }
+        return .anthropic
+    }
+
+    private func selectDefaultModelForProvider(_ provider: ChatProviderKey) {
+        let options = modelOptionsForSelectedProvider
+        guard let fallback = options.first?.id else { return }
+        if !options.contains(where: { $0.id == selectedModelId }) {
+            selectedModelId = fallback
+            switchModel(fallback)
+        }
     }
 
     private func switchModel(_ modelId: String) {
@@ -232,7 +317,7 @@ struct ChatWorkspaceView: View {
                 let resp: ChatWorkspaceResponse = try await webSocket.send(
                     action: "message",
                     data: ["message": text],
-                    timeout: 75
+                    timeout: 120
                 )
                 let payload = resp.data
                 let reply = payload?.reply ?? resp.reply
@@ -257,6 +342,28 @@ struct ChatWorkspaceView: View {
                 await MainActor.run {
                     messages.append(ChatWorkspaceMessage(role: "jarvis", text: "Error: \(error.localizedDescription)"))
                 }
+            }
+        }
+    }
+
+    private func consumeIncomingChatEvents() {
+        let pendingEvents = webSocket.events.filter { !seenEventIds.contains($0.id) }
+        guard !pendingEvents.isEmpty else { return }
+
+        for event in pendingEvents {
+            seenEventIds.insert(event.id)
+            switch event.eventType {
+            case "chat_async_complete":
+                let text = event.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty {
+                    messages.append(ChatWorkspaceMessage(role: "jarvis", text: text))
+                }
+            case "error":
+                if event.summary.lowercased().contains("background chat") {
+                    messages.append(ChatWorkspaceMessage(role: "jarvis", text: "Error: \(event.summary)"))
+                }
+            default:
+                break
             }
         }
     }

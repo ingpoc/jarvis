@@ -14,7 +14,7 @@ Run these **before submitting changes**:
 | Script | When to Run | Purpose |
 |--------|-------------|---------|
 | `python3 scripts/validate_jarvis.py` | After any Python/Swift changes | Full validation: config, DB, ports, governance lint, API lint |
-| `python3 scripts/validate_local_models.py` | After local model changes | Validate AFM, LM Studio, WebSocket integration |
+| `python3 scripts/validate_local_models.py` | After local model changes | Validate Foundation Models, OpenCode status payloads, WebSocket integration |
 | `python3 scripts/test_local_models.py` | Debugging local models | Detailed end-to-end testing of models |
 | `bash scripts/build_jarvis_app.sh` | After Swift changes | Clean Swift build with fresh DerivedData |
 
@@ -30,7 +30,7 @@ Run these **before submitting changes**:
 
 | Script | When to Run | Purpose |
 |--------|-------------|---------|
-| `python3 scripts/test_local_models.py` | Testing AFM/LM Studio routing | Checks model availability and WS behavior |
+| `python3 scripts/test_local_models.py` | Testing Foundation/OpenCode routing | Checks model availability and WS behavior |
 | `python3 scripts/validate_local_models.py` | Before merge of model changes | Sanity checks for model manager integration |
 
 ## Voice Runtime Dependencies (macOS)

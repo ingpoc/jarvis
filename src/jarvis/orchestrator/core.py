@@ -286,7 +286,7 @@ class JarvisOrchestrator:
             return mode
 
         provider = self._effective_provider_type()
-        return "local" if provider == "foundation" else "sdk"
+        return "local" if provider in ("foundation", "opencode") else "sdk"
 
     def _has_mail_mcp_server(self) -> bool:
         """Detect whether a mail-related MCP server is configured."""
@@ -562,11 +562,10 @@ class JarvisOrchestrator:
     def _derive_provider_from_model(self, model_id: str) -> str:
         """Infer provider from model ID for config-coherency checks."""
         model = str(model_id or "")
-        lower = model.lower()
         if model == "foundation-models":
             return "foundation"
-        if "/" in model or model.startswith("lmstudio-") or "qwen" in lower or "deepseek" in lower:
-            return "lmstudio"
+        if model.startswith("opencode/") or model.startswith("opencode:") or model == "opencode":
+            return "opencode"
         if model.startswith("mlx-"):
             return "mlx"
         return "anthropic"
@@ -577,7 +576,7 @@ class JarvisOrchestrator:
         derived = self._derive_provider_from_model(model_id)
         configured = str(getattr(self.config.models, "provider_type", "")).strip().lower()
 
-        valid = {"anthropic", "foundation", "lmstudio", "mlx"}
+        valid = {"anthropic", "foundation", "mlx", "opencode"}
         if configured not in valid:
             return derived
         if configured == derived:
@@ -592,39 +591,26 @@ class JarvisOrchestrator:
         )
         return derived
 
+    def _build_runtime_system_prompt(self, provider_type: str) -> str:
+        """Return provider-aware system prompt to fit local model context budgets."""
+        if provider_type == "foundation":
+            return (
+                "You are Jarvis, a pragmatic assistant for coding and operations. "
+                "Be concise, actionable, and explicit about failures. "
+                "For coding requests, delegate to coder-expert first. "
+                "For inbox/mail requests, delegate to mail-chief first."
+            )
+        return self._build_system_prompt()
+
     def _build_options(self) -> ClaudeAgentOptions:
         """Build Agent SDK options with all Jarvis integrations."""
-
-        # Determine env vars for model provider
-        env = {}
         model_id = self.config.models.executor
         provider_type = self._effective_provider_type()
         allowed_tools = self._build_allowed_tools()
         mcp_servers = self._build_mcp_servers()
 
-        # Local models need custom base URLs
-        if (
-            provider_type == "lmstudio"
-            or "/" in model_id
-            or "qwen" in model_id.lower()
-            or "deepseek" in model_id.lower()
-        ):
-            # LM Studio - route through local server
-            env["ANTHROPIC_BASE_URL"] = "http://localhost:1234"
-            env["ANTHROPIC_AUTH_TOKEN"] = "lmstudio"
-            # Claude Code MCP tool-search mode avoids loading full MCP tool catalogs
-            # into context up front; tools are discovered on demand.
-            env["ENABLE_TOOL_SEARCH"] = os.environ.get("ENABLE_TOOL_SEARCH", "1")
-
-        # Anthropic-compatible local endpoints can reject some MCP tool schemas.
-        # Keep default LM Studio chat/task sessions MCP-free; mail flow injects
-        # its own explicit mail MCP server/tool set in run_mail_digest.
-        if provider_type == "lmstudio":
-            allowed_tools = [t for t in allowed_tools if not t.startswith("mcp__")]
-            mcp_servers = {}
-
         options = ClaudeAgentOptions(
-            system_prompt=self._build_system_prompt(),
+            system_prompt=self._build_runtime_system_prompt(provider_type),
             allowed_tools=allowed_tools,
             permission_mode="acceptEdits",
             max_turns=self.config.budget.max_turns_per_task,
@@ -632,7 +618,7 @@ class JarvisOrchestrator:
             model=model_id,
             cwd=self.project_path,
             mcp_servers=mcp_servers,
-            env=env if env else {},
+            env={},
             hooks={
                 "PreToolUse": [
                     HookMatcher(hooks=[self._pre_tool_hook]),
@@ -654,17 +640,8 @@ class JarvisOrchestrator:
         return options
 
     def _build_chat_options(self) -> ClaudeAgentOptions:
-        """Build chat-focused options.
-
-        For LM Studio, keep chat tool-free to avoid Anthropic-compatible
-        tool schema incompatibilities on simple conversational turns.
-        """
-        options = self._build_options()
-        if self._effective_provider_type() == "lmstudio":
-            options.tools = []
-            options.allowed_tools = []
-            options.mcp_servers = {}
-        return options
+        """Build chat-focused options."""
+        return self._build_options()
 
     async def _run_task_local(
         self,
@@ -674,7 +651,7 @@ class JarvisOrchestrator:
         model_id: str,
         emit_notifications: bool,
     ) -> dict:
-        """Run task using local model (Foundation or LM Studio) directly.
+        """Run task using a local model directly.
 
         This bypasses the Claude Agent SDK and calls local models directly.
         """
@@ -725,7 +702,7 @@ class JarvisOrchestrator:
         return result
 
     async def _chat_local(self, user_message: str, provider_type: str, model_id: str) -> dict:
-        """Handle chat via local model (Foundation or LM Studio), bypassing Claude Agent SDK."""
+        """Handle chat via local model, bypassing Claude Agent SDK."""
         from jarvis.local_model_manager import get_local_model_manager
 
         try:
@@ -777,6 +754,117 @@ class JarvisOrchestrator:
                 "reply": f"Local model error: {e}",
                 "decision": {"mode": "chat", "confidence": 0.0, "reason": "local_model_error"},
             }
+
+    async def _run_task_opencode(
+        self,
+        task_id: str,
+        task_description: str,
+        model_id: str,
+        emit_notifications: bool,
+    ) -> dict:
+        """Run task through OpenCode server in non-interactive mode."""
+        from jarvis.opencode_client import get_opencode_client
+
+        result = {
+            "task_id": task_id,
+            "status": "unknown",
+            "cost_usd": 0.0,
+            "turns": 1,
+            "session_id": None,
+            "output": "",
+        }
+
+        try:
+            self._ensure_opencode_config_env()
+            client = get_opencode_client()
+            agent_name = os.environ.get("JARVIS_OPENCODE_AGENT", "").strip() or None
+            run = await client.run_task(
+                task_description,
+                model_id=model_id,
+                agent=agent_name,
+                timeout_seconds=int(os.environ.get("JARVIS_OPENCODE_TIMEOUT_SECS", "300")),
+            )
+            result["session_id"] = run.session_id
+            result["output"] = run.text
+            result["status"] = "completed"
+
+            self.events.emit(
+                EVENT_TASK_COMPLETE,
+                result["output"][:200],
+                task_id=task_id,
+                metadata={"status": "completed", "provider": "opencode", "session_id": run.session_id},
+            )
+            if emit_notifications:
+                await notify_task_completed(task_id, result["output"])
+        except Exception as e:
+            result["status"] = "failed"
+            result["output"] = f"OpenCode error: {e}"
+            self.events.emit(EVENT_ERROR, str(e), task_id=task_id, metadata={"provider": "opencode"})
+
+        return result
+
+    async def _chat_opencode(self, user_message: str, model_id: str) -> dict:
+        """Handle chat via OpenCode server."""
+        from jarvis.opencode_client import get_opencode_client
+
+        try:
+            self._ensure_opencode_config_env()
+            client = get_opencode_client()
+            agent_name = os.environ.get("JARVIS_OPENCODE_CHAT_AGENT", "").strip() or None
+            run = await client.run_task(
+                user_message,
+                model_id=model_id,
+                agent=agent_name,
+                timeout_seconds=int(os.environ.get("JARVIS_OPENCODE_CHAT_TIMEOUT_SECS", "120")),
+            )
+            reply = run.text.strip()
+            self.events.emit(
+                "chat_assistant",
+                reply[:200],
+                cost_usd=0.0,
+                metadata={"reply": reply[:5000], "tools": [], "provider": "opencode"},
+            )
+            decision = {"mode": "chat", "confidence": 1.0, "reason": "opencode"}
+            self.events.emit(
+                "chat_route",
+                "mode=chat provider=opencode",
+                metadata={"decision": decision, "session_id": run.session_id},
+            )
+            self.memory.save_channel_turn("message", self.project_path, user_message, reply)
+            append_project_turn(
+                self.project_path,
+                actor="chat:opencode",
+                message=user_message,
+                outcome=reply[:500],
+            )
+            return {
+                "status": "completed",
+                "route": "chat",
+                "reply": reply,
+                "decision": decision,
+            }
+        except Exception as e:
+            tb = traceback.format_exc()
+            logger.error("opencode chat failed: %s\n%s", e, tb)
+            self.events.emit(
+                EVENT_ERROR,
+                str(e)[:200],
+                metadata={"error": str(e), "provider": "opencode"},
+            )
+            return {
+                "status": "error",
+                "route": "chat",
+                "reply": f"OpenCode error: {e}",
+                "decision": {"mode": "chat", "confidence": 0.0, "reason": "opencode_error"},
+            }
+
+    def _ensure_opencode_config_env(self) -> None:
+        """Point OpenCode to repo-local config when present."""
+        if os.environ.get("OPENCODE_CONFIG"):
+            return
+        cfg_path = Path(self.project_path) / "opencode.json"
+        if cfg_path.exists():
+            os.environ["OPENCODE_CONFIG"] = str(cfg_path)
 
     def register_mcp_server(
         self,
@@ -912,14 +1000,17 @@ class JarvisOrchestrator:
         if callback:
             callback("task_started", {"id": task_id, "description": task_description})
 
-        # Check if using local model (Foundation or LM Studio) - route to local model handler
+        # Use local providers directly (bypass Claude Agent SDK).
         provider_type = self._effective_provider_type()
         model_id = self.config.models.executor
 
         if provider_type == "foundation":
-            # Use local model directly instead of Claude Agent SDK
             return await self._run_task_local(
                 task_id, task_description, provider_type, model_id, emit_notifications
+            )
+        if provider_type == "opencode":
+            return await self._run_task_opencode(
+                task_id, task_description, model_id, emit_notifications
             )
 
         options = self._build_options()
@@ -1261,6 +1352,9 @@ class JarvisOrchestrator:
             metadata={"message": user_message[:5000], "route": route, "specialist": specialist},
         )
 
+        provider_type = self._effective_provider_type()
+        model_id = self.config.models.executor
+
         if specialist == MAIL_CHIEF_AGENT and not self._has_mail_mcp_server():
             reply = (
                 "Mail routing requested, but no mail MCP server is configured. "
@@ -1285,7 +1379,11 @@ class JarvisOrchestrator:
                 "decision": {"mode": "chat", "confidence": 0.0, "reason": "mail_mcp_not_configured"},
             }
 
-        if specialist == MAIL_CHIEF_AGENT and not self._has_mail_tool_allowlist():
+        if (
+            specialist == MAIL_CHIEF_AGENT
+            and provider_type != "opencode"
+            and not self._has_mail_tool_allowlist()
+        ):
             reply = (
                 "Mail routing requested, but no explicit mail tool allowlist is set. "
                 "Set JARVIS_MAIL_TOOLS to exact Zapier tool names (comma-separated)."
@@ -1313,16 +1411,66 @@ class JarvisOrchestrator:
                 },
             }
 
-        # Route to local model only for Foundation provider.
-        # LM Studio runs through Claude Agent SDK via Anthropic-compatible endpoint.
-        provider_type = self._effective_provider_type()
-        model_id = self.config.models.executor
+        if specialist == MAIL_CHIEF_AGENT and provider_type == "opencode":
+            digest_result = await self.run_mail_digest(force=True, origin=f"chat:{origin}")
+            status = str(digest_result.get("status", "") or "").strip().lower()
+            if status in {"completed", "skipped"}:
+                digest = digest_result.get("digest") if isinstance(digest_result, dict) else None
+                reply = self._format_mail_digest_reply_for_chat(digest if isinstance(digest, dict) else {})
+                decision = {"mode": "chat", "confidence": 1.0, "reason": "mail_digest_local"}
+                self.events.emit(
+                    "chat_assistant",
+                    reply[:200],
+                    cost_usd=0.0,
+                    metadata={"reply": reply[:5000], "tools": ["zapier_mail_digest"], "provider": "opencode"},
+                )
+                self.events.emit(
+                    "chat_route",
+                    "mode=chat route=mail conf=1.0",
+                    metadata={"decision": decision, "origin": origin},
+                )
+                self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
+                append_project_turn(
+                    self.project_path,
+                    actor=f"chat:{origin}",
+                    message=user_message,
+                    outcome=reply[:500],
+                )
+                return {
+                    "status": "completed",
+                    "route": MAIL_ROUTE,
+                    "reply": reply,
+                    "decision": decision,
+                }
+
+            reply = str(digest_result.get("error") or "Mail digest failed")
+            self.events.emit(
+                EVENT_ERROR,
+                reply[:200],
+                metadata={"error": reply, "route": route, "specialist": specialist},
+            )
+            self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
+            append_project_turn(
+                self.project_path,
+                actor=f"chat:{origin}",
+                message=user_message,
+                outcome=reply[:500],
+            )
+            return {
+                "status": "failed",
+                "route": MAIL_ROUTE,
+                "reply": reply,
+                "decision": {"mode": "chat", "confidence": 0.0, "reason": "mail_digest_failed"},
+            }
+
+        # Route local providers directly; only remote providers use Claude Agent SDK.
         if provider_type == "foundation":
             return await self._chat_local(user_message, provider_type, model_id)
+        if provider_type == "opencode":
+            return await self._chat_opencode(user_message, model_id)
 
         async with self._chat_lock:
-            try:
-                client = await self._ensure_chat_client()
+            async def _run_chat_turn(client: ClaudeSDKClient) -> None:
                 await client.query(routed_message)
 
                 result["reply"] = ""
@@ -1355,6 +1503,10 @@ class JarvisOrchestrator:
                         self.budget.record_cost(
                             result["cost_usd"], result["turns"], f"chat:{user_message[:120]}"
                         )
+
+            try:
+                client = await self._ensure_chat_client()
+                await _run_chat_turn(client)
 
                 result["reply"] = result["reply"].strip()
                 result["tools"] = sorted(tools_used)
@@ -1452,6 +1604,39 @@ class JarvisOrchestrator:
         }
         digest["raw_summary"] = str(payload.get("summary") or fallback_text).strip()[:5000]
         return digest
+
+    def _format_mail_digest_reply_for_chat(self, digest: dict[str, Any]) -> str:
+        """Render digest payload to a concise chat-friendly summary."""
+        summary = str(digest.get("raw_summary") or "").strip()
+        urgent = digest.get("urgent") if isinstance(digest.get("urgent"), list) else []
+        reply_today = digest.get("reply_today") if isinstance(digest.get("reply_today"), list) else []
+        waiting = (
+            digest.get("waiting_on_them") if isinstance(digest.get("waiting_on_them"), list) else []
+        )
+        fyi = digest.get("fyi") if isinstance(digest.get("fyi"), list) else []
+        top_3 = digest.get("top_3_now") if isinstance(digest.get("top_3_now"), list) else []
+
+        lines = [
+            "Mail digest ready.",
+            (
+                f"Urgent: {len(urgent)}, Reply today: {len(reply_today)}, "
+                f"Waiting: {len(waiting)}, FYI: {len(fyi)}"
+            ),
+        ]
+        if summary:
+            lines.append(summary)
+        if top_3:
+            lines.append("Top 3 now:")
+            for idx, item in enumerate(top_3[:3], start=1):
+                if not isinstance(item, dict):
+                    continue
+                subject = str(item.get("subject") or item.get("thread_id") or "Untitled")
+                reason = str(item.get("reason") or item.get("next_action") or "").strip()
+                if reason:
+                    lines.append(f"{idx}. {subject} - {reason}")
+                else:
+                    lines.append(f"{idx}. {subject}")
+        return "\n".join(lines).strip()[:5000]
 
     def _extract_mail_digest_json(self, text: str) -> dict[str, Any]:
         """Best-effort extraction of a JSON object from model output."""
@@ -1682,7 +1867,7 @@ class JarvisOrchestrator:
                     provider = self._effective_provider_type()
                     local_model_id = (
                         self.config.models.executor
-                        if provider in ("foundation", "lmstudio", "mlx")
+                        if provider in ("foundation", "mlx")
                         else "foundation-models"
                     )
 

@@ -115,9 +115,7 @@ struct ModelStatusInfo: Codable {
     let error: String?
     let mlxAvailable: Bool?
     let foundationAvailable: Bool?
-    let lmstudioRunning: Bool?
-    let lmstudioModelLoaded: String?
-    let lmstudioAvailableModels: [String]?
+    let opencodeAvailableModels: [String]?
 
     enum CodingKeys: String, CodingKey {
         case currentModel = "current_model"
@@ -127,8 +125,6 @@ struct ModelStatusInfo: Codable {
         case error
         case mlxAvailable = "mlx_available"
         case foundationAvailable = "foundation_available"
-        case lmstudioRunning = "lmstudio_running"
-        case lmstudioModelLoaded = "lmstudio_model_loaded"
-        case lmstudioAvailableModels = "lmstudio_available_models"
+        case opencodeAvailableModels = "opencode_available_models"
     }
 }

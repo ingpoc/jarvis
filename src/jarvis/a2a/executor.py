@@ -11,6 +11,7 @@ from jarvis.a2a.task_store import A2ATaskStore
 from jarvis.a2a.streaming import get_emitter
 from jarvis.session_manager import SessionManager
 from jarvis.config import JarvisConfig
+from jarvis.openclaw_notifier import OpenClawNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ class JarvisAgentExecutor:
 
         self._emitter = get_emitter()
         logger.info("JarvisAgentExecutor.__init__: emitter obtained")
+        self._openclaw_notifier = OpenClawNotifier.from_env()
 
         self._timeout = config.a2a.task_timeout_seconds
         logger.info("JarvisAgentExecutor.__init__: initialization complete")
@@ -238,6 +240,10 @@ class JarvisAgentExecutor:
             await self._emitter.emit(task_id, event_type, data)
         except Exception as e:
             logger.debug(f"Event emit failed (non-blocking): {e}")
+        try:
+            await self._openclaw_notifier.notify_task_event(task_id, event_type, data)
+        except Exception as e:
+            logger.debug(f"OpenClaw notify failed (non-blocking): {e}")
 
     async def cancel_task(self, task_id: str) -> A2ATask | None:
         """Cancel a running task.

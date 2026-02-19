@@ -58,8 +58,7 @@ src/jarvis/
 ├── ws_server.py               # WebSocket API surface
 ├── orchestrator/              # Message handling pipeline
 │   └── core.py                # Main orchestrator
-├── local_model_manager.py     # AFM / LM Studio switching
-├── lm_studio_manager.py       # LM Studio process/model status
+├── local_model_manager.py     # AFM local runtime switching
 ├── afm_integration.py         # Apple Foundation Models integration
 ├── config.py                  # Configuration
 └── self_learning.py           # Learning loops

@@ -13,16 +13,16 @@ struct ModelInfo: Identifiable {
 
 enum ModelProvider: String, CaseIterable {
     case anthropic = "Anthropic Claude"
+    case opencode = "OpenCode (Zen)"
     case glm = "GLM (z.ai)"
-    case lmstudio = "LM Studio (Local)"
     case mlx = "MLX (Apple Silicon)"
     case foundation = "Foundation Models"
     
     var icon: String {
         switch self {
         case .anthropic: return "brain"
+        case .opencode: return "shippingbox.fill"
         case .glm: return "cpu"
-        case .lmstudio: return "laptopcomputer"
         case .mlx: return "memorychip"
         case .foundation: return "apple.logo"
         }
@@ -36,9 +36,6 @@ struct ModelSelectionView: View {
     @State private var selectedModelId: String = "claude-sonnet-4-5-20250929"
     @State private var currentProvider: String = "anthropic"
     @State private var isLoading = false
-    @State private var lmstudioModels: [String] = []
-    @State private var lmstudioRunning = false
-    @State private var lmstudioModelLoaded: String?
     @State private var mlxAvailable = false
     @State private var foundationAvailable = true  // Default to true - AFM available on macOS 26+
     
@@ -74,29 +71,26 @@ struct ModelSelectionView: View {
             isAvailable: true,
             isSelected: selectedModelId == "claude-haiku-4-5-20251001"
         ))
-        
-        // LM Studio models
-        let lmModels = modelStatus?.lmstudioAvailableModels ?? lmstudioModels
-        let lmRunning = modelStatus?.lmstudioRunning ?? lmstudioRunning
-        let lmLoaded = modelStatus?.lmstudioModelLoaded ?? lmstudioModelLoaded
-        
-        if !lmModels.isEmpty {
-            for modelId in lmModels {
-                let displayName = modelId
-                    .replacingOccurrences(of: "lmstudio-community/", with: "")
-                    .replacingOccurrences(of: "qwen2.5-coder-3b-instruct-mlx", with: "Qwen2.5 Coder 3B")
-                    .replacingOccurrences(of: "openai/gpt-oss-20b", with: "GPT-OSS 20B")
-                    .replacingOccurrences(of: "deepseek/deepseek-r1-0528-qwen3-8b", with: "DeepSeek R1 8B")
-                
-                allModels.append(ModelInfo(
-                    id: modelId,
-                    name: "\(displayName) (LM Studio)",
-                    provider: .lmstudio,
-                    description: lmRunning ? (lmLoaded == modelId ? "● Loaded" : "Click to load") : "Click to start LM Studio",
-                    isAvailable: true,
-                    isSelected: selectedModelId == modelId
-                ))
-            }
+
+        // OpenCode free models (Zen)
+        let fallbackOpenCodeModels = [
+            "minimax-m2.5-free",
+            "glm-5-free",
+            "kimi-k2.5-free",
+            "big-pickle",
+            "openai/gpt-5-nano",
+        ]
+        let openCodeModels = modelStatus?.opencodeAvailableModels ?? fallbackOpenCodeModels
+        for model in openCodeModels {
+            let id = model.hasPrefix("opencode/") ? model : "opencode/\(model)"
+            allModels.append(ModelInfo(
+                id: id,
+                name: model,
+                provider: .opencode,
+                description: currentProvider == "opencode" && selectedModelId == id ? "● Active (OpenCode)" : "Free via OpenCode Zen",
+                isAvailable: true,
+                isSelected: selectedModelId == id
+            ))
         }
         
         // MLX models - hide for now since not implemented
@@ -192,18 +186,6 @@ struct ModelSelectionView: View {
         }
         if let available = status.foundationAvailable {
             foundationAvailable = available
-        }
-        if let running = status.lmstudioRunning {
-            lmstudioRunning = running
-            if running == false {
-                lmstudioModelLoaded = nil
-            }
-        }
-        if let loaded = status.lmstudioModelLoaded {
-            lmstudioModelLoaded = loaded
-        }
-        if let discovered = status.lmstudioAvailableModels {
-            lmstudioModels = discovered
         }
     }
 
@@ -330,8 +312,8 @@ struct ModelSelectionView: View {
     private func providerColor(_ provider: ModelProvider) -> Color {
         switch provider {
         case .anthropic: return .purple
+        case .opencode: return .green
         case .glm: return .blue
-        case .lmstudio: return .green
         case .mlx: return .cyan
         case .foundation: return .red
         }

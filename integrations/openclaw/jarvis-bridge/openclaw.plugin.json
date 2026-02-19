@@ -1,0 +1,37 @@
+{
+  "id": "jarvis-bridge",
+  "name": "Jarvis Bridge",
+  "description": "Route execution tasks from OpenClaw to Jarvis A2A.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "tokenPath": {
+        "type": "string"
+      },
+      "tokenEnv": {
+        "type": "string"
+      },
+      "token": {
+        "type": "string"
+      },
+      "defaultWait": {
+        "type": "boolean"
+      },
+      "defaultTimeoutSec": {
+        "type": "number",
+        "minimum": 5,
+        "maximum": 3600
+      },
+      "pollIntervalMs": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 10000
+      }
+    }
+  }
+}

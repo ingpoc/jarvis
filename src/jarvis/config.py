@@ -53,14 +53,13 @@ class ModelConfig:
 
     Local models (use provider_type to switch):
         - foundation-models: Apple Foundation Models (direct Python)
-        - qwen2.5-coder-3b-instruct-mlx: LM Studio (local)
     """
 
     planner: str = "opus"
     executor: str = "sonnet"
     reviewer: str = "sonnet"
     quick: str = "haiku"
-    provider_type: str = "anthropic"  # anthropic, foundation, lmstudio, mlx
+    provider_type: str = "anthropic"  # anthropic, foundation, mlx, opencode
 
 
 @dataclass

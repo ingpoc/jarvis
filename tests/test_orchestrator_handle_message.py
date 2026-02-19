@@ -107,3 +107,79 @@ def test_handle_message_failed_when_empty_reply():
 
     assert result["status"] == "failed"
     assert result["decision"]["confidence"] == 0.0
+
+
+def test_handle_message_routes_foundation_to_local_chat():
+    orch = _make_orch()
+    orch.config.models.executor = "foundation-models"
+    orch.config.models.provider_type = "foundation"
+    orch._chat_local = AsyncMock(
+        return_value={
+            "status": "completed",
+            "route": "chat",
+            "reply": "local-ok",
+            "decision": {"mode": "chat", "confidence": 1.0, "reason": "local_model:foundation"},
+        }
+    )
+
+    with patch("jarvis.orchestrator.core.ensure_project_jarvis_file"):
+        with patch("jarvis.orchestrator.core.append_project_turn"):
+            result = asyncio.run(_run(orch.handle_message("hi", origin="ws:test")))
+
+    assert result["status"] == "completed"
+    assert result["reply"] == "local-ok"
+    orch._chat_local.assert_awaited_once_with("hi", "foundation", "foundation-models")
+
+
+def test_handle_message_routes_opencode_to_opencode_chat():
+    orch = _make_orch()
+    orch.config.models.executor = "opencode/default"
+    orch.config.models.provider_type = "opencode"
+    orch._chat_opencode = AsyncMock(
+        return_value={
+            "status": "completed",
+            "route": "chat",
+            "reply": "opencode-ok",
+            "decision": {"mode": "chat", "confidence": 1.0, "reason": "opencode"},
+        }
+    )
+
+    with patch("jarvis.orchestrator.core.ensure_project_jarvis_file"):
+        with patch("jarvis.orchestrator.core.append_project_turn"):
+            result = asyncio.run(_run(orch.handle_message("hi", origin="ws:test")))
+
+    assert result["status"] == "completed"
+    assert result["reply"] == "opencode-ok"
+    orch._chat_opencode.assert_awaited_once_with("hi", "opencode/default")
+
+
+def test_handle_message_routes_mail_to_local_digest_for_opencode():
+    orch = _make_orch()
+    orch.config.models.executor = "opencode/default"
+    orch.config.models.provider_type = "opencode"
+    orch._chat_opencode = AsyncMock()
+    orch._has_mail_mcp_server = lambda: True
+    orch._has_mail_tool_allowlist = lambda: True
+    orch.run_mail_digest = AsyncMock(
+        return_value={
+            "status": "completed",
+            "digest": {
+                "raw_summary": "Inbox summary",
+                "urgent": [],
+                "reply_today": [],
+                "waiting_on_them": [],
+                "fyi": [],
+                "top_3_now": [],
+            },
+        }
+    )
+
+    with patch("jarvis.orchestrator.core.ensure_project_jarvis_file"):
+        with patch("jarvis.orchestrator.core.append_project_turn"):
+            result = asyncio.run(_run(orch.handle_message("check my email", origin="ws:test")))
+
+    assert result["status"] == "completed"
+    assert result["route"] == "mail"
+    assert result["decision"]["reason"] == "mail_digest_local"
+    orch.run_mail_digest.assert_awaited_once_with(force=True, origin="chat:ws:test")
+    orch._chat_opencode.assert_not_awaited()

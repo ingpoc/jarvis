@@ -120,6 +120,13 @@ def test_mail_digest_mode_prefers_local_for_foundation(monkeypatch):
     assert orch._mail_digest_mode() == "local"
 
 
+def test_mail_digest_mode_prefers_local_for_opencode(monkeypatch):
+    orch = object.__new__(JarvisOrchestrator)
+    orch._effective_provider_type = lambda: "opencode"
+    monkeypatch.delenv("JARVIS_MAIL_DIGEST_MODE", raising=False)
+    assert orch._mail_digest_mode() == "local"
+
+
 def test_mail_digest_mode_prefers_sdk_for_non_foundation(monkeypatch):
     orch = object.__new__(JarvisOrchestrator)
     orch._effective_provider_type = lambda: "anthropic"
@@ -159,77 +166,3 @@ def test_run_mail_digest_executes_local_pipeline_for_foundation(monkeypatch):
     assert result["mode"] == "local"
     assert result["digest"]["raw_summary"] == "Foundation digest"
     assert len(orch.memory.saved) == 1
-
-
-def test_run_mail_digest_executes_sdk_mail_chief_for_lmstudio(monkeypatch):
-    orch = _make_digest_orch("lmstudio", "openai/gpt-oss-20b")
-    orch._build_options = lambda: SimpleNamespace(tools=["x"], allowed_tools=[], mcp_servers={"zapier": {}})
-    orch._build_mail_tool_allowlist = lambda: ["mcp__zapier__gmail_find_email"]
-    orch._build_mail_mcp_servers = lambda: {"zapier": {"type": "streamable-http"}}
-
-    class _FakeZapierClient:
-        async def fetch_recent_messages(self, *, window_hours, limit=30):
-            assert window_hours == 24
-            assert limit == 30
-            return [
-                SimpleNamespace(
-                    sender="alice@example.com",
-                    subject="Need confirmation today",
-                    received_at="2026-02-19T09:00:00Z",
-                    snippet="Can you confirm?",
-                    thread_id="t-123",
-                    message_id="m-123",
-                )
-            ]
-
-    class _FakeSDKClient:
-        seen = []
-
-        def __init__(self, options=None):
-            self.options = options
-            _FakeSDKClient.seen.append(options)
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def query(self, _prompt):
-            return None
-
-        async def receive_response(self):
-            from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
-
-            yield AssistantMessage(
-                content=[
-                    TextBlock(
-                        text=(
-                            '{"summary":"LM digest","urgent":[],"reply_today":[],"waiting_on_them":[],'  # noqa: E501
-                            '"fyi":[],"top_3_now":[]}'
-                        )
-                    )
-                ],
-                model="openai/gpt-oss-20b",
-            )
-            yield ResultMessage(
-                subtype="result",
-                duration_ms=10,
-                duration_api_ms=8,
-                is_error=False,
-                num_turns=1,
-                session_id="sdk-test-1",
-                total_cost_usd=0.0,
-            )
-
-    monkeypatch.delenv("JARVIS_MAIL_DIGEST_MODE", raising=False)
-    with patch("jarvis.orchestrator.core.ZapierMailClient.from_env", return_value=_FakeZapierClient()):
-        with patch("jarvis.orchestrator.core.ClaudeSDKClient", _FakeSDKClient):
-            result = asyncio.run(orch.run_mail_digest(force=True))
-
-    assert result["status"] == "completed"
-    assert result["mode"] == "sdk"
-    assert result["digest"]["raw_summary"] == "LM digest"
-    assert len(_FakeSDKClient.seen) == 1
-    assert _FakeSDKClient.seen[0].allowed_tools == ["mcp__zapier__gmail_find_email"]
-    assert _FakeSDKClient.seen[0].mcp_servers == {"zapier": {"type": "streamable-http"}}

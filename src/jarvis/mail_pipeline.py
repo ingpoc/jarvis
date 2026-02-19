@@ -1,7 +1,7 @@
 """Modular local mail digest pipeline.
 
 Uses Zapier MCP directly for mailbox retrieval and produces a deterministic digest,
-with optional refinement from local models (Foundation/LM Studio).
+with optional refinement from local models (Foundation).
 """
 
 from __future__ import annotations

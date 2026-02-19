@@ -9,6 +9,7 @@ Project-specific conventions and references.
 | [api-reference.md](api-reference.md) | WebSocket API | Integrating |
 | [scripts.md](scripts.md) | Validation/build scripts | Verifying changes |
 | [HOW_JARVIS_OPERATES.md](HOW_JARVIS_OPERATES.md) | End-to-end execution model | Architecture deep dive |
+| [../workflow/openclaw-jarvis-integration.md](../workflow/openclaw-jarvis-integration.md) | OpenClaw plugin + routing setup | OpenClaw integration |
 
 ## Quick Start
 
@@ -21,6 +22,10 @@ Project-specific conventions and references.
 
 # Full validation (recommended before commit)
 python3 scripts/validate_jarvis.py
+
+# A2A bridge helpers (for OpenClaw integration)
+jarvis a2a health -j
+jarvis a2a send "hello" --non-blocking -j
 ```
 
 ## Key Files
@@ -39,7 +44,7 @@ src/jarvis/
 ├── daemon.py                  # Background service
 ├── ws_server.py               # WebSocket server (port 9847)
 ├── orchestrator/              # Message handling + routing
-├── local_model_manager.py     # AFM / LM Studio provider switching
+├── local_model_manager.py     # AFM local provider switching
 └── a2a/server.py              # A2A server (port 9848)
 ```
 

@@ -30,6 +30,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 9847
+OPENCODE_FREE_MODELS = [
+    "minimax-m2.5-free",
+    "glm-5-free",
+    "kimi-k2.5-free",
+    "big-pickle",
+    "openai/gpt-5-nano",
+]
 
 
 def _require_websockets():
@@ -76,11 +83,13 @@ class JarvisWSServer:
         if not self._orchestrator:
             return {"error": "Orchestrator not connected"}
 
+        default_sync_timeout = 20.0
+
         raw_timeout = os.environ.get("JARVIS_WS_CHAT_SYNC_TIMEOUT_SECS", "").strip()
         try:
-            sync_timeout = float(raw_timeout) if raw_timeout else 8.0
+            sync_timeout = float(raw_timeout) if raw_timeout else default_sync_timeout
         except ValueError:
-            sync_timeout = 8.0
+            sync_timeout = default_sync_timeout
         chat_task = asyncio.create_task(self._orchestrator.handle_message(message, origin=origin))
 
         if sync_timeout <= 0:
@@ -99,11 +108,28 @@ class JarvisWSServer:
 
         async def _publish_when_done() -> None:
             try:
-                result = await asyncio.wait_for(chat_task, timeout=async_timeout)
+                done, _ = await asyncio.wait({chat_task}, timeout=async_timeout)
+                if not done:
+                    chat_task.cancel()
+                    msg = f"Background chat timed out after {int(async_timeout)}s."
+                    self._events.emit(
+                        "error",
+                        msg,
+                        metadata={
+                            "request_id": request_id,
+                            "action": action,
+                            "origin": origin,
+                            "error": msg,
+                        },
+                    )
+                    return
+
+                result = await chat_task
                 reply = (result.get("reply") or "").strip()
+                completion_text = (reply or str(result.get("status") or "completed")).strip()
                 self._events.emit(
                     "chat_async_complete",
-                    (reply or result.get("status") or "completed")[:200],
+                    completion_text[:5000],
                     metadata={
                         "request_id": request_id,
                         "action": action,
@@ -114,9 +140,8 @@ class JarvisWSServer:
                         "decision": result.get("decision") or {},
                     },
                 )
-            except TimeoutError:
-                chat_task.cancel()
-                msg = f"Background chat timed out after {int(async_timeout)}s."
+            except asyncio.CancelledError:
+                msg = "Background chat cancelled."
                 self._events.emit(
                     "error",
                     msg,
@@ -127,6 +152,7 @@ class JarvisWSServer:
                         "error": msg,
                     },
                 )
+                raise
             except Exception as exc:
                 logger.exception("Background chat failed")
                 self._events.emit(
@@ -308,10 +334,8 @@ class JarvisWSServer:
             elif action == "get_model_status":
                 from jarvis.local_model_manager import get_local_model_manager
                 from jarvis.afm_integration import is_afm_available
-                from jarvis.lm_studio_manager import get_lm_studio_manager
 
                 local_mgr = get_local_model_manager()
-                lm_mgr = get_lm_studio_manager()
                 config = self._orchestrator.config if self._orchestrator else None
                 current_model = config.models.executor if config else "unknown"
 
@@ -319,13 +343,8 @@ class JarvisWSServer:
                     model_id = str(model_id or "")
                     if model_id == "foundation-models":
                         return "foundation"
-                    if (
-                        "/" in model_id
-                        or model_id.startswith("lmstudio-")
-                        or "qwen" in model_id.lower()
-                        or "deepseek" in model_id.lower()
-                    ):
-                        return "lmstudio"
+                    if model_id.startswith("opencode/") or model_id.startswith("opencode:") or model_id == "opencode":
+                        return "opencode"
                     if model_id.startswith("mlx-"):
                         return "mlx"
                     return "anthropic"
@@ -336,7 +355,7 @@ class JarvisWSServer:
                     if config
                     else ""
                 )
-                if configured_provider_type not in {"anthropic", "foundation", "lmstudio", "mlx"}:
+                if configured_provider_type not in {"anthropic", "foundation", "mlx", "opencode"}:
                     configured_provider_type = ""
 
                 provider_type = (
@@ -345,12 +364,9 @@ class JarvisWSServer:
                     else derived_provider_type
                 )
 
-                provider = (
-                    provider_type if provider_type in {"foundation", "lmstudio", "mlx"} else "anthropic"
-                )
+                provider = provider_type if provider_type in {"foundation", "mlx", "opencode"} else "anthropic"
 
                 afm_available = is_afm_available()
-                lm_running = lm_mgr.is_running or lm_mgr.is_api_available()
 
                 result = {
                     "current_model": current_model,
@@ -363,23 +379,16 @@ class JarvisWSServer:
                     ],
                     "foundation_available": afm_available,
                     "mlx_available": False,
-                    "lmstudio_running": lm_running,
-                    "lmstudio_model_loaded": lm_mgr.current_model if lm_running else None,
-                    "lmstudio_available_models": lm_mgr.available_models if lm_running else [],
+                    "opencode_available_models": OPENCODE_FREE_MODELS,
                     "local_models": {
                         "foundation": {
                             "available": afm_available,
                             "model": "apple-foundation-models",
                         },
-                        "lmstudio": {
-                            "running": lm_running,
-                            "model_loaded": lm_mgr.current_model,
-                            "available_models": lm_mgr.available_models if lm_running else [],
-                        },
                     },
                     "runtime_provider": (
                         local_mgr.provider.value
-                        if local_mgr.provider and provider_type in {"foundation", "lmstudio", "mlx"}
+                        if local_mgr.provider and provider_type in {"foundation", "mlx"}
                         else None
                     ),
                 }
@@ -397,15 +406,10 @@ class JarvisWSServer:
                     provider = "anthropic"
                     if model == "foundation-models":
                         provider = "foundation"
-                    elif (
-                        "/" in model
-                        or model.startswith("lmstudio-")
-                        or "qwen" in model.lower()
-                        or "deepseek" in model.lower()
-                    ):
-                        provider = "lmstudio"
+                    elif model.startswith("opencode/") or model.startswith("opencode:") or model == "opencode":
+                        provider = "opencode"
 
-                    if provider != "anthropic":
+                    if provider == "foundation":
                         switch_result = await local_mgr.switch_model(model)
                         if "error" in switch_result:
                             result = switch_result
@@ -421,7 +425,23 @@ class JarvisWSServer:
                                 "provider_type": provider,
                                 "info": switch_result.get("info", ""),
                             }
+                    elif provider == "opencode":
+                        # OpenCode is an external execution backend; free local model resources.
+                        await local_mgr.shutdown()
+                        self._orchestrator.config.models.executor = model
+                        self._orchestrator.config.models.provider_type = "opencode"
+                        self._orchestrator.config.save()
+                        await self._orchestrator._reset_chat_client()
+                        result = {
+                            "success": True,
+                            "current_model": model,
+                            "provider": "opencode",
+                            "provider_type": "opencode",
+                        }
                     else:
+                        # RAM-efficient default: free any local model resources when
+                        # switching back to remote Anthropic models.
+                        await local_mgr.shutdown()
                         self._orchestrator.config.models.executor = model
                         self._orchestrator.config.models.provider_type = "anthropic"
                         self._orchestrator.config.save()

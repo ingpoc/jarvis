@@ -19,6 +19,8 @@ Usage:
     jarvis config <key>=<value>              # Set configuration
     jarvis test <url>                        # Browser test
     jarvis test <url> -w                     # Wallet test (Solflare mock)
+    jarvis a2a health                        # A2A health check
+    jarvis a2a send "task" -j               # A2A message/send wrapper
     jarvis daemon                            # Run daemon (foreground)
     jarvis daemon --install                  # Install as launchd service
     jarvis daemon --uninstall                # Remove launchd service
@@ -36,6 +38,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from jarvis.a2a.client import A2AClientError, JarvisA2AClient
 from jarvis.budget import BudgetController
 from jarvis.config import JARVIS_HOME, JarvisConfig, ensure_jarvis_home
 from jarvis.context_files import should_use_project_jarvis
@@ -473,6 +476,153 @@ def config(key_value):
         console.print(f"[green]Set {key} = {value}[/]")
     else:
         console.print("[yellow]Usage: jarvis config key=value[/]")
+
+
+def _a2a_client(base_url: str | None, token: str | None, token_path: str | None) -> JarvisA2AClient:
+    return JarvisA2AClient(
+        base_url=base_url,
+        token=token,
+        token_path=token_path,
+    )
+
+
+def _emit_json_or_table(payload: dict, json_output: bool, title: str = "A2A") -> None:
+    if json_output:
+        console.print_json(json.dumps(payload, indent=2, default=str))
+    else:
+        table = Table(title=title, show_header=False)
+        for key, value in payload.items():
+            table.add_row(str(key), json.dumps(value) if isinstance(value, (dict, list)) else str(value))
+        console.print(table)
+
+
+@cli.group("a2a", invoke_without_command=True)
+@click.pass_context
+def a2a(ctx):
+    """Jarvis A2A bridge helpers for external agents (for example OpenClaw)."""
+    if ctx.invoked_subcommand is None:
+        console.print("[dim]Use: jarvis a2a health|card|send|get|wait|cancel[/]")
+
+
+@a2a.command("health")
+@click.option("--base-url", default=None, help="A2A base URL (default: JARVIS_A2A_URL or http://127.0.0.1:9848)")
+@click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
+def a2a_health(base_url, json_output):
+    """Check A2A server health."""
+    try:
+        payload = _a2a_client(base_url, token=None, token_path=None).health()
+        _emit_json_or_table(payload, json_output, title="A2A Health")
+    except A2AClientError as e:
+        raise click.ClickException(str(e)) from e
+
+
+@a2a.command("card")
+@click.option("--base-url", default=None, help="A2A base URL (default: JARVIS_A2A_URL or http://127.0.0.1:9848)")
+@click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
+def a2a_card(base_url, json_output):
+    """Fetch Jarvis A2A agent-card metadata."""
+    try:
+        payload = _a2a_client(base_url, token=None, token_path=None).agent_card()
+        _emit_json_or_table(payload, json_output, title="A2A Agent Card")
+    except A2AClientError as e:
+        raise click.ClickException(str(e)) from e
+
+
+@a2a.command("send")
+@click.argument("message")
+@click.option("--base-url", default=None, help="A2A base URL")
+@click.option("--token", default=None, help="Bearer token (optional, defaults to token file/env)")
+@click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/a2a_token)")
+@click.option("--context-id", default=None, help="Optional context id for session isolation")
+@click.option("--blocking/--non-blocking", default=False, help="Use A2A blocking execution mode")
+@click.option("--wait", "wait_for_completion", is_flag=True, help="Poll task until terminal state")
+@click.option("--timeout", default=120.0, type=float, show_default=True, help="Wait timeout in seconds")
+@click.option("--poll-interval", default=1.0, type=float, show_default=True, help="Wait poll interval in seconds")
+@click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
+def a2a_send(
+    message,
+    base_url,
+    token,
+    token_path,
+    context_id,
+    blocking,
+    wait_for_completion,
+    timeout,
+    poll_interval,
+    json_output,
+):
+    """Send a message to Jarvis over A2A JSON-RPC."""
+    try:
+        client = _a2a_client(base_url, token=token, token_path=token_path)
+        submitted = client.send_message(
+            message,
+            blocking=blocking,
+            context_id=context_id,
+        )
+        payload: dict[str, object] = {"submitted": submitted}
+        task_id = submitted.get("taskId")
+        if wait_for_completion:
+            if not task_id:
+                raise click.ClickException("A2A response missing taskId; cannot wait")
+            payload["final"] = client.wait_for_task(
+                str(task_id),
+                timeout_seconds=timeout,
+                poll_interval_seconds=poll_interval,
+            )
+        _emit_json_or_table(payload, json_output, title="A2A Send")
+    except A2AClientError as e:
+        raise click.ClickException(str(e)) from e
+
+
+@a2a.command("get")
+@click.argument("task_id")
+@click.option("--base-url", default=None, help="A2A base URL")
+@click.option("--token", default=None, help="Bearer token (optional, defaults to token file/env)")
+@click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/a2a_token)")
+@click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
+def a2a_get(task_id, base_url, token, token_path, json_output):
+    """Get task status from A2A."""
+    try:
+        payload = _a2a_client(base_url, token=token, token_path=token_path).get_task(task_id)
+        _emit_json_or_table(payload, json_output, title=f"A2A Task {task_id}")
+    except A2AClientError as e:
+        raise click.ClickException(str(e)) from e
+
+
+@a2a.command("wait")
+@click.argument("task_id")
+@click.option("--base-url", default=None, help="A2A base URL")
+@click.option("--token", default=None, help="Bearer token (optional, defaults to token file/env)")
+@click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/a2a_token)")
+@click.option("--timeout", default=120.0, type=float, show_default=True, help="Wait timeout in seconds")
+@click.option("--poll-interval", default=1.0, type=float, show_default=True, help="Wait poll interval in seconds")
+@click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
+def a2a_wait(task_id, base_url, token, token_path, timeout, poll_interval, json_output):
+    """Wait for a task to reach a terminal state."""
+    try:
+        payload = _a2a_client(base_url, token=token, token_path=token_path).wait_for_task(
+            task_id,
+            timeout_seconds=timeout,
+            poll_interval_seconds=poll_interval,
+        )
+        _emit_json_or_table(payload, json_output, title=f"A2A Task {task_id}")
+    except A2AClientError as e:
+        raise click.ClickException(str(e)) from e
+
+
+@a2a.command("cancel")
+@click.argument("task_id")
+@click.option("--base-url", default=None, help="A2A base URL")
+@click.option("--token", default=None, help="Bearer token (optional, defaults to token file/env)")
+@click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/a2a_token)")
+@click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
+def a2a_cancel(task_id, base_url, token, token_path, json_output):
+    """Cancel an A2A task."""
+    try:
+        payload = _a2a_client(base_url, token=token, token_path=token_path).cancel_task(task_id)
+        _emit_json_or_table(payload, json_output, title=f"A2A Cancel {task_id}")
+    except A2AClientError as e:
+        raise click.ClickException(str(e)) from e
 
 
 @cli.command()

@@ -9,9 +9,9 @@
 
 ## Opinion
 
-**Verdict**: **Adopt** for Jarvis - MLX-lm is the best path for local LLM inference with Claude Agent SDK
+**Verdict**: **Adopt** for Jarvis - MLX-lm is the best path for direct local LLM inference on Apple Silicon
 **Confidence**: High
-**Reasoning**: MLX provides the most comprehensive solution for running open-source LLMs on Apple Silicon with excellent performance via Metal backend. Combined with LM Studio for Anthropic-compatible API, enables local model usage with existing SDK.
+**Reasoning**: MLX provides the most comprehensive solution for running open-source LLMs on Apple Silicon with excellent performance via Metal backend. It complements Jarvis's current Foundation/OpenCode routing model.
 
 ---
 
@@ -163,19 +163,15 @@ with Session() as session:
 
 ## Integration Path for Jarvis
 
-### Option 1: LM Studio (Recommended ✅)
+### Option 1: OpenCode (Current Runtime ✅)
 
-**How**: LM Studio provides Anthropic-compatible API
+**How**: Use OpenCode provider for external model execution and tool access.
 
-1. Install LM Studio
-2. Start server: `lms server start --port 1234`
-3. Set env vars:
-```bash
-export ANTHROPIC_BASE_URL=http://localhost:1234
-export ANTHROPIC_AUTH_TOKEN=lmstudio
-```
+1. Set `models.provider_type=opencode`
+2. Set `models.executor=opencode/<model>`
+3. Configure MCP via `opencode.json` when needed
 
-**Works with**: Claude Agent SDK ✅
+**Works with**: Jarvis orchestrator OpenCode path ✅
 
 ---
 
@@ -214,7 +210,7 @@ export ANTHROPIC_AUTH_TOKEN=lmstudio
 | Priority | Action | Status |
 |----------|--------|--------|
 | 1 | Keep using Claude SDK with Anthropic | ✅ Done |
-| 2 | Add LM Studio option in Models tab | Pending |
+| 2 | Keep OpenCode model list surfaced in Models tab | In progress |
 | 3 | Use mlx-embeddings for RAG | ✅ In use |
 | 4 | Explore mlx-lm for batch tasks | Future |
 | 5 | Watch apple-foundation-models | Maturity |

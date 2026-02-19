@@ -23,7 +23,7 @@ Only high-value repos for Jarvis now or likely near-future:
 |---|---|---|---|---|
 | P0 | `apple/container` | Yes | Yes | Directly relevant to Jarvis container CLI/system lifecycle and startup health behavior. |
 | P0 | `ml-explore/mlx-examples` | Yes | Yes | Canonical source for MLX Whisper behavior (`Audio Processing -> Whisper`). |
-| P1 | `ml-explore/mlx-lm` | Partial | Yes | Direct local LLM server/generation path if Jarvis expands beyond LM Studio bridge. |
+| P1 | `ml-explore/mlx-lm` | Partial | Yes | Direct local LLM server/generation path if Jarvis expands beyond Foundation/OpenCode routing. |
 | P1 | `ml-explore/mlx` | Partial | Yes | Low-level MLX performance tuning (Metal backend, memory model, primitives). |
 | P2 | `apple/containerization` | No | Maybe | Lower-level internals when `apple/container` docs are insufficient. |
 
@@ -35,7 +35,7 @@ Use `apple/container`
 2. Speech-to-text on Apple Silicon (mlx-whisper behavior, audio pipeline, conversion flow):
 Use `ml-explore/mlx-examples`
 
-3. Direct local model serving/generation path (non-LM-Studio future track):
+3. Direct local model serving/generation path (non-OpenCode future track):
 Use `ml-explore/mlx-lm`
 
 4. MLX performance/memory/kernel optimization:
