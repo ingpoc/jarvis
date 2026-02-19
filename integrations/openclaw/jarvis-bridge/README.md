@@ -21,7 +21,7 @@ Add under `plugins.entries.jarvis-bridge.config`:
 {
   baseUrl: "http://127.0.0.1:9848",
   tokenPath: "~/.jarvis/a2a_token",
-  defaultWait: true,
+  defaultWait: false,
   defaultTimeoutSec: 300,
   pollIntervalMs: 1000,
 }

@@ -20,7 +20,8 @@
         "type": "string"
       },
       "defaultWait": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": false
       },
       "defaultTimeoutSec": {
         "type": "number",

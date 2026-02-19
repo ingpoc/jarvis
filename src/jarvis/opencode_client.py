@@ -109,7 +109,7 @@ class OpenCodeClient:
         )
 
     async def ensure_available(self) -> None:
-        if self.is_available():
+        if await asyncio.to_thread(self.is_available):
             return
 
         if not self.auto_start:
@@ -123,7 +123,7 @@ class OpenCodeClient:
 
         deadline = time.time() + max(3, self.startup_timeout_seconds)
         while time.time() < deadline:
-            if self.is_available():
+            if await asyncio.to_thread(self.is_available):
                 return
             await asyncio.sleep(0.5)
 
@@ -178,7 +178,9 @@ class OpenCodeClient:
     ) -> OpenCodeRunResult:
         await self.ensure_available()
 
-        session = self._request("POST", "/session", {"title": "Jarvis delegated task"}, timeout=10)
+        session = await asyncio.to_thread(
+            self._request, "POST", "/session", {"title": "Jarvis delegated task"}, 10
+        )
         session_id = str(session.get("id") or session.get("sessionID") or "").strip()
         if not session_id:
             raise OpenCodeClientError(f"OpenCode did not return session id: {session}")
@@ -192,11 +194,12 @@ class OpenCodeClient:
         if agent:
             body["agent"] = agent
 
-        response = self._request(
+        response = await asyncio.to_thread(
+            self._request,
             "POST",
             f"/session/{session_id}/message",
             body,
-            timeout=max(30, timeout_seconds),
+            max(30, timeout_seconds),
         )
         text = self._extract_text_from_parts(response)
         if not text:

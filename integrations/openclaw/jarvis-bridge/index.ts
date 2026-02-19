@@ -216,7 +216,7 @@ async function executeJarvisCodeTask(
     return toResult({ error: "Missing task. Provide `task` or command args." });
   }
 
-  const wait = Boolean(params.wait ?? cfg.defaultWait ?? true);
+  const wait = Boolean(params.wait ?? cfg.defaultWait ?? false);
   const timeoutSec = Number(params.timeoutSec ?? cfg.defaultTimeoutSec ?? 300);
   const pollIntervalMs = Number(params.pollIntervalMs ?? cfg.pollIntervalMs ?? 1000);
   const contextId = typeof params.contextId === "string" ? params.contextId : undefined;
