@@ -266,6 +266,10 @@ struct ModelSelectionView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
+                        Image(systemName: model.provider.icon)
+                            .foregroundStyle(providerColor(model.provider))
+                            .font(.caption)
+
                         Text(model.name)
                             .font(.subheadline)
                             .fontWeight(.medium)

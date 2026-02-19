@@ -5,10 +5,12 @@ import JarvisClient
 /// Voice View: Push-to-talk voice commands
 /// Design: Single prominent action, clear feedback
 struct VoiceView: View {
+    let isActive: Bool
     @State private var isRecording = false
     @State private var transcript = ""
     @State private var lastCommand = ""
     @State private var voiceRecorder: VoiceRecorder?
+    @State private var hasRequestedPermission = false
     var body: some View {
         VStack(spacing: 32) {
             VStack(spacing: 8) {
@@ -63,8 +65,11 @@ struct VoiceView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
-        .onAppear {
-            requestMicrophonePermission()
+        .onChange(of: isActive) { active in
+            if active && !hasRequestedPermission {
+                requestMicrophonePermission()
+                hasRequestedPermission = true
+            }
         }
     }
 

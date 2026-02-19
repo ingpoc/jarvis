@@ -12,16 +12,16 @@ struct JarvisApp: App {
     @State private var router = NavigationRouter()
 
     var body: some Scene {
-        // Hidden window - opened via menu bar or hotkey
         Window("Jarvis", id: "main-window") {
             ContentView()
                 .environment(authManager)
                 .environment(router)
                 .environment(webSocket)
-                .frame(minWidth: 800, minHeight: 600)
+                .environment(\.webSocket, webSocket)
+                .frame(minWidth: 900, minHeight: 640)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1000, height: 700)
+        .defaultSize(width: 1100, height: 760)
 
         // Menu bar icon (primary interface)
         MenuBarExtra {
@@ -47,13 +47,6 @@ struct JarvisApp: App {
                 )
         }
         .menuBarExtraStyle(.window)
-
-        Window("Jarvis", id: "full-app") {
-            FullAppView()
-                .environment(webSocket)
-                .environment(\.webSocket, webSocket)
-                .frame(minWidth: 1000, minHeight: 700)
-        }
     }
 }
 
@@ -81,6 +74,7 @@ extension EnvironmentValues {
 final class NavigationRouter {
     enum Tab: String, CaseIterable {
         case dashboard = "Dashboard"
+        case chat = "Chat"
         case timeline = "Timeline"
         case commands = "Commands"
         case voice = "Voice"
@@ -218,6 +212,7 @@ struct NavigationItem: View {
     private var iconName: String {
         switch tab {
         case .dashboard: return "chart.bar.fill"
+        case .chat: return "bubble.left.and.bubble.right.fill"
         case .timeline: return "clock.fill"
         case .commands: return "terminal.fill"
         case .voice: return "waveform"
@@ -232,19 +227,30 @@ struct DetailView: View {
     @Environment(NavigationRouter.self) private var router
 
     var body: some View {
-        Group {
-            switch router.selectedTab {
-            case .dashboard:
-                DashboardView()
-            case .timeline:
-                TimelineView()
-            case .commands:
-                CommandView()
-            case .voice:
-                VoiceView()
-            case .settings:
-                SettingsView()
-            }
+        ZStack {
+            DashboardView()
+                .opacity(router.selectedTab == .dashboard ? 1 : 0)
+                .allowsHitTesting(router.selectedTab == .dashboard)
+
+            ChatWorkspaceView()
+                .opacity(router.selectedTab == .chat ? 1 : 0)
+                .allowsHitTesting(router.selectedTab == .chat)
+
+            TimelineView()
+                .opacity(router.selectedTab == .timeline ? 1 : 0)
+                .allowsHitTesting(router.selectedTab == .timeline)
+
+            CommandView()
+                .opacity(router.selectedTab == .commands ? 1 : 0)
+                .allowsHitTesting(router.selectedTab == .commands)
+
+            VoiceView(isActive: router.selectedTab == .voice)
+                .opacity(router.selectedTab == .voice ? 1 : 0)
+                .allowsHitTesting(router.selectedTab == .voice)
+
+            SettingsView()
+                .opacity(router.selectedTab == .settings ? 1 : 0)
+                .allowsHitTesting(router.selectedTab == .settings)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))

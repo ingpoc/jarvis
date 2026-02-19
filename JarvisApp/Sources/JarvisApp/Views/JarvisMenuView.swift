@@ -131,7 +131,7 @@ struct JarvisMenuView: View {
                 Spacer()
 
                 Button(action: {
-                    openWindow(id: "full-app")
+                    openWindow(id: "main-window")
                 }) {
                     Label("Open", systemImage: "arrow.up.right.square")
                 }

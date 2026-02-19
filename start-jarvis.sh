@@ -112,6 +112,41 @@ wait_for_http_health() {
     return 1
 }
 
+dedupe_jarvisapp_instances() {
+    local keep_pid="${1:-}"
+    if ! command -v pgrep >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local pids=""
+    pids="$(pgrep -x JarvisApp 2>/dev/null || true)"
+    local count=0
+    count="$(printf '%s\n' "$pids" | awk 'NF { c++ } END { print c + 0 }')"
+    if [ "$count" -le 1 ]; then
+        return 0
+    fi
+
+    echo "⚠️  Detected ${count} JarvisApp processes; terminating duplicates"
+    while IFS= read -r pid; do
+        [ -z "$pid" ] && continue
+        if [ -n "$keep_pid" ] && [ "$pid" = "$keep_pid" ]; then
+            continue
+        fi
+        kill "$pid" 2>/dev/null || true
+    done <<< "$pids"
+
+    sleep 0.5
+    while IFS= read -r pid; do
+        [ -z "$pid" ] && continue
+        if [ -n "$keep_pid" ] && [ "$pid" = "$keep_pid" ]; then
+            continue
+        fi
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    done <<< "$pids"
+}
+
 print_failure_log_tail() {
     local log_file="$1"
     local label="$2"
@@ -391,6 +426,12 @@ start_daemon_direct() {
 }
 
 start_menubar_with_launchctl() {
+    # If an unmanaged/stale JarvisApp exists, clear it so launchctl owns the single instance.
+    if command -v pgrep >/dev/null 2>&1 && pgrep -x JarvisApp >/dev/null 2>&1; then
+        pkill -x JarvisApp 2>/dev/null || true
+        sleep 0.5
+    fi
+
     write_menubar_launch_agent
     local gui_domain="gui/$(id -u)"
     local action_msg=""
@@ -629,6 +670,12 @@ else
         exit 1
     fi
 fi
+
+menubar_keep_pid=""
+if [ -f "$PID_DIR/menubar.pid" ] && is_pid_alive "$(cat "$PID_DIR/menubar.pid")"; then
+    menubar_keep_pid="$(cat "$PID_DIR/menubar.pid")"
+fi
+dedupe_jarvisapp_instances "$menubar_keep_pid"
 
 if [ -f "$PID_DIR/menubar.pid" ] && is_pid_alive "$(cat "$PID_DIR/menubar.pid")"; then
     echo -e "${YELLOW}⚠️  Menu bar already running (PID: $(cat "$PID_DIR/menubar.pid"))${NC}"
