@@ -90,9 +90,16 @@ class JarvisWSServer:
         if done:
             return await chat_task
 
+        raw_async_timeout = os.environ.get("JARVIS_WS_CHAT_ASYNC_TIMEOUT_SECS", "").strip()
+        try:
+            async_timeout = float(raw_async_timeout) if raw_async_timeout else 180.0
+        except ValueError:
+            async_timeout = 180.0
+        async_timeout = max(10.0, min(async_timeout, 1800.0))
+
         async def _publish_when_done() -> None:
             try:
-                result = await chat_task
+                result = await asyncio.wait_for(chat_task, timeout=async_timeout)
                 reply = (result.get("reply") or "").strip()
                 self._events.emit(
                     "chat_async_complete",
@@ -105,6 +112,19 @@ class JarvisWSServer:
                         "status": result.get("status"),
                         "reply": reply[:5000],
                         "decision": result.get("decision") or {},
+                    },
+                )
+            except TimeoutError:
+                chat_task.cancel()
+                msg = f"Background chat timed out after {int(async_timeout)}s."
+                self._events.emit(
+                    "error",
+                    msg,
+                    metadata={
+                        "request_id": request_id,
+                        "action": action,
+                        "origin": origin,
+                        "error": msg,
                     },
                 )
             except Exception as exc:
@@ -220,6 +240,57 @@ class JarvisWSServer:
                     result = self._orchestrator.memory.get_timeline(limit=limit)
                 else:
                     result = {"error": "Orchestrator not connected"}
+
+            elif action == "run_mail_digest":
+                if not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    result = await self._orchestrator.run_mail_digest(
+                        window_hours=int(data.get("window_hours", 24) or 24),
+                        force=bool(data.get("force", False)),
+                        origin="ws:mail_digest",
+                    )
+
+            elif action == "get_mail_digest":
+                if not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    result = {
+                        "runs": self._orchestrator.get_mail_digest(
+                            run_date=data.get("date"),
+                            limit=int(data.get("limit", 10) or 10),
+                        )
+                    }
+
+            elif action == "set_mail_schedule":
+                if not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    result = self._orchestrator.update_mail_schedule(
+                        enabled=data.get("enabled"),
+                        time_local=data.get("time_local"),
+                        timezone=data.get("timezone"),
+                        window_hours=data.get("window_hours"),
+                        include_weekends=data.get("include_weekends"),
+                    )
+
+            elif action == "mail_draft_reply":
+                thread_id = str(data.get("thread_id", "") or "").strip()
+                tone = str(data.get("tone", "concise") or "concise").strip()
+                if not thread_id:
+                    result = {"error": "Missing 'thread_id'"}
+                elif not self._orchestrator:
+                    result = {"error": "Orchestrator not connected"}
+                else:
+                    prompt = (
+                        f"Draft a {tone} reply for mail thread '{thread_id}'. "
+                        "Use mail tools to read the latest thread context before drafting. "
+                        "Return subject + draft body."
+                    )
+                    result = await self._orchestrator.handle_message(
+                        prompt,
+                        origin="ws:mail_draft_reply",
+                    )
 
             elif action == "get_available_tools":
                 if self._orchestrator:
@@ -342,6 +413,7 @@ class JarvisWSServer:
                             self._orchestrator.config.models.executor = model
                             self._orchestrator.config.models.provider_type = provider
                             self._orchestrator.config.save()
+                            await self._orchestrator._reset_chat_client()
                             result = {
                                 "success": True,
                                 "current_model": model,
@@ -353,6 +425,7 @@ class JarvisWSServer:
                         self._orchestrator.config.models.executor = model
                         self._orchestrator.config.models.provider_type = "anthropic"
                         self._orchestrator.config.save()
+                        await self._orchestrator._reset_chat_client()
                         result = {
                             "success": True,
                             "current_model": model,

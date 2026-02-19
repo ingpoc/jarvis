@@ -19,7 +19,7 @@ private struct ChatWorkspacePayload: Decodable {
     let reply: String?
     let error: String?
     let suggestion: String?
-    let queued: String?
+    let queued: Bool?
 }
 
 private struct ChatWorkspaceResponse: Decodable {
@@ -245,8 +245,8 @@ struct ChatWorkspaceView: View {
                               let suggestion = payload?.suggestion, !suggestion.isEmpty {
                         messages.append(ChatWorkspaceMessage(role: "jarvis", text: suggestion))
                     } else if payload?.status == "queued",
-                              let queued = payload?.queued, !queued.isEmpty {
-                        messages.append(ChatWorkspaceMessage(role: "jarvis", text: "Queued task: \(queued)"))
+                              payload?.queued == true {
+                        messages.append(ChatWorkspaceMessage(role: "jarvis", text: "Working on it. I will post the full response when finished."))
                     } else if let err, !err.isEmpty {
                         messages.append(ChatWorkspaceMessage(role: "jarvis", text: "Error: \(err)"))
                     } else {

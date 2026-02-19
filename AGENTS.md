@@ -40,7 +40,7 @@ Agent-first development. Humans steer, agents execute.
 |------|---------|
 | Start | `./start-jarvis.sh` |
 | Stop | `./stop-jarvis.sh` |
-| Test WS | `python scripts/test_ws_client.py` |
+| Test WS | `python3 scripts/validate_local_models.py` |
 | Lint | `python3 scripts/jarvis_api_lint.py` |
 
 ---

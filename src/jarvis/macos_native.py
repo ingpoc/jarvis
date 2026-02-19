@@ -11,7 +11,9 @@ import ctypes
 import ctypes.util
 import json
 import logging
+import os
 import platform
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -47,14 +49,54 @@ def get_idle_seconds() -> float | None:
     Uses IOHIDSystem to read HIDIdleTime — the time since last
     keyboard/mouse/trackpad input.
     """
+    if not IS_MACOS:
+        return None
+
+    # Default to ioreg-based polling to avoid occasional ctypes/IOKit crashes.
+    # Set JARVIS_IDLE_USE_CTYPES=1 to force legacy ctypes path.
+    use_ctypes = os.environ.get("JARVIS_IDLE_USE_CTYPES", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not use_ctypes:
+        try:
+            result = subprocess.run(
+                ["ioreg", "-c", "IOHIDSystem", "-r", "-d", "1"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if result.returncode != 0:
+                return None
+
+            output = result.stdout
+            match_hex = re.search(r'"HIDIdleTime"\s*=\s*0x([0-9a-fA-F]+)', output)
+            if match_hex:
+                idle_ns = int(match_hex.group(1), 16)
+                return idle_ns / 1_000_000_000.0
+
+            match_dec = re.search(r'"HIDIdleTime"\s*=\s*(\d+)', output)
+            if match_dec:
+                idle_ns = int(match_dec.group(1))
+                return idle_ns / 1_000_000_000.0
+        except Exception as e:
+            logger.debug(f"IOKit idle time (ioreg) error: {e}")
+        return None
+
     if not _iokit_loaded:
         return None
 
     try:
         # IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("IOHIDSystem"))
+        _iokit.IOServiceMatching.argtypes = [ctypes.c_char_p]
         _iokit.IOServiceMatching.restype = ctypes.c_void_p
         matching = _iokit.IOServiceMatching(b"IOHIDSystem")
+        if not matching:
+            return None
 
+        _iokit.IOServiceGetMatchingService.argtypes = [ctypes.c_uint, ctypes.c_void_p]
         _iokit.IOServiceGetMatchingService.restype = ctypes.c_uint
         service = _iokit.IOServiceGetMatchingService(0, matching)
 
@@ -82,13 +124,17 @@ def get_idle_seconds() -> float | None:
                 ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_int64),
             ]
             _cf.CFNumberGetValue(cf_number, 4, ctypes.byref(idle_ns))  # 4 = kCFNumberSInt64Type
+            _cf.CFRelease.argtypes = [ctypes.c_void_p]
             _cf.CFRelease(cf_number)
             _cf.CFRelease(key)
+            _iokit.IOObjectRelease.argtypes = [ctypes.c_uint]
             _iokit.IOObjectRelease(service)
 
             return idle_ns.value / 1_000_000_000.0  # ns -> seconds
 
+        _cf.CFRelease.argtypes = [ctypes.c_void_p]
         _cf.CFRelease(key)
+        _iokit.IOObjectRelease.argtypes = [ctypes.c_uint]
         _iokit.IOObjectRelease(service)
 
     except Exception as e:

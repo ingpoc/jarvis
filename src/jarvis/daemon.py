@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import time
@@ -14,6 +15,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from urllib import parse, request
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jarvis.config import JarvisConfig, ensure_jarvis_home
 from jarvis.notifications import set_slack_bot, set_voice_client
@@ -138,9 +140,11 @@ class JarvisDaemon:
         self._running = False
         self._stop_event = asyncio.Event()
         self._idle_loop_task: asyncio.Task | None = None
+        self._mail_digest_task: asyncio.Task | None = None
         self._last_idle_run_ts: float = 0.0
         self._idle_runs_today: int = 0
         self._idle_runs_day: str = datetime.now().strftime("%Y-%m-%d")
+        self._last_mail_digest_key: str = ""
 
     async def start(self) -> None:
         """Start all daemon services."""
@@ -321,6 +325,12 @@ class JarvisDaemon:
         except Exception as e:
             logger.warning(f"Introspection processor not loaded: {e}")
 
+        # Mail digest scheduler (always-on loop; checks config each cycle)
+        self._mail_digest_task = asyncio.create_task(
+            self._mail_digest_loop(),
+            name="jarvis-mail-digest",
+        )
+
         # macOS native integrations
         try:
             from jarvis.macos_native import get_platform_capabilities
@@ -412,6 +422,65 @@ class JarvisDaemon:
             except Exception as e:
                 logger.debug(f"IOKit idle loop error: {e}")
 
+    async def _mail_digest_loop(self) -> None:
+        """Run daily mail digest when configured schedule is due."""
+        from jarvis.notifications import Priority, notify
+
+        while self._running:
+            try:
+                await asyncio.sleep(30)
+                mail_cfg = self.orchestrator.config.mail
+                if not mail_cfg.digest_enabled:
+                    continue
+
+                tz_name = mail_cfg.timezone or "UTC"
+                try:
+                    tz = ZoneInfo(tz_name)
+                except ZoneInfoNotFoundError:
+                    tz_name = "UTC"
+                    tz = ZoneInfo("UTC")
+
+                now_local = datetime.now(tz)
+                if not mail_cfg.include_weekends and now_local.weekday() >= 5:
+                    continue
+
+                hhmm = str(mail_cfg.digest_time_local or "08:00").strip()
+                match = re.match(r"^(\d{1,2}):(\d{2})$", hhmm)
+                if not match:
+                    target_hour, target_minute = 8, 0
+                else:
+                    target_hour = max(0, min(int(match.group(1)), 23))
+                    target_minute = max(0, min(int(match.group(2)), 59))
+
+                if (now_local.hour, now_local.minute) < (target_hour, target_minute):
+                    continue
+
+                run_key = f"{now_local.strftime('%Y-%m-%d')}|{tz_name}"
+                if run_key == self._last_mail_digest_key:
+                    continue
+
+                result = await self.orchestrator.run_mail_digest(
+                    window_hours=mail_cfg.window_hours,
+                    force=False,
+                    origin="daemon:scheduler",
+                )
+                if result.get("status") in ("completed", "skipped"):
+                    self._last_mail_digest_key = run_key
+
+                if result.get("status") == "completed":
+                    counts = result.get("counts", {}) or {}
+                    urgent = int(counts.get("urgent", 0) or 0)
+                    msg = (
+                        f"Urgent {urgent}, Reply today {counts.get('reply_today', 0)}, "
+                        f"Waiting {counts.get('waiting_on_them', 0)}, FYI {counts.get('fyi', 0)}"
+                    )
+                    prio = Priority.HIGH if urgent > 0 else Priority.MEDIUM
+                    await notify("Jarvis: Mail Digest Ready", msg, priority=prio)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Mail digest loop error: {e}")
+
     async def stop(self) -> None:
         """Gracefully stop all services."""
         logger.info("Jarvis daemon stopping")
@@ -489,6 +558,12 @@ class JarvisDaemon:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._idle_loop_task
             self._idle_loop_task = None
+
+        if self._mail_digest_task:
+            self._mail_digest_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._mail_digest_task
+            self._mail_digest_task = None
 
         try:
             await self.orchestrator.close()

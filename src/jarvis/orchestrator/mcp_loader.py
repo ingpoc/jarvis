@@ -7,6 +7,7 @@ resolving paths for built-in MCP servers.
 import json
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -70,15 +71,20 @@ class MCPConfigLoader:
         if not isinstance(raw, dict):
             return None
         if "url" in raw and raw.get("url"):
+            url = self._expand_env_placeholders(str(raw["url"]))
+            headers = self._expand_headers(raw.get("headers", {}) or {})
             return {
                 "type": "http",
-                "url": str(raw["url"]),
-                "headers": raw.get("headers", {}) or {},
+                "url": url,
+                "headers": headers,
             }
 
-        command = str(raw.get("command", "")).strip()
-        args = [str(a) for a in (raw.get("args", []) or [])]
-        env = {str(k): str(v) for k, v in (raw.get("env", {}) or {}).items()}
+        command = self._expand_env_placeholders(str(raw.get("command", "")).strip())
+        args = [self._expand_env_placeholders(str(a)) for a in (raw.get("args", []) or [])]
+        env = {
+            str(k): self._expand_env_placeholders(str(v))
+            for k, v in (raw.get("env", {}) or {}).items()
+        }
         if not command:
             return None
 
@@ -93,6 +99,29 @@ class MCPConfigLoader:
             "args": args,
             "env": env,
         }
+
+    @staticmethod
+    def _expand_env_placeholders(value: str) -> str:
+        """Expand ${VAR} placeholders from environment, keeping unresolved values unchanged."""
+        if not isinstance(value, str) or "${" not in value:
+            return value
+
+        def _replace(match: re.Match[str]) -> str:
+            var_name = match.group(1)
+            return os.environ.get(var_name, match.group(0))
+
+        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, value)
+
+    def _expand_headers(self, headers: dict[str, Any]) -> dict[str, str]:
+        """Expand env placeholders in headers and drop unresolved placeholder values."""
+        expanded: dict[str, str] = {}
+        for key, val in headers.items():
+            sval = self._expand_env_placeholders(str(val))
+            if "${" in sval:  # unresolved placeholder
+                continue
+            if sval.strip():
+                expanded[str(key)] = sval
+        return expanded
 
     def _resolve_context_graph(
         self,

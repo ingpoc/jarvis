@@ -5,9 +5,11 @@ None/False gracefully on non-macOS.
 """
 
 import platform
+from types import SimpleNamespace
 
 import pytest
 
+import jarvis.macos_native as macos_native
 from jarvis.macos_native import (
     IS_APPLE_SILICON,
     IS_MACOS,
@@ -157,3 +159,23 @@ class TestMacOSFeatures:
 
         # Verify deleted
         assert keychain_retrieve(service, account) is None
+
+
+def test_idle_seconds_ioreg_parse(monkeypatch):
+    """Idle seconds should parse HIDIdleTime from ioreg output."""
+    monkeypatch.setattr(macos_native, "IS_MACOS", True)
+    monkeypatch.setenv("JARVIS_IDLE_USE_CTYPES", "0")
+
+    def _fake_run(cmd, capture_output, text, timeout):
+        assert cmd[:2] == ["ioreg", "-c"]
+        return SimpleNamespace(
+            returncode=0,
+            stdout='| |   "HIDIdleTime" = 15000000000\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(macos_native.subprocess, "run", _fake_run)
+
+    idle = macos_native.get_idle_seconds()
+    assert isinstance(idle, float)
+    assert idle == 15.0

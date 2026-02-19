@@ -415,6 +415,14 @@ def config(key_value):
                 "reviewer": cfg.models.reviewer,
                 "quick": cfg.models.quick,
             },
+            "mail": {
+                "enabled": cfg.mail.enabled,
+                "digest_enabled": cfg.mail.digest_enabled,
+                "digest_time_local": cfg.mail.digest_time_local,
+                "timezone": cfg.mail.timezone,
+                "window_hours": cfg.mail.window_hours,
+                "include_weekends": cfg.mail.include_weekends,
+            },
             "trust_tier": cfg.trust_tier,
         }))
         return
@@ -446,6 +454,17 @@ def config(key_value):
             else:
                 console.print(f"[red]Unknown model key: {model_key}[/]")
                 return
+        elif key.startswith("mail."):
+            mail_key = key.split(".", 1)[1]
+            if not hasattr(cfg.mail, mail_key):
+                console.print(f"[red]Unknown mail key: {mail_key}[/]")
+                return
+            if isinstance(getattr(cfg.mail, mail_key), bool):
+                setattr(cfg.mail, mail_key, value.lower() in ("true", "1", "yes", "on"))
+            elif isinstance(getattr(cfg.mail, mail_key), int):
+                setattr(cfg.mail, mail_key, int(value))
+            else:
+                setattr(cfg.mail, mail_key, value)
         else:
             console.print(f"[red]Unknown config key: {key}[/]")
             return

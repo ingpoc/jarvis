@@ -189,7 +189,7 @@ class JarvisSlackBot:
             return
         auto_notify_types = {
             "feature_complete", "error", "approval_needed",
-            "task_complete", "trust_change",
+            "task_complete", "trust_change", "mail_digest_ready",
         }
         if event_type in auto_notify_types:
             asyncio.create_task(self._send_event_notification(event_data))
@@ -235,6 +235,11 @@ class JarvisSlackBot:
             await self._client.chat_postMessage(
                 channel=self._default_channel,
                 text=f":shield: Trust change: {summary}",
+            )
+        elif event_type == "mail_digest_ready":
+            await self._client.chat_postMessage(
+                channel=self._default_channel,
+                text=f":mailbox_with_mail: Daily mail digest: {summary}",
             )
 
     # --- Task execution ---

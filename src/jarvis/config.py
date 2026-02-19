@@ -97,6 +97,18 @@ class A2AConfig:
 
 
 @dataclass
+class MailConfig:
+    """Mail assistant settings."""
+
+    enabled: bool = False
+    digest_enabled: bool = False
+    digest_time_local: str = "08:00"  # HH:MM (24h)
+    timezone: str = "America/Los_Angeles"
+    window_hours: int = 24
+    include_weekends: bool = True
+
+
+@dataclass
 class KnowledgeConfig:
     """Knowledge system settings."""
 
@@ -137,6 +149,7 @@ class JarvisConfig:
     slack: SlackConfig = field(default_factory=SlackConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     a2a: A2AConfig = field(default_factory=A2AConfig)
+    mail: MailConfig = field(default_factory=MailConfig)
     knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
     idle: IdleConfig = field(default_factory=IdleConfig)
     resources: ResourceConfig = field(default_factory=ResourceConfig)
@@ -164,6 +177,7 @@ class JarvisConfig:
             apply_section(config.models, data, "models")
             apply_section(config.slack, data, "slack")
             apply_section(config.voice, data, "voice")
+            apply_section(config.mail, data, "mail")
             apply_section(config.knowledge, data, "knowledge")
             apply_section(config.idle, data, "idle")
             apply_section(config.resources, data, "resources")
@@ -259,6 +273,14 @@ class JarvisConfig:
                 "enabled": self.voice.enabled,
                 "auto_call_on_error": self.voice.auto_call_on_error,
                 "auto_call_on_approval": self.voice.auto_call_on_approval,
+            },
+            "mail": {
+                "enabled": self.mail.enabled,
+                "digest_enabled": self.mail.digest_enabled,
+                "digest_time_local": self.mail.digest_time_local,
+                "timezone": self.mail.timezone,
+                "window_hours": self.mail.window_hours,
+                "include_weekends": self.mail.include_weekends,
             },
             "knowledge": {
                 "enable_learning": self.knowledge.enable_learning,

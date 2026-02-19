@@ -184,6 +184,29 @@ class MemoryStore:
                 project_path TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS mail_digest_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_key TEXT UNIQUE,
+                run_date TEXT,
+                timezone TEXT,
+                window_hours INTEGER,
+                status TEXT,
+                summary TEXT,
+                digest_json TEXT,
+                created_at REAL,
+                updated_at REAL,
+                project_path TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS mail_thread_state (
+                thread_id TEXT PRIMARY KEY,
+                subject TEXT,
+                last_seen_at REAL,
+                last_action TEXT,
+                priority TEXT,
+                metadata_json TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_timeline_ts ON timeline_events(timestamp);
             CREATE INDEX IF NOT EXISTS idx_timeline_type ON timeline_events(event_type);
             CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_path);
@@ -197,6 +220,8 @@ class MemoryStore:
             CREATE INDEX IF NOT EXISTS idx_learnings_hash ON learnings(error_pattern_hash);
             CREATE INDEX IF NOT EXISTS idx_skill_candidates_hash ON skill_candidates(pattern_hash);
             CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
+            CREATE INDEX IF NOT EXISTS idx_mail_digest_date ON mail_digest_runs(run_date);
+            CREATE INDEX IF NOT EXISTS idx_mail_digest_project ON mail_digest_runs(project_path);
         """)
         conn.commit()
         conn.close()
@@ -855,6 +880,173 @@ class MemoryStore:
                 "prompt_tokens": r[4], "completion_tokens": r[5],
                 "total_tokens": r[6], "cost_usd": r[7], "timestamp": r[8],
                 "project_path": r[9],
+            }
+            for r in rows
+        ]
+
+    # --- Mail assistant ---
+
+    def save_mail_digest_run(
+        self,
+        *,
+        run_key: str,
+        run_date: str,
+        timezone: str,
+        window_hours: int,
+        status: str,
+        summary: str,
+        digest: dict | None,
+        project_path: str,
+    ) -> int:
+        """Insert or update a mail digest run and return row id."""
+        now = time.time()
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO mail_digest_runs
+            (run_key, run_date, timezone, window_hours, status, summary, digest_json, created_at, updated_at, project_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_key) DO UPDATE SET
+                status = excluded.status,
+                summary = excluded.summary,
+                digest_json = excluded.digest_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                run_key,
+                run_date,
+                timezone,
+                int(window_hours),
+                status,
+                summary,
+                json.dumps(digest) if digest else None,
+                now,
+                now,
+                project_path,
+            ),
+        )
+        row = conn.execute(
+            "SELECT id FROM mail_digest_runs WHERE run_key = ?",
+            (run_key,),
+        ).fetchone()
+        conn.commit()
+        conn.close()
+        return int(row[0]) if row else 0
+
+    def has_mail_digest_run(self, run_key: str) -> bool:
+        """Return True if a digest run already exists for run_key."""
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT 1 FROM mail_digest_runs WHERE run_key = ? LIMIT 1",
+            (run_key,),
+        ).fetchone()
+        conn.close()
+        return row is not None
+
+    def get_mail_digest_runs(
+        self,
+        *,
+        run_date: str | None = None,
+        project_path: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Return stored mail digest runs."""
+        conn = sqlite3.connect(self.db_path)
+        query = (
+            "SELECT id, run_key, run_date, timezone, window_hours, status, summary, "
+            "digest_json, created_at, updated_at, project_path "
+            "FROM mail_digest_runs WHERE 1=1"
+        )
+        params: list = []
+        if run_date:
+            query += " AND run_date = ?"
+            params.append(run_date)
+        if project_path:
+            query += " AND project_path = ?"
+            params.append(project_path)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+        return [
+            {
+                "id": r[0],
+                "run_key": r[1],
+                "run_date": r[2],
+                "timezone": r[3],
+                "window_hours": r[4],
+                "status": r[5],
+                "summary": r[6],
+                "digest": json.loads(r[7]) if r[7] else None,
+                "created_at": r[8],
+                "updated_at": r[9],
+                "project_path": r[10],
+            }
+            for r in rows
+        ]
+
+    def upsert_mail_thread_state(
+        self,
+        *,
+        thread_id: str,
+        subject: str,
+        last_action: str,
+        priority: str,
+        metadata: dict | None = None,
+        last_seen_at: float | None = None,
+    ) -> None:
+        """Persist latest status for a mail thread seen in digests."""
+        if not thread_id.strip():
+            return
+        now = time.time()
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO mail_thread_state
+            (thread_id, subject, last_seen_at, last_action, priority, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(thread_id) DO UPDATE SET
+                subject = excluded.subject,
+                last_seen_at = excluded.last_seen_at,
+                last_action = excluded.last_action,
+                priority = excluded.priority,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                thread_id,
+                subject,
+                float(last_seen_at or now),
+                last_action,
+                priority,
+                json.dumps(metadata) if metadata else None,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def list_mail_threads(self, *, priority: str | None = None, limit: int = 100) -> list[dict]:
+        """Return tracked mail thread state for diagnostics."""
+        conn = sqlite3.connect(self.db_path)
+        query = (
+            "SELECT thread_id, subject, last_seen_at, last_action, priority, metadata_json "
+            "FROM mail_thread_state WHERE 1=1"
+        )
+        params: list = []
+        if priority:
+            query += " AND priority = ?"
+            params.append(priority)
+        query += " ORDER BY last_seen_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+        return [
+            {
+                "thread_id": r[0],
+                "subject": r[1],
+                "last_seen_at": r[2],
+                "last_action": r[3],
+                "priority": r[4],
+                "metadata": json.loads(r[5]) if r[5] else None,
             }
             for r in rows
         ]
