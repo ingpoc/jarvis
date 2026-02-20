@@ -20,7 +20,7 @@ Add under `plugins.entries.jarvis-bridge.config`:
 ```json5
 {
   baseUrl: "http://127.0.0.1:9848",
-  tokenPath: "~/.jarvis/a2a_token",
+  tokenPath: "~/.jarvis/system/jarvis_config/a2a_token",
   defaultWait: false,
   defaultTimeoutSec: 18000,
   pollIntervalMs: 1000,
@@ -36,6 +36,11 @@ Optional auth overrides:
 
 - Keep Jarvis daemon running so A2A is reachable.
 - This plugin intentionally avoids shell execution and talks to A2A over HTTP JSON-RPC.
+- Follow-up continuity fields:
+  - `jobId`: stable logical task thread id inside OpenClaw scope.
+  - `followUp=true`: resume latest job in current scope when `jobId/contextId` are omitted.
+  - `contextId`: stable A2A context routing key.
+  - `resumeSessionId`: explicit OpenCode session resume id (survives Jarvis restart).
 - Recommended split:
   - OpenClaw-native tools (Perplexity/Browser/Context7) for research discovery.
   - Jarvis delegation for execution-heavy work (coding, structured implementation, long-running actions).

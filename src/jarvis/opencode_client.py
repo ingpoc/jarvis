@@ -197,26 +197,29 @@ class OpenCodeClient:
         model_id: str | None = None,
         agent: str | None = None,
         cwd: str | None = None,
+        resume_session_id: str | None = None,
         timeout_seconds: int = 180,
         on_progress: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
     ) -> OpenCodeRunResult:
         await self.ensure_available()
         directory_query = f"?directory={urllib.parse.quote(str(cwd), safe='')}" if cwd else ""
 
-        session_payload = {
-            "title": "Jarvis delegated task",
-            "permission": self._session_permission_rules(),
-        }
-        session = await asyncio.to_thread(
-            self._request,
-            "POST",
-            f"/session{directory_query}",
-            session_payload,
-            10,
-        )
-        session_id = str(session.get("id") or session.get("sessionID") or "").strip()
+        session_id = (resume_session_id or "").strip()
         if not session_id:
-            raise OpenCodeClientError(f"OpenCode did not return session id: {session}")
+            session_payload = {
+                "title": "Jarvis delegated task",
+                "permission": self._session_permission_rules(),
+            }
+            session = await asyncio.to_thread(
+                self._request,
+                "POST",
+                f"/session{directory_query}",
+                session_payload,
+                10,
+            )
+            session_id = str(session.get("id") or session.get("sessionID") or "").strip()
+            if not session_id:
+                raise OpenCodeClientError(f"OpenCode did not return session id: {session}")
 
         async def emit_progress(payload: dict[str, Any]) -> None:
             if not on_progress:

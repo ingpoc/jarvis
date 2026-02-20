@@ -74,6 +74,7 @@ class JarvisAgentExecutor:
         message: str,
         blocking: bool = True,
         context_id: str | None = None,
+        resume_session_id: str | None = None,
         options: ClaudeAgentOptions | None = None,
     ) -> A2ATask:
         """Submit a new task for execution.
@@ -82,6 +83,7 @@ class JarvisAgentExecutor:
             message: The user message/task description
             blocking: If True, wait for completion; if False, return immediately
             context_id: Optional context ID for session isolation
+            resume_session_id: Optional OpenCode session id for explicit resume
             options: Optional ClaudeAgentOptions for the client
 
         Returns:
@@ -124,10 +126,23 @@ class JarvisAgentExecutor:
                 # Execute via orchestrator or direct SDK client.
                 # Important: when orchestrator is configured (normal Jarvis path), do not
                 # initialize a separate SDK client here; that can block task startup.
+                opencode_session_id: str | None = None
                 if self._orchestrator:
-                    result_text = await self._execute_with_orchestrator(
-                        task.id, message, channel_id
+                    orchestrator_result = await self._execute_with_orchestrator(
+                        task.id, message, channel_id, resume_session_id=resume_session_id
                     )
+                    if isinstance(orchestrator_result, dict):
+                        raw_result = (
+                            orchestrator_result.get("output")
+                            or orchestrator_result.get("reply")
+                            or orchestrator_result
+                        )
+                        result_text = raw_result if isinstance(raw_result, str) else str(raw_result)
+                        candidate_session_id = orchestrator_result.get("session_id")
+                        if isinstance(candidate_session_id, str) and candidate_session_id.strip():
+                            opencode_session_id = candidate_session_id.strip()
+                    else:
+                        result_text = str(orchestrator_result)
                 else:
                     client = await self.session_manager.get_client(channel_id, options)
                     self._task_clients[task.id] = client
@@ -139,6 +154,13 @@ class JarvisAgentExecutor:
                         task.id,
                         name="result",
                         content=result_text,
+                        mime_type="text/plain",
+                    )
+                if opencode_session_id:
+                    self.task_store.add_artifact(
+                        task.id,
+                        name="opencode_session",
+                        content=opencode_session_id,
                         mime_type="text/plain",
                     )
 
@@ -244,7 +266,8 @@ class JarvisAgentExecutor:
         task_id: str,
         message: str,
         channel_id: str,
-    ) -> str:
+        resume_session_id: str | None = None,
+    ) -> Any:
         """Execute using the JarvisOrchestrator."""
         if not self._orchestrator:
             return "No orchestrator configured"
@@ -258,12 +281,10 @@ class JarvisAgentExecutor:
                 origin="a2a",
                 emit_notifications=False,  # A2A handles its own notifications
                 channel_id=channel_id,
+                resume_session_id=resume_session_id,
             )
 
-            # Extract result text
-            if isinstance(result, dict):
-                return result.get("output", result.get("reply", str(result)))
-            return str(result)
+            return result
 
         except Exception as e:
             logger.exception(f"Orchestrator execution failed for {task_id}: {e}")

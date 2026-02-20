@@ -12,7 +12,8 @@ Distilled research articles and patterns.
 | [context-learning-loop.md](context-learning-loop.md) | Internal proposal | Traces → hooks → rules; verdict: Adapt (use existing skills, add hook enforcement) |
 | [draw-io-diagram-generation.md](draw-io-diagram-generation.md) | Process guide | Diagram generation workflow with draw.io (Mermaid/XML/CSV) |
 | [local-models-integration.md](local-models-integration.md) | Internal — updated 2026-02-20 | Foundation Models remain the only in-process local runtime; OpenCode is external provider path; menu bar startup auto-reloads stale launchctl targets |
-| [openclaw-jarvis-integration.md](openclaw-jarvis-integration.md) | OpenClaw docs + DeepWiki + live validation (2026-02-20) | Includes update-ownership map: where to change bridge code vs workspace `AGENTS/TOOLS/BOOT/docs`, plus non-blocking + stepwise delegation rules |
+| [openclaw-integration.md](openclaw-integration.md) | OpenClaw docs + DeepWiki + live validation (2026-02-20) | Standalone OpenClaw operations: sandbox/pairing/auth/slack/gateway reliability |
+| [openclaw-jarvis-integration.md](openclaw-jarvis-integration.md) | OpenClaw docs + DeepWiki + live validation (2026-02-20) | Jarvis delegation contract: bridge ownership map, non-blocking task flow, and workspace rule sync |
 | [opencode-parallel-worktrees.md](opencode-parallel-worktrees.md) | Claude Code docs + OpenCode docs + DeepWiki (2026-02-20) | Manager + parallel OpenCode subagents with per-role containerized git worktrees, deterministic gates, and PR/issue handoff |
 | [jarvis-autonomous-evolution.md](jarvis-autonomous-evolution.md) | Internal runtime contract | Jarvis updates docs/workflow continuously while keeping AGENTS compressed and trigger-based |
 | [harness-governance.md](harness-governance.md) | Internal policy | What is always-on vs progressive vs enforced, and cross-runtime (Claude + Codex) rules |

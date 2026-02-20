@@ -163,11 +163,13 @@ def create_a2a_app(config: JarvisConfig, orchestrator: Any = None, project_path:
 
         blocking = params.get("blocking", False)
         context_id = params.get("contextId") or params.get("context_id")
+        resume_session_id = params.get("resumeSessionId") or params.get("resume_session_id")
 
         task = await executor.submit_task(
             message=message,
             blocking=blocking,
             context_id=context_id,
+            resume_session_id=resume_session_id,
         )
 
         return JSONResponse(content={
@@ -200,10 +202,12 @@ def create_a2a_app(config: JarvisConfig, orchestrator: Any = None, project_path:
                 return jsonrpc_error(-32602, "Missing 'message' or 'taskId' parameter", request_id)
 
             context_id = params.get("contextId") or params.get("context_id")
+            resume_session_id = params.get("resumeSessionId") or params.get("resume_session_id")
             task = await executor.submit_task(
                 message=message,
                 blocking=False,  # Non-blocking for streaming
                 context_id=context_id,
+                resume_session_id=resume_session_id,
             )
             task_id = task.id
 

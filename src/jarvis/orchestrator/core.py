@@ -208,6 +208,8 @@ class JarvisOrchestrator:
         self._chat_client: ClaudeSDKClient | None = None  # Deprecated: use SessionManager
         self._session_manager = SessionManager.get_instance()
         self._channel_id = "default"  # Default channel for this orchestrator
+        # Preserve OpenCode conversation continuity per logical channel/context.
+        self._opencode_session_by_channel: dict[str, str] = {}
 
         # Code orchestrator
         self.code_orchestrator = CodeOrchestrator(
@@ -793,6 +795,8 @@ class JarvisOrchestrator:
         task_description: str,
         model_id: str,
         emit_notifications: bool,
+        channel_id: str | None = None,
+        resume_session_id: str | None = None,
     ) -> dict:
         """Run task through OpenCode server in non-interactive mode."""
         from jarvis.opencode_client import get_opencode_client
@@ -811,6 +815,12 @@ class JarvisOrchestrator:
             client = get_opencode_client()
             agent_name = os.environ.get("JARVIS_OPENCODE_AGENT", "").strip() or None
             timeout_seconds = int(os.environ.get("JARVIS_OPENCODE_TIMEOUT_SECS", "300"))
+            prior_session_id = (
+                self._opencode_session_by_channel.get(channel_id, "").strip()
+                if channel_id
+                else ""
+            ) or None
+            effective_resume_session_id = resume_session_id or prior_session_id
             last_info_signature: str | None = None
 
             async def on_progress(payload: dict[str, Any]) -> None:
@@ -842,10 +852,13 @@ class JarvisOrchestrator:
                 model_id=model_id,
                 agent=agent_name,
                 cwd=self.project_path,
+                resume_session_id=effective_resume_session_id,
                 timeout_seconds=timeout_seconds,
                 on_progress=on_progress,
             )
             result["session_id"] = run.session_id
+            if channel_id and run.session_id:
+                self._opencode_session_by_channel[channel_id] = run.session_id
             result["output"] = run.text
             result["status"] = "completed"
 
@@ -853,7 +866,13 @@ class JarvisOrchestrator:
                 EVENT_TASK_COMPLETE,
                 result["output"][:200],
                 task_id=task_id,
-                metadata={"status": "completed", "provider": "opencode", "session_id": run.session_id},
+                metadata={
+                    "status": "completed",
+                    "provider": "opencode",
+                    "session_id": run.session_id,
+                    "resumed_session": bool(effective_resume_session_id),
+                    "channel_id": channel_id or "",
+                },
             )
             if emit_notifications:
                 await notify_task_completed(task_id, result["output"])
@@ -1150,7 +1169,7 @@ class JarvisOrchestrator:
                 task_description,
                 task_id=task_id,
                 cost_usd=result["cost_usd"],
-                metadata={"origin": origin, "slack_notify": emit_notifications},
+                metadata={"origin": origin, "emit_notifications": emit_notifications},
             )
             if emit_notifications:
                 await notify_task_completed(task_id, task_description, result["cost_usd"])
@@ -1162,7 +1181,7 @@ class JarvisOrchestrator:
                 metadata={
                     "error": result["output"][:5000],
                     "origin": origin,
-                    "slack_notify": emit_notifications,
+                    "emit_notifications": emit_notifications,
                 },
             )
             if emit_notifications:
@@ -1280,15 +1299,17 @@ class JarvisOrchestrator:
         origin: str = "user",
         emit_notifications: bool = True,
         channel_id: str | None = None,
+        resume_session_id: str | None = None,
     ) -> dict:
         """Execute a task autonomously.
 
         Args:
             task_description: Natural language task description
             callback: Optional callback(event_type, data) for progress reporting
-            origin: Origin identifier (user, slack, a2a, etc.)
+            origin: Origin identifier (user, a2a, ws, etc.)
             emit_notifications: Whether to emit notifications
             channel_id: Optional channel ID for session isolation
+            resume_session_id: Optional OpenCode session id for explicit resume
 
         Returns:
             Task result dict with status, cost, session_id
@@ -1319,7 +1340,7 @@ class JarvisOrchestrator:
             task_id=task_id,
             metadata={
                 "origin": origin,
-                "slack_notify": emit_notifications,
+                "emit_notifications": emit_notifications,
             },
         )
         if callback:
@@ -1363,7 +1384,12 @@ class JarvisOrchestrator:
             )
         if provider_type == "opencode":
             opencode_result = await self._run_task_opencode(
-                task_id, routed_description, model_id, emit_notifications
+                task_id,
+                routed_description,
+                model_id,
+                emit_notifications,
+                channel_id=channel_id,
+                resume_session_id=resume_session_id,
             )
             return await self._finalize_task_result(
                 result=opencode_result,
@@ -1857,7 +1883,7 @@ class JarvisOrchestrator:
         *,
         origin: str = "message",
     ) -> dict:
-        """Backward-compat alias for chat(). Callers: ws_server, slack_bot."""
+        """Backward-compat alias for chat(). Callers: ws_server and integrations."""
         return await self.chat(user_message, origin=origin)
 
     def _normalize_mail_digest(self, payload: Any, fallback_text: str) -> dict[str, Any]:

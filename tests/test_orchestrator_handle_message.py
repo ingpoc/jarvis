@@ -112,7 +112,7 @@ def test_handle_message_failed_when_empty_reply():
 
     with patch("jarvis.orchestrator.core.ensure_project_jarvis_file"):
         with patch("jarvis.orchestrator.core.append_project_turn"):
-            result = asyncio.run(_run(orch.handle_message("hi", origin="slack:test")))
+            result = asyncio.run(_run(orch.handle_message("hi", origin="ws:test")))
 
     assert result["status"] == "failed"
     assert result["decision"]["confidence"] == 0.0

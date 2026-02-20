@@ -1,7 +1,7 @@
 """macOS native notifications for Jarvis.
 
 Uses osascript for native Notification Center integration.
-Also dispatches to Slack and voice when enabled.
+Also dispatches to voice when enabled.
 4 priority levels matching the UX proposal:
 - Low: menu bar badge only (no notification)
 - Medium: banner (auto-dismiss)
@@ -18,20 +18,8 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
-# Global references set by daemon/orchestrator at startup
-_slack_bot = None
+# Global reference set by daemon/orchestrator at startup
 _voice_client = None
-
-
-def set_slack_bot(bot) -> None:
-    """Register Slack bot for notification dispatch."""
-    global _slack_bot
-    _slack_bot = bot
-
-
-def get_slack_bot():
-    """Get the registered Slack bot instance (or None)."""
-    return _slack_bot
 
 
 def set_voice_client(client) -> None:
@@ -54,7 +42,7 @@ async def notify(
     subtitle: str = "",
     sound: bool | None = None,
 ) -> None:
-    """Send a notification via osascript + Slack + voice (when enabled).
+    """Send a notification via osascript + voice (when enabled).
 
     Args:
         title: Notification title
@@ -68,17 +56,6 @@ async def notify(
 
     # macOS native notification
     await _notify_osascript(title, message, subtitle, sound, priority)
-
-    # Slack dispatch
-    if _slack_bot:
-        try:
-            slack_text = f"*{title}*"
-            if subtitle:
-                slack_text += f" ({subtitle})"
-            slack_text += f"\n{message}"
-            await _slack_bot.send_message(slack_text)
-        except Exception as e:
-            logger.debug(f"Slack notification failed: {e}")
 
     # Voice dispatch for critical/high priority
     if _voice_client and priority in (Priority.HIGH, Priority.CRITICAL):

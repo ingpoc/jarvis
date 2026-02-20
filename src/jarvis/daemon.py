@@ -1,4 +1,4 @@
-"""Jarvis daemon: persistent background process with WS + Slack + Voice + Idle."""
+"""Jarvis daemon: persistent background process with WS + Voice + Idle."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from urllib import parse, request
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jarvis.config import JARVIS_LOGS, JARVIS_PIDS, JarvisConfig, ensure_jarvis_home
-from jarvis.notifications import set_slack_bot, set_voice_client
+from jarvis.notifications import set_voice_client
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.ws_server import JarvisWSServer
 from jarvis.mcp_health import health_check_all_servers, filter_healthy_servers, notify_health_failures
@@ -119,7 +119,7 @@ class CrashRecovery:
 
 
 class JarvisDaemon:
-    """Long-running daemon: WebSocket bridge + optional Slack/Voice + Idle processing."""
+    """Long-running daemon: WebSocket bridge + optional Voice + Idle processing."""
 
     def __init__(self, project_path: str | None = None):
         ensure_jarvis_home()
@@ -132,8 +132,6 @@ class JarvisDaemon:
         self._remote_server = None
         self._rest_app = None
         self._rest_runner = None
-        self._slack_bot = None
-        self._slack_task: asyncio.Task | None = None
         self._voice_client = None
         self._idle_processor = None
         self._file_watcher = None
@@ -179,31 +177,6 @@ class JarvisDaemon:
         # Remote WSS server (if enabled)
         if self._remote_enabled():
             await self._start_remote_server()
-
-        # Slack bot (optional)
-        if self.config.slack.enabled and self.config.slack.bot_token:
-            try:
-                from jarvis.slack_bot import JarvisSlackBot
-
-                self._slack_bot = JarvisSlackBot(
-                    bot_token=self.config.slack.bot_token,
-                    app_token=self.config.slack.app_token,
-                    default_channel=self.config.slack.default_channel,
-                    research_channel=self.config.slack.research_channel,
-                    event_collector=self.events,
-                    orchestrator=self.orchestrator,
-                )
-                set_slack_bot(self._slack_bot)
-                self._slack_task = asyncio.create_task(
-                    self._slack_bot.start(),
-                    name="jarvis-slack-bot",
-                )
-                self._slack_task.add_done_callback(self._on_slack_task_done)
-                logger.info("Slack bot start requested")
-            except ImportError:
-                logger.warning("slack-bolt not installed, skipping Slack integration")
-            except Exception as e:
-                logger.exception("Slack bot failed to start: %s", e)
 
         # Voice client (optional)
         if self.config.voice.enabled and self.config.voice.api_key:
@@ -359,15 +332,6 @@ class JarvisDaemon:
         # Block until stop is requested
         await self._stop_event.wait()
 
-    def _on_slack_task_done(self, task: asyncio.Task) -> None:
-        """Log Slack task failures instead of letting them surface as unhandled."""
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            logger.exception("Slack bot task crashed")
-
     async def _iokit_idle_loop(self) -> None:
         """Poll IOKit HID idle time and trigger idle mode transitions.
 
@@ -515,17 +479,6 @@ class JarvisDaemon:
 
         if self._rest_runner:
             await self._rest_runner.cleanup()
-
-        if self._slack_bot:
-            try:
-                await self._slack_bot.stop()
-            except Exception as e:
-                logger.exception("Slack bot stop error: %s", e)
-        if self._slack_task:
-            self._slack_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._slack_task
-            self._slack_task = None
 
         if self._voice_client:
             try:

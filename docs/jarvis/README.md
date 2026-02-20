@@ -9,7 +9,8 @@ Project-specific conventions and references.
 | [api-reference.md](api-reference.md) | WebSocket API | Integrating |
 | [scripts.md](scripts.md) | Validation/build scripts | Verifying changes |
 | [HOW_JARVIS_OPERATES.md](HOW_JARVIS_OPERATES.md) | End-to-end execution model | Architecture deep dive |
-| [../workflow/openclaw-jarvis-integration.md](../workflow/openclaw-jarvis-integration.md) | OpenClaw plugin + routing setup | OpenClaw integration |
+| [../workflow/openclaw-integration.md](../workflow/openclaw-integration.md) | OpenClaw gateway/channels/model/sandbox operations | OpenClaw runtime integration |
+| [../workflow/openclaw-jarvis-integration.md](../workflow/openclaw-jarvis-integration.md) | OpenClaw plugin + routing setup for Jarvis delegation | OpenClaw ↔ Jarvis integration |
 | [../workflow/local-models-integration.md](../workflow/local-models-integration.md) | Provider routing + OpenCode runtime behavior | Model/delegation runtime |
 
 ## Quick Start

@@ -54,6 +54,7 @@ class JarvisA2AClient:
         *,
         blocking: bool = False,
         context_id: str | None = None,
+        resume_session_id: str | None = None,
         request_id: str | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
@@ -62,6 +63,8 @@ class JarvisA2AClient:
         }
         if context_id:
             params["contextId"] = context_id
+        if resume_session_id:
+            params["resumeSessionId"] = resume_session_id
         return self._jsonrpc("message/send", params, request_id=request_id)
 
     def stream_message(
@@ -70,6 +73,7 @@ class JarvisA2AClient:
         task_id: str | None = None,
         message: str | None = None,
         context_id: str | None = None,
+        resume_session_id: str | None = None,
         request_id: str | None = None,
     ) -> dict[str, Any]:
         if not task_id and not message:
@@ -81,6 +85,8 @@ class JarvisA2AClient:
             params["message"] = message
         if context_id:
             params["contextId"] = context_id
+        if resume_session_id:
+            params["resumeSessionId"] = resume_session_id
         return self._jsonrpc("message/stream", params, request_id=request_id)
 
     def get_task(self, task_id: str, *, request_id: str | None = None) -> dict[str, Any]:

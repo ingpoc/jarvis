@@ -1,6 +1,6 @@
 """Session manager for per-channel ClaudeSDKClient isolation.
 
-Prevents context bleeding between different channels (Slack, A2A, CLI).
+Prevents context bleeding between different channels (A2A, CLI, WS).
 """
 
 import asyncio

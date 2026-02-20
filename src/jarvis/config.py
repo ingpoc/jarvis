@@ -75,17 +75,6 @@ class ModelConfig:
 
 
 @dataclass
-class SlackConfig:
-    """Slack integration settings."""
-
-    bot_token: str = ""
-    app_token: str = ""
-    default_channel: str = "#jarvis"
-    research_channel: str = "#jarvisresearch"
-    enabled: bool = False
-
-
-@dataclass
 class VoiceConfig:
     """ElevenLabs voice integration settings."""
 
@@ -157,7 +146,6 @@ class JarvisConfig:
     container: ContainerConfig = field(default_factory=ContainerConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     models: ModelConfig = field(default_factory=ModelConfig)
-    slack: SlackConfig = field(default_factory=SlackConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     a2a: A2AConfig = field(default_factory=A2AConfig)
     mail: MailConfig = field(default_factory=MailConfig)
@@ -186,7 +174,6 @@ class JarvisConfig:
             apply_section(config.container, data, "container")
             apply_section(config.budget, data, "budget")
             apply_section(config.models, data, "models")
-            apply_section(config.slack, data, "slack")
             apply_section(config.voice, data, "voice")
             apply_section(config.mail, data, "mail")
             apply_section(config.knowledge, data, "knowledge")
@@ -199,15 +186,9 @@ class JarvisConfig:
                 config.workspace_root = data["workspace_root"]
 
         # Env var overrides for tokens
-        slack_bot = os.environ.get("JARVIS_SLACK_BOT_TOKEN")
-        slack_app = os.environ.get("JARVIS_SLACK_APP_TOKEN")
         voice_key = os.environ.get("ELEVENLABS_API_KEY")
         voice_agent = os.environ.get("ELEVENLABS_AGENT_ID")
 
-        if slack_bot:
-            config.slack.bot_token = slack_bot
-        if slack_app:
-            config.slack.app_token = slack_app
         if voice_key:
             config.voice.api_key = voice_key
         if voice_agent:
@@ -273,13 +254,6 @@ class JarvisConfig:
                 "reviewer": self.models.reviewer,
                 "quick": self.models.quick,
                 "provider_type": getattr(self.models, "provider_type", "anthropic"),
-            },
-            "slack": {
-                "bot_token": self.slack.bot_token,
-                "app_token": self.slack.app_token,
-                "default_channel": self.slack.default_channel,
-                "research_channel": self.slack.research_channel,
-                "enabled": self.slack.enabled,
             },
             "voice": {
                 "api_key": self.voice.api_key,

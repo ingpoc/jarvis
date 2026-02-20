@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk";
@@ -15,6 +17,23 @@ type PluginCfg = {
 };
 
 type JsonObject = Record<string, unknown>;
+type JobEntry = {
+  contextId: string;
+  lastTaskId: string;
+  updatedAt: number;
+  lastStatus?: string;
+  opencodeSessionId?: string;
+};
+
+type ScopeState = {
+  jobs: Record<string, JobEntry>;
+  lastJobId?: string;
+};
+
+type BridgeState = {
+  version: 1;
+  scopes: Record<string, ScopeState>;
+};
 
 const TERMINAL_STATES = new Set(["completed", "failed", "canceled", "rejected"]);
 
@@ -34,7 +53,13 @@ const JarvisTaskSchema = {
     },
     commandName: { type: "string" },
     skillName: { type: "string" },
+    jobId: { type: "string", description: "Stable logical job id for follow-up routing." },
+    followUp: {
+      type: "boolean",
+      description: "Resume the most recent job in the current scope when jobId/contextId are omitted.",
+    },
     contextId: { type: "string", description: "Optional A2A context id." },
+    resumeSessionId: { type: "string", description: "Optional OpenCode session id to resume explicitly." },
     wait: { type: "boolean", description: "Wait for completion before returning." },
     timeoutSec: {
       type: "number",
@@ -79,7 +104,7 @@ async function resolveToken(cfg: PluginCfg): Promise<string> {
     }
   }
 
-  const tokenPath = expandHome(cfg.tokenPath || "~/.jarvis/a2a_token");
+  const tokenPath = expandHome(cfg.tokenPath || "~/.jarvis/system/jarvis_config/a2a_token");
   try {
     const token = (await fs.readFile(tokenPath, "utf8")).trim();
     if (token) {
@@ -98,6 +123,46 @@ async function resolveToken(cfg: PluginCfg): Promise<string> {
 function resolveBaseUrl(cfg: PluginCfg): string {
   const raw = (cfg.baseUrl || process.env.JARVIS_A2A_URL || "http://127.0.0.1:9848").trim();
   return raw.replace(/\/+$/, "");
+}
+
+function stateFilePath(): string {
+  return path.join(os.homedir(), ".openclaw", "jarvis-bridge-jobs.json");
+}
+
+function buildScopeKey(rawScopeKey?: string): string {
+  const value = String(rawScopeKey || "").trim();
+  return value || "global";
+}
+
+async function loadBridgeState(): Promise<BridgeState> {
+  const file = stateFilePath();
+  try {
+    const raw = await fs.readFile(file, "utf8");
+    const parsed = JSON.parse(raw) as Partial<BridgeState>;
+    const scopes = parsed.scopes && typeof parsed.scopes === "object" ? parsed.scopes : {};
+    return {
+      version: 1,
+      scopes: scopes as Record<string, ScopeState>,
+    };
+  } catch {
+    return { version: 1, scopes: {} };
+  }
+}
+
+async function saveBridgeState(state: BridgeState): Promise<void> {
+  const file = stateFilePath();
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(state, null, 2), "utf8");
+}
+
+function getScopeState(state: BridgeState, scopeKey: string): ScopeState {
+  const existing = state.scopes[scopeKey];
+  if (existing && typeof existing === "object" && existing.jobs && typeof existing.jobs === "object") {
+    return existing;
+  }
+  const created: ScopeState = { jobs: {} };
+  state.scopes[scopeKey] = created;
+  return created;
 }
 
 async function postJson(
@@ -209,6 +274,7 @@ async function executeJarvisCodeTask(
   api: OpenClawPluginApi,
   _toolCallId: string,
   params: Record<string, unknown>,
+  opts?: { scopeKey?: string },
 ): Promise<{ content: Array<{ type: string; text: string }>; details?: unknown }> {
   const cfg = (api.pluginConfig || {}) as PluginCfg;
   const task = String(params.task ?? params.command ?? "").trim();
@@ -219,20 +285,59 @@ async function executeJarvisCodeTask(
   const wait = Boolean(params.wait ?? cfg.defaultWait ?? false);
   const timeoutSec = Number(params.timeoutSec ?? cfg.defaultTimeoutSec ?? 300);
   const pollIntervalMs = Number(params.pollIntervalMs ?? cfg.pollIntervalMs ?? 1000);
-  const contextId = typeof params.contextId === "string" ? params.contextId : undefined;
+  const scopeKey = buildScopeKey(opts?.scopeKey);
+  const state = await loadBridgeState();
+  const scope = getScopeState(state, scopeKey);
+  const requestedJobId = typeof params.jobId === "string" ? params.jobId.trim() : "";
+  const requestedContextId = typeof params.contextId === "string" ? params.contextId.trim() : "";
+  const requestedResumeSessionId =
+    typeof params.resumeSessionId === "string" ? params.resumeSessionId.trim() : "";
+  const followUp = Boolean(params.followUp ?? false);
+
+  let jobId = requestedJobId;
+  let contextId = requestedContextId;
+  let resumeSessionId = requestedResumeSessionId;
+  let resumeSource = "explicit";
+
+  if (!contextId && jobId && scope.jobs[jobId]?.contextId) {
+    contextId = scope.jobs[jobId].contextId;
+    if (!resumeSessionId && scope.jobs[jobId]?.opencodeSessionId) {
+      resumeSessionId = scope.jobs[jobId].opencodeSessionId || "";
+    }
+    resumeSource = "job";
+  }
+  if (!contextId && !jobId && followUp && scope.lastJobId && scope.jobs[scope.lastJobId]?.contextId) {
+    jobId = scope.lastJobId;
+    contextId = scope.jobs[jobId].contextId;
+    if (!resumeSessionId && scope.jobs[jobId]?.opencodeSessionId) {
+      resumeSessionId = scope.jobs[jobId].opencodeSessionId || "";
+    }
+    resumeSource = "latest";
+  }
+  if (!jobId) {
+    jobId = `job-${crypto.randomUUID().slice(0, 8)}`;
+    resumeSource = "new";
+  }
+  if (!contextId) {
+    contextId = `ctx-${jobId}`;
+  }
 
   const baseUrl = resolveBaseUrl(cfg);
   const token = await resolveToken(cfg);
 
+  const sendParams: JsonObject = {
+    message: task,
+    blocking: false,
+    contextId,
+  };
+  if (resumeSessionId) {
+    sendParams.resumeSessionId = resumeSessionId;
+  }
   const submitted = await a2aCall(
     baseUrl,
     token,
     "message/send",
-    {
-      message: task,
-      blocking: false,
-      ...(contextId ? { contextId } : {}),
-    },
+    sendParams,
     15000,
   );
 
@@ -241,14 +346,31 @@ async function executeJarvisCodeTask(
     return toResult({ submitted, error: "Jarvis did not return a taskId." });
   }
 
+  const existingEntry = scope.jobs[jobId];
+  scope.jobs[jobId] = {
+    ...(existingEntry || { contextId }),
+    contextId,
+    lastTaskId: taskId,
+    updatedAt: Date.now(),
+    lastStatus: String(submitted.status || "submitted"),
+    opencodeSessionId: existingEntry?.opencodeSessionId,
+  };
+  scope.lastJobId = jobId;
+  await saveBridgeState(state);
+
   if (!wait) {
     return toResult(
       {
         submitted,
-        bridge: {
-          mode: "non-blocking",
-          getTask: "Use tool `jarvis_delegate_task` with the same task id via `contextId` for follow-up if needed.",
-        },
+          bridge: {
+            mode: "non-blocking",
+            scopeKey,
+            jobId,
+            contextId,
+            resumeSessionId: resumeSessionId || undefined,
+            resumeSource,
+            getTask: "Use jobId/contextId for follow-ups to keep the same Jarvis/OpenCode context.",
+          },
       },
       "Delegated to Jarvis (non-blocking).",
     );
@@ -261,6 +383,19 @@ async function executeJarvisCodeTask(
     last = await a2aCall(baseUrl, token, "tasks/get", { taskId }, 15000);
     const status = String(last.status || "").toLowerCase().trim();
     if (TERMINAL_STATES.has(status)) {
+      const artifacts = Array.isArray(last.artifacts) ? (last.artifacts as Array<Record<string, unknown>>) : [];
+      const opencodeSessionArtifact = artifacts.find((a) => String(a?.name || "") === "opencode_session");
+      const opencodeSessionId = String(opencodeSessionArtifact?.content || "").trim();
+      scope.jobs[jobId] = {
+        ...(scope.jobs[jobId] || { contextId }),
+        contextId,
+        lastTaskId: taskId,
+        updatedAt: Date.now(),
+        lastStatus: status,
+        opencodeSessionId: opencodeSessionId || scope.jobs[jobId]?.opencodeSessionId,
+      };
+      scope.lastJobId = jobId;
+      await saveBridgeState(state);
       return toResult(
         {
           submitted,
@@ -268,6 +403,12 @@ async function executeJarvisCodeTask(
           bridge: {
             delegatedTo: "jarvis-a2a",
             baseUrl,
+            scopeKey,
+            jobId,
+            contextId,
+            resumeSessionId: resumeSessionId || undefined,
+            resumeSource,
+            opencodeSessionId,
           },
         },
         `Delegated to Jarvis and completed with status: ${status}.`,
@@ -283,6 +424,11 @@ async function executeJarvisCodeTask(
       bridge: {
         timeoutSec,
         pollIntervalMs,
+        scopeKey,
+        jobId,
+        contextId,
+        resumeSessionId: resumeSessionId || undefined,
+        resumeSource,
       },
     },
     `Delegated to Jarvis, but timed out after ${timeoutSec}s.`,
@@ -311,10 +457,14 @@ export default function register(api: OpenClawPluginApi) {
       executeJarvisCodeTask(api, toolCallId, params),
   } as AnyAgentTool);
 
-  api.registerGatewayMethod("jarvis.codeTask", async ({ params, respond }) => {
+  api.registerGatewayMethod("jarvis.codeTask", async ({ params, respond, context }) => {
     try {
       const requestParams = normalizeGatewayPayload(params);
-      const result = await executeJarvisCodeTask(api, "gateway", requestParams);
+      const scopeKey =
+        String((context as Record<string, unknown> | undefined)?.sessionKey || "").trim() ||
+        String((requestParams as Record<string, unknown>).sessionKey || "").trim() ||
+        undefined;
+      const result = await executeJarvisCodeTask(api, "gateway", requestParams, { scopeKey });
       respond(true, result.details ?? {});
     } catch (err) {
       respond(false, {
@@ -323,10 +473,14 @@ export default function register(api: OpenClawPluginApi) {
     }
   });
 
-  api.registerGatewayMethod("jarvis.delegateTask", async ({ params, respond }) => {
+  api.registerGatewayMethod("jarvis.delegateTask", async ({ params, respond, context }) => {
     try {
       const requestParams = normalizeGatewayPayload(params);
-      const result = await executeJarvisCodeTask(api, "gateway", requestParams);
+      const scopeKey =
+        String((context as Record<string, unknown> | undefined)?.sessionKey || "").trim() ||
+        String((requestParams as Record<string, unknown>).sessionKey || "").trim() ||
+        undefined;
+      const result = await executeJarvisCodeTask(api, "gateway", requestParams, { scopeKey });
       respond(true, result.details ?? {});
     } catch (err) {
       respond(false, {
@@ -343,11 +497,12 @@ export default function register(api: OpenClawPluginApi) {
       const args = (ctx.args || "").trim();
       if (!args) {
         return {
-          text: "Usage: /jarvis <task>",
+          text: "Usage: /jarvis <task> (follow-up: include jobId/contextId from prior response)",
         };
       }
       try {
-        const result = await executeJarvisCodeTask(api, "command", { task: args, wait: true });
+        const scopeKey = String((ctx as Record<string, unknown> | undefined)?.sessionKey || "").trim() || undefined;
+        const result = await executeJarvisCodeTask(api, "command", { task: args, wait: true }, { scopeKey });
         return { text: result.content[0]?.text || "Delegated to Jarvis." };
       } catch (err) {
         return { text: `Jarvis delegation failed: ${err instanceof Error ? err.message : String(err)}` };

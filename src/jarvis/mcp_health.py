@@ -191,17 +191,7 @@ async def notify_health_failures(health_results: dict[str, Any]) -> None:
     for line in unhealthy:
         logger.warning(f"MCP health failure: {line}")
 
-    # Try Slack notification via the public accessor
-    try:
-        from jarvis.notifications import get_slack_bot
-        slack_bot = get_slack_bot()
-        if slack_bot:
-            message = "MCP Server Health Check Failed:\n" + "\n".join(unhealthy)
-            await slack_bot.post_message(message)
-    except (ImportError, AttributeError) as e:
-        logger.debug(f"Slack notification unavailable: {e}")
-    except Exception as e:
-        logger.error(f"Failed to send health check notification: {e}")
+    # Slack integration intentionally removed from Jarvis runtime.
 
 
 def filter_healthy_servers(mcp_servers: dict[str, Any], health_results: dict[str, Any]) -> dict[str, Any]:

@@ -2,6 +2,8 @@
 
 Use this guide to make OpenClaw route execution tasks to Jarvis over A2A.
 
+Standalone OpenClaw runtime operations (gateway/channels/model auth/sandbox/pairing) are documented in `openclaw-integration.md`.
+
 ## OpenClaw Research Verdict (2026-02-19)
 
 **Source**:
@@ -103,6 +105,12 @@ Net effect: continuous research intake, anti-loop memory discipline, and explici
 ### Operational caveat observed
 
 `openclaw` gateway RPC calls can intermittently return `1006` closure in this environment; a quick `openclaw gateway health` call before cron/gateway operations stabilizes command reliability.
+
+## OpenClaw Runtime Failures (Reference)
+
+For standalone OpenClaw runtime recovery (sandbox/pairing/auth/slack), follow:
+
+- `docs/workflow/openclaw-integration.md`
 
 ## OpenClaw Workspace Files To Use Intentionally
 
@@ -211,6 +219,15 @@ Ensure OpenClaw workspace control files mirror runtime behavior:
 - `TOOLS.md`: route implementation-heavy work via `jarvis_delegate_task` / `jarvis.delegateTask`.
 - `BOOT.md`: includes `AGENTS.md`, `TOOLS.md`, and ledgers in startup reads.
 - `references/jarvis-work-queue.md`: track atomic delegated steps and checkpoints.
+
+### Follow-up Session Continuity (OpenClaw -> Jarvis -> OpenCode)
+
+Best-practice resume contract:
+
+1. OpenClaw persists per-scope `jobId -> {contextId, opencodeSessionId}` in `~/.openclaw/jarvis-bridge-jobs.json`.
+2. Follow-ups should reuse `jobId` (or `followUp=true`) so `contextId` stays stable.
+3. If available, pass `resumeSessionId` to A2A `message/send` so OpenCode resumes even after daemon restart.
+4. Jarvis still keeps an in-memory `channel_id -> session_id` map for fast same-process resumes.
 
 ### OpenClaw-Owned Context Graph Loop
 

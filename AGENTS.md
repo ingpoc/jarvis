@@ -16,6 +16,7 @@ Agent-first development. Humans steer, agents execute.
 |large data → principles/token-efficiency.md
 |need a diagram / architecture diagram → workflow/draw-io-diagram-generation.md
 |local models / OpenCode / Foundation Models → workflow/local-models-integration.md
+|openclaw gateway / slack / model auth / sandbox / pairing issues → workflow/openclaw-integration.md
 |openclaw delegation / openclaw workspace docs / openclaw rule sync → workflow/openclaw-jarvis-integration.md
 |parallel subagents / git worktrees / containerized execution → workflow/opencode-parallel-worktrees.md
 |autonomous workflow choice / self-evolving execution loop → workflow/jarvis-autonomous-evolution.md
@@ -30,7 +31,7 @@ Agent-first development. Humans steer, agents execute.
 |new optimization proposal / should we add this capability → capabilities/checklist.md
 |principles:{agent-first.md,progressive-disclosure.md,determinism.md,token-efficiency.md}
 |updating docs / storing bugs / context graph → workflow/context-learning-loop.md
-|workflow:{openai-harness.md,openai-unrolling-codex-agent-loop.md,openai-unlocking-codex-harness.md,langchain-improving-deep-agents-harness-engineering.md,vercel-agents-md.md,local-models-integration.md,openclaw-jarvis-integration.md,opencode-parallel-worktrees.md,jarvis-autonomous-evolution.md,context-learning-loop.md,harness-governance.md,harness-purpose-map.md,social-post-intake.md}
+|workflow:{openai-harness.md,openai-unrolling-codex-agent-loop.md,openai-unlocking-codex-harness.md,langchain-improving-deep-agents-harness-engineering.md,vercel-agents-md.md,local-models-integration.md,openclaw-integration.md,openclaw-jarvis-integration.md,opencode-parallel-worktrees.md,jarvis-autonomous-evolution.md,context-learning-loop.md,harness-governance.md,harness-purpose-map.md,social-post-intake.md}
 |capabilities:{README.md,checklist.md,codex.md,claude-code.md,claude-agent-sdk-python.md}
 |architecture:{layers.md,taste-invariants.md}
 |jarvis:{debugging.md,api-reference.md,conventions.md,scripts.md}
@@ -102,7 +103,8 @@ For tasks delegated from OpenClaw to Jarvis over A2A:
 
 ## Docs + Compression Loop
 
-1. Jarvis may and should update `docs/` after non-trivial implementation or failure->fix work.
+1. Jarvis must update `docs/` in the same session after any non-trivial implementation or failure->fix work (no reminder required).
 2. Keep `AGENTS.md` compressed: only stable high-frequency rules and trigger/index pointers.
 3. Put detailed procedures and rationale in `docs/workflow/*.md`; reference them from `AGENTS.md` instead of duplicating.
 4. If a new repeated workflow appears, add one-line trigger in Docs Index and create/update the detailed workflow doc.
+5. Do not mark work complete until docs and relevant index entries are synchronized with behavior changes.

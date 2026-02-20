@@ -534,6 +534,7 @@ def a2a_card(base_url, json_output):
 @click.option("--token", default=None, help="Bearer token (optional, defaults to token file/env)")
 @click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/system/jarvis_config/a2a_token)")
 @click.option("--context-id", default=None, help="Optional context id for session isolation")
+@click.option("--resume-session-id", default=None, help="Optional OpenCode session id to resume explicitly")
 @click.option("--blocking/--non-blocking", default=False, help="Use A2A blocking execution mode")
 @click.option("--wait", "wait_for_completion", is_flag=True, help="Poll task until terminal state")
 @click.option("--timeout", default=120.0, type=float, show_default=True, help="Wait timeout in seconds")
@@ -545,6 +546,7 @@ def a2a_send(
     token,
     token_path,
     context_id,
+    resume_session_id,
     blocking,
     wait_for_completion,
     timeout,
@@ -558,6 +560,7 @@ def a2a_send(
             message,
             blocking=blocking,
             context_id=context_id,
+            resume_session_id=resume_session_id,
         )
         payload: dict[str, object] = {"submitted": submitted}
         task_id = submitted.get("taskId")
