@@ -2,13 +2,25 @@
 
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 JARVIS_HOME = Path.home() / ".jarvis"
 JARVIS_DB = JARVIS_HOME / "jarvis.db"
-JARVIS_CONFIG = JARVIS_HOME / "config.json"
 JARVIS_LOGS = JARVIS_HOME / "logs"
+JARVIS_PIDS = JARVIS_HOME / "pids"
+JARVIS_SYSTEM_DIR = JARVIS_HOME / "system"
+JARVIS_JARVIS_CONFIG_DIR = JARVIS_SYSTEM_DIR / "jarvis_config"
+JARVIS_OPENCODE_CONFIG_DIR = JARVIS_SYSTEM_DIR / "opencode_config"
+JARVIS_RUNTIME_WORKFLOW_DIR = JARVIS_HOME / "runtime_workflow"
+JARVIS_CONFIG = JARVIS_JARVIS_CONFIG_DIR / "config.json"
+JARVIS_ENV_FILE = JARVIS_JARVIS_CONFIG_DIR / ".env"
+JARVIS_LAUNCH_ENV = JARVIS_JARVIS_CONFIG_DIR / "launch.env"
+JARVIS_A2A_TOKEN = JARVIS_JARVIS_CONFIG_DIR / "a2a_token"
+JARVIS_OPENCODE_CONFIG = JARVIS_OPENCODE_CONFIG_DIR / "opencode.json"
+JARVIS_MCP_RUNTIME_CONFIG = JARVIS_RUNTIME_WORKFLOW_DIR / ".mcp.json"
+JARVIS_DYNAMIC_CAPABILITIES = JARVIS_RUNTIME_WORKFLOW_DIR / "dynamic_capabilities.json"
 DEFAULT_WORKSPACE_ROOT = str((JARVIS_HOME / "workspaces").expanduser())
 
 
@@ -91,7 +103,7 @@ class A2AConfig:
     enabled: bool = True
     port: int = 9848  # Can override with JARVIS_A2A_PORT env var
     default_trust_tier: int = 1
-    token_path: str = ""  # Empty means ~/.jarvis/a2a_token
+    token_path: str = ""  # Empty means ~/.jarvis/system/jarvis_config/a2a_token
     task_timeout_seconds: int = 18000  # 5 hours for long-running delegated tasks
 
 
@@ -239,7 +251,7 @@ class JarvisConfig:
 
     def save(self) -> None:
         """Persist config to disk."""
-        JARVIS_HOME.mkdir(parents=True, exist_ok=True)
+        ensure_jarvis_home()
         data = {
             "container": {
                 "default_image": self.container.default_image,
@@ -319,3 +331,11 @@ def ensure_jarvis_home() -> None:
     """Create Jarvis home directory structure."""
     JARVIS_HOME.mkdir(parents=True, exist_ok=True)
     JARVIS_LOGS.mkdir(parents=True, exist_ok=True)
+    JARVIS_PIDS.mkdir(parents=True, exist_ok=True)
+    JARVIS_SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+    JARVIS_JARVIS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    JARVIS_OPENCODE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    JARVIS_RUNTIME_WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
+    legacy_config = JARVIS_HOME / "config.json"
+    if not JARVIS_CONFIG.exists() and legacy_config.exists():
+        shutil.copy2(legacy_config, JARVIS_CONFIG)

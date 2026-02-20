@@ -148,6 +148,7 @@ final class WebSocketClient: WebSocketClientProtocol {
     private let session: URLSession = .shared
     private let url: URL
     private var reconnectWork: DispatchWorkItem?
+    private var workspaceRefreshWork: DispatchWorkItem?
     private var statusTimer: Timer?
 
     // Request/Response correlation
@@ -189,7 +190,7 @@ final class WebSocketClient: WebSocketClientProtocol {
         updateState(.connected)
         lastError = nil
         receiveLoop()
-        sendCommand(action: "get_status")
+        bootstrapState()
 
         // Poll status periodically
         statusTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
@@ -200,6 +201,7 @@ final class WebSocketClient: WebSocketClientProtocol {
     func disconnect() {
         updateState(.disconnected)
         reconnectWork?.cancel()
+        workspaceRefreshWork?.cancel()
         statusTimer?.invalidate()
         statusTimer = nil
         task?.cancel(with: .goingAway, reason: nil)
@@ -411,10 +413,15 @@ final class WebSocketClient: WebSocketClientProtocol {
             switch event.eventType {
             case "task_start":
                 status = .building
+                scheduleWorkspaceRefreshDebounced()
             case "task_complete":
                 status = pendingApprovals.isEmpty ? .completed : .waitingApproval
+                scheduleWorkspaceRefreshDebounced()
+            case "tool_use", "task_execution_config":
+                scheduleWorkspaceRefreshDebounced()
             case "error":
                 status = .error
+                scheduleWorkspaceRefreshDebounced()
             case "approval_needed":
                 status = .waitingApproval
             case "idle_enter":
@@ -498,9 +505,21 @@ final class WebSocketClient: WebSocketClientProtocol {
             }
         case "get_workspace_snapshot":
             if let data = json["data"] as? [String: Any],
-               let payload = try? JSONSerialization.data(withJSONObject: data),
-               let resp = try? JSONDecoder().decode(WorkspaceSnapshotResponse.self, from: payload) {
-                workspaceSnapshot = resp
+               let payload = try? JSONSerialization.data(withJSONObject: data) {
+                do {
+                    let resp = try JSONDecoder().decode(WorkspaceSnapshotResponse.self, from: payload)
+                    workspaceSnapshot = resp
+                    lastError = nil
+                } catch {
+                    if let fallback = parseWorkspaceSnapshot(from: data) {
+                        workspaceSnapshot = fallback
+                        lastError = nil
+                        logger.warning("Workspace snapshot used lenient parse fallback after decode error: \(error.localizedDescription)")
+                    } else {
+                        logger.error("Failed to decode workspace snapshot: \(error.localizedDescription)")
+                        lastError = "Workspace decode failed: \(error.localizedDescription)"
+                    }
+                }
             }
         case "run_task":
             // Task was queued
@@ -518,6 +537,203 @@ final class WebSocketClient: WebSocketClientProtocol {
         }
         reconnectWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+    }
+
+    private func bootstrapState() {
+        sendCommand(action: "get_status")
+        sendCommand(action: "get_model_status")
+        sendCommand(action: "get_containers")
+        sendCommand(action: "get_available_tools")
+        sendCommand(action: "get_workspace_snapshot")
+    }
+
+    private func scheduleWorkspaceRefreshDebounced(delay: TimeInterval = 0.75) {
+        workspaceRefreshWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.sendCommand(action: "get_workspace_snapshot")
+        }
+        workspaceRefreshWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func parseWorkspaceSnapshot(from data: [String: Any]) -> WorkspaceSnapshotResponse? {
+        guard let workspaceRoot = stringValue(data["workspace_root"]) else { return nil }
+
+        let runtimeRaw = data["runtime_config"] as? [String: Any] ?? [:]
+        let runtime = RuntimeConfig(
+            providerType: stringValue(runtimeRaw["provider_type"]),
+            modelExecutor: stringValue(runtimeRaw["model_executor"]),
+            workspaceRootConfig: stringValue(runtimeRaw["workspace_root_config"]),
+            a2aWorkflowMode: stringValue(runtimeRaw["a2a_workflow_mode"]),
+            a2aOpencodeModel: stringValue(runtimeRaw["a2a_opencode_model"]),
+            taskTimeoutSecs: stringValue(runtimeRaw["task_timeout_secs"]),
+            opencodeTimeoutSecs: stringValue(runtimeRaw["opencode_timeout_secs"]),
+            delegatedProviderPolicy: stringValue(runtimeRaw["delegated_provider_policy"]),
+            delegatedPermissionMode: stringValue(runtimeRaw["delegated_permission_mode"]),
+            opencodeSessionPermissionProfile: stringValue(runtimeRaw["opencode_session_permission_profile"]),
+            opencodeSessionPermissionsCount: intValue(runtimeRaw["opencode_session_permissions_count"]),
+            mcpConfigSource: stringValue(runtimeRaw["mcp_config_source"]),
+            loadedStaticMcpServers: (runtimeRaw["loaded_static_mcp_servers"] as? [Any] ?? []).compactMap { stringValue($0) },
+            loadedDynamicMcpServers: (runtimeRaw["loaded_dynamic_mcp_servers"] as? [Any] ?? []).compactMap { stringValue($0) },
+            capabilityToolCount: intValue(runtimeRaw["capability_tool_count"]),
+            capabilityMcpToolCount: intValue(runtimeRaw["capability_mcp_tool_count"]),
+            capabilityAgents: (runtimeRaw["capability_agents"] as? [Any] ?? []).compactMap { stringValue($0) },
+            capabilityHooks: (runtimeRaw["capability_hooks"] as? [Any] ?? []).compactMap { stringValue($0) },
+            capabilitySkills: (runtimeRaw["capability_skills"] as? [Any] ?? []).compactMap { stringValue($0) },
+            skillsEnabled: boolValue(runtimeRaw["skills_enabled"]),
+            skillToolAvailable: boolValue(runtimeRaw["skill_tool_available"]),
+            discoveredSkillCount: intValue(runtimeRaw["discovered_skill_count"]),
+            discoveredSkillsPreview: (runtimeRaw["discovered_skills_preview"] as? [Any] ?? []).compactMap { stringValue($0) },
+            discoveredSkills: (runtimeRaw["discovered_skills"] as? [Any] ?? []).compactMap { stringValue($0) },
+            discoveredMcpServers: (runtimeRaw["discovered_mcp_servers"] as? [Any] ?? []).compactMap { stringValue($0) }
+        )
+
+        let summaryRaw = data["summary"] as? [String: Any] ?? [:]
+        let summary = WorkspaceSummary(
+            worktreeCount: intValue(summaryRaw["worktree_count"]) ?? 0,
+            containerCount: intValue(summaryRaw["container_count"]) ?? 0,
+            mappedContainerCount: intValue(summaryRaw["mapped_container_count"]) ?? 0,
+            generatedAt: stringValue(summaryRaw["generated_at"])
+        )
+        let pathsRaw = data["paths"] as? [String: Any] ?? [:]
+        let paths = WorkspacePaths(
+            jarvisHome: stringValue(pathsRaw["jarvis_home"]),
+            systemDir: stringValue(pathsRaw["system_dir"]),
+            jarvisConfig: stringValue(pathsRaw["jarvis_config"]),
+            opencodeConfig: stringValue(pathsRaw["opencode_config"]),
+            runtimeWorkflowDir: stringValue(pathsRaw["runtime_workflow_dir"]),
+            runtimeDocsDir: stringValue(pathsRaw["runtime_docs_dir"]),
+            runtimeMcpConfig: stringValue(pathsRaw["runtime_mcp_config"]),
+            a2aToken: stringValue(pathsRaw["a2a_token"]),
+            logsDir: stringValue(pathsRaw["logs_dir"]),
+            dbPath: stringValue(pathsRaw["db_path"]),
+            pidsDir: stringValue(pathsRaw["pids_dir"])
+        )
+
+        let worktreeItems: [[String: Any]] = data["worktrees"] as? [[String: Any]] ?? []
+        let worktrees: [WorkspaceWorktree] = worktreeItems.compactMap { item in
+            guard let id = stringValue(item["id"]), let path = stringValue(item["path"]) else { return nil }
+            return WorkspaceWorktree(id: id, path: path)
+        }
+
+        let containerItems: [[String: Any]] = data["containers"] as? [[String: Any]] ?? []
+        let containers: [WorkspaceContainer] = containerItems.compactMap { item in
+            guard let id = stringValue(item["id"]) else { return nil }
+            let mountPaths = (item["mount_paths"] as? [Any] ?? []).compactMap { stringValue($0) }
+            return WorkspaceContainer(
+                id: id,
+                name: stringValue(item["name"]) ?? id,
+                status: stringValue(item["status"]) ?? "unknown",
+                image: stringValue(item["image"]) ?? "unknown",
+                cpus: intValue(item["cpus"]),
+                memory: stringValue(item["memory"]),
+                taskId: stringValue(item["task_id"]),
+                mountPaths: mountPaths,
+                worktreePath: stringValue(item["worktree_path"])
+            )
+        }
+
+        let taskExecutions: [WorkspaceTaskExecution]? = (data["task_executions"] as? [[String: Any]])?.compactMap { item in
+            guard let taskId = stringValue(item["task_id"]) else { return nil }
+            return WorkspaceTaskExecution(
+                taskId: taskId,
+                description: stringValue(item["description"]) ?? "",
+                status: stringValue(item["status"]) ?? "unknown",
+                providerType: stringValue(item["provider_type"]) ?? "unknown",
+                modelId: stringValue(item["model_id"]) ?? "unknown",
+                workflow: stringValue(item["workflow"]) ?? "autonomous",
+                workflowReason: stringValue(item["workflow_reason"]),
+                updatedAt: doubleValue(item["updated_at"])
+            )
+        }
+
+        let recentEvents: [WorkspaceTraceEvent]? = (data["recent_events"] as? [[String: Any]])?.compactMap { item in
+            guard let id = stringValue(item["id"]) else { return nil }
+            let metadataRaw = item["metadata"] as? [String: Any]
+            let metadata = metadataRaw?.reduce(into: [String: String]()) { acc, pair in
+                if let value = stringValue(pair.value) {
+                    acc[pair.key] = value
+                }
+            }
+            return WorkspaceTraceEvent(
+                id: id,
+                timestamp: doubleValue(item["timestamp"]) ?? 0,
+                eventType: stringValue(item["event_type"]) ?? "",
+                summary: stringValue(item["summary"]) ?? "",
+                taskId: stringValue(item["task_id"]),
+                metadata: metadata
+            )
+        }
+
+        return WorkspaceSnapshotResponse(
+            workspaceRoot: workspaceRoot,
+            runtimeConfig: runtime,
+            summary: summary,
+            paths: paths,
+            worktrees: worktrees,
+            containers: containers,
+            taskExecutions: taskExecutions,
+            recentEvents: recentEvents
+        )
+    }
+
+    private func stringValue(_ any: Any?) -> String? {
+        switch any {
+        case let value as String:
+            return value
+        case let value as NSNumber:
+            return value.stringValue
+        case let value as Bool:
+            return value ? "true" : "false"
+        case let value?:
+            return String(describing: value)
+        default:
+            return nil
+        }
+    }
+
+    private func intValue(_ any: Any?) -> Int? {
+        switch any {
+        case let value as Int:
+            return value
+        case let value as NSNumber:
+            return value.intValue
+        case let value as String:
+            return Int(value)
+        default:
+            return nil
+        }
+    }
+
+    private func doubleValue(_ any: Any?) -> Double? {
+        switch any {
+        case let value as Double:
+            return value
+        case let value as Int:
+            return Double(value)
+        case let value as NSNumber:
+            return value.doubleValue
+        case let value as String:
+            return Double(value)
+        default:
+            return nil
+        }
+    }
+
+    private func boolValue(_ any: Any?) -> Bool? {
+        switch any {
+        case let value as Bool:
+            return value
+        case let value as NSNumber:
+            return value.boolValue
+        case let value as String:
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if ["1", "true", "yes", "on"].contains(normalized) { return true }
+            if ["0", "false", "no", "off"].contains(normalized) { return false }
+            return nil
+        default:
+            return nil
+        }
     }
 
     private func updateState(_ newState: ConnectionState) {

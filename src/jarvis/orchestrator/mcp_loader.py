@@ -12,6 +12,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from jarvis.config import JARVIS_MCP_RUNTIME_CONFIG
+
 logger = logging.getLogger(__name__)
 
 # Repository root for fallback .mcp.json lookup
@@ -28,10 +30,9 @@ class MCPConfigLoader:
         """Load MCP servers from project config and built-in documentation defaults."""
         configured: dict[str, dict] = {}
 
-        # Load .mcp.json from workspace first, then fallback to Jarvis core repo.
+        # Strict source of truth: runtime workflow MCP config under ~/.jarvis.
         mcp_candidates = [
-            Path(self.project_path) / ".mcp.json",
-            REPO_ROOT / ".mcp.json",
+            JARVIS_MCP_RUNTIME_CONFIG,
         ]
         for mcp_json_path in mcp_candidates:
             if not mcp_json_path.exists():

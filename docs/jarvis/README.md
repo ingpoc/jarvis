@@ -10,6 +10,7 @@ Project-specific conventions and references.
 | [scripts.md](scripts.md) | Validation/build scripts | Verifying changes |
 | [HOW_JARVIS_OPERATES.md](HOW_JARVIS_OPERATES.md) | End-to-end execution model | Architecture deep dive |
 | [../workflow/openclaw-jarvis-integration.md](../workflow/openclaw-jarvis-integration.md) | OpenClaw plugin + routing setup | OpenClaw integration |
+| [../workflow/local-models-integration.md](../workflow/local-models-integration.md) | Provider routing + OpenCode runtime behavior | Model/delegation runtime |
 
 ## Quick Start
 
@@ -24,8 +25,8 @@ Project-specific conventions and references.
 python3 scripts/validate_jarvis.py
 
 # A2A bridge helpers (for OpenClaw integration)
-jarvis a2a health -j
-jarvis a2a send "hello" --non-blocking -j
+.venv/bin/python -m jarvis.cli a2a health -j
+.venv/bin/python -m jarvis.cli a2a send "hello" --non-blocking -j
 ```
 
 ## Key Files
@@ -36,6 +37,47 @@ jarvis a2a send "hello" --non-blocking -j
 | `AGENTS.md` | Same as CLAUDE.md (OpenAI compat) |
 | `docs/` | Detailed documentation |
 | `scripts/` | Utilities and linters |
+
+## Runtime Home Layout (`~/.jarvis`)
+
+```text
+~/.jarvis/
+├── system/
+│   ├── jarvis_config/      # Human-managed runtime config (.env, config, launch env, A2A token)
+│   └── opencode_config/    # OpenCode config used by daemon/runtime
+├── runtime_workflow/       # Jarvis-managed workflow context (AGENTS.md, docs/, .mcp.json)
+├── workspaces/             # Task workspaces/worktrees created by Jarvis
+├── logs/                   # daemon.log, menubar.log
+├── pids/                   # process/service PID files
+└── jarvis.db               # runtime database
+```
+
+Operational rule:
+
+- `system/*` is authoritative runtime config.
+- `runtime_workflow/*` is where Jarvis self-evolves docs/workflows.
+- `workspaces/*` is execution output (project worktrees, artifacts).
+
+## Control Plane Tabs (App)
+
+- `Workspace`: runtime config, activity, and canonical runtime paths
+- `MCP`: OpenCode-discovered MCP server inventory
+- `Skills`: OpenCode-discovered skill inventory
+- `Tools`: OpenCode-discovered tool surfaces (with fallback)
+
+## Jarvis Docs Maintenance Contract
+
+- Jarvis should update workflow docs after non-trivial work or failure->fix paths.
+- Keep `AGENTS.md` compressed and trigger-based.
+- Put procedural details in `docs/workflow/*.md`.
+- Load docs progressively:
+  1. Start with `AGENTS.md` trigger/index.
+  2. Open only relevant workflow doc(s).
+  3. Load deeper references only if blocked.
+
+Primary doc for this behavior:
+
+- `docs/workflow/jarvis-autonomous-evolution.md`
 
 ## Architecture
 

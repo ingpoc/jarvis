@@ -44,7 +44,7 @@ lsof -n -P -iTCP:9847 -sTCP:LISTEN
 lsof -n -P -iTCP:9848 -sTCP:LISTEN
 ```
 
-Note: `start-jarvis.sh` can report a launchctl health timeout even when the service comes up a few seconds later. Confirm with `launchctl print` plus listening ports before declaring failure.
+Note: `start-jarvis.sh` auto-reloads the menu bar LaunchAgent if launchctl has a stale program target. Confirm with `launchctl print` plus listening ports before declaring failure.
 
 ## Menu Bar Not Visible / Crash Loop
 
@@ -56,11 +56,12 @@ If daemon is healthy but no menu bar icon appears:
 launchctl print "gui/$(id -u)/com.jarvis.menubar" | rg "program =|state =|job state =|successive crashes|last terminating signal"
 ```
 
-2. Confirm the target binary is the app-bundle executable:
+2. Confirm the target binary is valid for current build layout:
 
 ```bash
 launchctl print "gui/$(id -u)/com.jarvis.menubar" | rg "program ="
-# Expected suffix:
+# Expected suffix (either is acceptable):
+# JarvisApp/.build/debug/JarvisApp
 # JarvisApp/.build/debug/JarvisApp.app/Contents/MacOS/JarvisApp
 ```
 
@@ -100,9 +101,9 @@ Symptoms:
 Practical recovery:
 
 ```bash
-python3 -m jarvis.cli a2a get <task-id> -j
-python3 -m jarvis.cli a2a cancel <task-id> -j
-python3 -m jarvis.cli a2a send "<smaller step task>" --non-blocking -j
+.venv/bin/python -m jarvis.cli a2a get <task-id> -j
+.venv/bin/python -m jarvis.cli a2a cancel <task-id> -j
+.venv/bin/python -m jarvis.cli a2a send "<smaller step task>" --non-blocking -j
 ```
 
 Recommended pattern:

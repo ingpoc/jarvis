@@ -44,7 +44,7 @@ jarvis config models.reviewer=sonnet
 jarvis config models.quick=haiku
 ```
 
-Or edit `~/.jarvis/config.json`:
+Or edit `~/.jarvis/system/jarvis_config/config.json`:
 
 ```json
 {

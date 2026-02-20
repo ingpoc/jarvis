@@ -84,6 +84,18 @@ tests/
 | `JARVIS_PORT` | 9847 | WebSocket port |
 | `JARVIS_LOG_DIR` | ~/.jarvis/logs | Log location |
 | `JARVIS_DB` | ~/.jarvis/jarvis.db | SQLite database |
+| `JARVIS_WORKSPACE` | ~/.jarvis/workspaces | Root for Jarvis-created execution workspaces |
+| `OPENCODE_CONFIG` | ~/.jarvis/system/opencode_config/opencode.json | OpenCode runtime config |
+| `JARVIS_A2A_TOKEN` | ~/.jarvis/system/jarvis_config/a2a_token | A2A auth token file |
+
+### Runtime Ownership
+
+| Path | Owner | Mutability |
+|------|-------|------------|
+| `~/.jarvis/system/jarvis_config/*` | Human/operator | Immutable to delegated tasks |
+| `~/.jarvis/system/opencode_config/*` | Human/operator | Immutable baseline runtime config |
+| `~/.jarvis/runtime_workflow/*` | Jarvis | Mutable self-evolution docs/workflows |
+| `~/.jarvis/workspaces/*` | Jarvis | Mutable task execution outputs |
 
 ---
 
@@ -131,3 +143,8 @@ After startup or daemon lifecycle changes:
 
 - `JARVIS_DAEMON_START_MODE=launchctl`
 - `JARVIS_MENUBAR_START_MODE=launchctl`
+
+For delegated A2A execution:
+
+- provider policy is `opencode_only`
+- permission mode is `bypassPermissions`

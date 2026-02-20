@@ -19,6 +19,7 @@ Agent-first development. Humans steer, agents execute.
 |openclaw delegation / openclaw workspace docs / openclaw rule sync → workflow/openclaw-jarvis-integration.md
 |parallel subagents / git worktrees / containerized execution → workflow/opencode-parallel-worktrees.md
 |autonomous workflow choice / self-evolving execution loop → workflow/jarvis-autonomous-evolution.md
+|control plane / workspace-mcp-skills visibility → jarvis/api-reference.md
 |scripts/validation/build → jarvis/scripts.md
 |research paper/article/URL shared → load research-evaluator skill
 |X/LinkedIn/Threads post shared → workflow/social-post-intake.md then research-evaluator

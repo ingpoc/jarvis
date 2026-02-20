@@ -4,7 +4,7 @@
 
 | Script | When to Run | Purpose |
 |--------|-------------|---------|
-| `./start-jarvis.sh` | Normal startup | Starts daemon + menu bar (launchctl by default) |
+| `./start-jarvis.sh` | Normal startup | Starts daemon + menu bar (launchctl by default), auto-reloads stale LaunchAgent targets |
 | `./stop-jarvis.sh` | Before restart / shutdown | Stops daemon, menu bar, optional tunnel |
 
 ## Validation Scripts
@@ -46,6 +46,9 @@ Run these **before submitting changes**:
 | `~/.jarvis/logs/daemon.log` | Runtime |
 | `~/.jarvis/logs/menubar.log` | Menu bar app build/runtime |
 | `~/.jarvis/logs/tunnel.log` | Localtunnel logs (when enabled) |
+| `~/.jarvis/system/jarvis_config/.env` | Runtime environment file loaded by startup |
+| `~/.jarvis/system/jarvis_config/a2a_token` | A2A auth token |
+| `~/.jarvis/system/opencode_config/opencode.json` | OpenCode runtime config |
 
 Clear bytecode cache after Python changes:
 

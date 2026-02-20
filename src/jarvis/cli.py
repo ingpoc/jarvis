@@ -532,7 +532,7 @@ def a2a_card(base_url, json_output):
 @click.argument("message")
 @click.option("--base-url", default=None, help="A2A base URL")
 @click.option("--token", default=None, help="Bearer token (optional, defaults to token file/env)")
-@click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/a2a_token)")
+@click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/system/jarvis_config/a2a_token)")
 @click.option("--context-id", default=None, help="Optional context id for session isolation")
 @click.option("--blocking/--non-blocking", default=False, help="Use A2A blocking execution mode")
 @click.option("--wait", "wait_for_completion", is_flag=True, help="Poll task until terminal state")
@@ -578,7 +578,7 @@ def a2a_send(
 @click.argument("task_id")
 @click.option("--base-url", default=None, help="A2A base URL")
 @click.option("--token", default=None, help="Bearer token (optional, defaults to token file/env)")
-@click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/a2a_token)")
+@click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/system/jarvis_config/a2a_token)")
 @click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
 def a2a_get(task_id, base_url, token, token_path, json_output):
     """Get task status from A2A."""
@@ -593,7 +593,7 @@ def a2a_get(task_id, base_url, token, token_path, json_output):
 @click.argument("task_id")
 @click.option("--base-url", default=None, help="A2A base URL")
 @click.option("--token", default=None, help="Bearer token (optional, defaults to token file/env)")
-@click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/a2a_token)")
+@click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/system/jarvis_config/a2a_token)")
 @click.option("--timeout", default=120.0, type=float, show_default=True, help="Wait timeout in seconds")
 @click.option("--poll-interval", default=1.0, type=float, show_default=True, help="Wait poll interval in seconds")
 @click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
@@ -614,7 +614,7 @@ def a2a_wait(task_id, base_url, token, token_path, timeout, poll_interval, json_
 @click.argument("task_id")
 @click.option("--base-url", default=None, help="A2A base URL")
 @click.option("--token", default=None, help="Bearer token (optional, defaults to token file/env)")
-@click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/a2a_token)")
+@click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/system/jarvis_config/a2a_token)")
 @click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
 def a2a_cancel(task_id, base_url, token, token_path, json_output):
     """Cancel an A2A task."""

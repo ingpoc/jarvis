@@ -39,7 +39,7 @@ from claude_agent_sdk import (
 
 from jarvis.budget import BudgetController
 from jarvis.code_orchestrator import CodeOrchestrator
-from jarvis.config import JARVIS_HOME, JarvisConfig
+from jarvis.config import JARVIS_HOME, JARVIS_OPENCODE_CONFIG, JarvisConfig
 from jarvis.decision_tracer import DecisionTracer, TraceCategory
 from jarvis.browser_tools import create_browser_mcp_server
 from jarvis.context_files import (
@@ -841,6 +841,7 @@ class JarvisOrchestrator:
                 task_description,
                 model_id=model_id,
                 agent=agent_name,
+                cwd=self.project_path,
                 timeout_seconds=timeout_seconds,
                 on_progress=on_progress,
             )
@@ -1183,12 +1184,11 @@ class JarvisOrchestrator:
         return result
 
     def _ensure_opencode_config_env(self) -> None:
-        """Point OpenCode to repo-local config when present."""
+        """Point OpenCode to strict system opencode config."""
         if os.environ.get("OPENCODE_CONFIG"):
             return
-        cfg_path = Path(self.project_path) / "opencode.json"
-        if cfg_path.exists():
-            os.environ["OPENCODE_CONFIG"] = str(cfg_path)
+        if JARVIS_OPENCODE_CONFIG.exists():
+            os.environ["OPENCODE_CONFIG"] = str(JARVIS_OPENCODE_CONFIG)
 
     def register_mcp_server(
         self,

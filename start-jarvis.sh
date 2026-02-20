@@ -13,13 +13,20 @@ NC='\033[0m'
 JARVIS_DIR="/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac"
 JARVIS_HOME="$HOME/.jarvis"
 JARVIS_WORKSPACE="${JARVIS_WORKSPACE:-$HOME/.jarvis/workspaces}"
+JARVIS_SYSTEM_DIR="$JARVIS_HOME/system"
+JARVIS_JARVIS_CONFIG_DIR="$JARVIS_SYSTEM_DIR/jarvis_config"
+JARVIS_OPENCODE_CONFIG_DIR="$JARVIS_SYSTEM_DIR/opencode_config"
+JARVIS_RUNTIME_WORKFLOW_DIR="$JARVIS_HOME/runtime_workflow"
+SYSTEM_OPENCODE_CONFIG="$JARVIS_OPENCODE_CONFIG_DIR/opencode.json"
+SYSTEM_JARVIS_ENV="$JARVIS_JARVIS_CONFIG_DIR/.env"
 PID_DIR="$JARVIS_HOME/pids"
 LOG_DIR="$JARVIS_HOME/logs"
 LOCK_FILE="$PID_DIR/start.lock"
-DAEMON_LAUNCH_ENV="$JARVIS_HOME/launch.env"
+DAEMON_LAUNCH_ENV="$JARVIS_JARVIS_CONFIG_DIR/launch.env"
 MENUBAR_BUILD_BIN="$JARVIS_DIR/JarvisApp/.build/debug/JarvisApp"
 MENUBAR_APP_BIN="$JARVIS_DIR/JarvisApp/.build/debug/JarvisApp.app/Contents/MacOS/JarvisApp"
-MENUBAR_BIN="$MENUBAR_APP_BIN"
+MENUBAR_APP_INFO="$JARVIS_DIR/JarvisApp/.build/debug/JarvisApp.app/Contents/Info.plist"
+MENUBAR_BIN="$MENUBAR_BUILD_BIN"
 MENUBAR_LABEL="com.jarvis.menubar"
 MENUBAR_AGENT_PLIST="$HOME/Library/LaunchAgents/${MENUBAR_LABEL}.plist"
 DAEMON_LABEL="com.jarvis.daemon"
@@ -35,8 +42,31 @@ STARTUP_OK=0
 mkdir -p "$PID_DIR"
 mkdir -p "$LOG_DIR"
 mkdir -p "$JARVIS_WORKSPACE"
+mkdir -p "$JARVIS_JARVIS_CONFIG_DIR"
+mkdir -p "$JARVIS_OPENCODE_CONFIG_DIR"
+mkdir -p "$JARVIS_RUNTIME_WORKFLOW_DIR"
 
 cd "$JARVIS_DIR"
+
+# Seed strict system/runtime files once.
+if [ ! -f "$SYSTEM_OPENCODE_CONFIG" ] && [ -f "$JARVIS_DIR/opencode.json" ]; then
+    cp -f "$JARVIS_DIR/opencode.json" "$SYSTEM_OPENCODE_CONFIG"
+fi
+if [ ! -f "$SYSTEM_OPENCODE_CONFIG" ]; then
+    printf '{\n  "agents": {}\n}\n' > "$SYSTEM_OPENCODE_CONFIG"
+fi
+if [ ! -f "$JARVIS_RUNTIME_WORKFLOW_DIR/AGENTS.md" ] && [ -f "$JARVIS_DIR/AGENTS.md" ]; then
+    cp -f "$JARVIS_DIR/AGENTS.md" "$JARVIS_RUNTIME_WORKFLOW_DIR/AGENTS.md"
+fi
+if [ ! -f "$JARVIS_RUNTIME_WORKFLOW_DIR/AGENTS.md" ]; then
+    printf '# AGENTS\n\n- Runtime workflow instructions.\n' > "$JARVIS_RUNTIME_WORKFLOW_DIR/AGENTS.md"
+fi
+if [ ! -f "$JARVIS_RUNTIME_WORKFLOW_DIR/.mcp.json" ] && [ -f "$JARVIS_DIR/.mcp.json" ]; then
+    cp -f "$JARVIS_DIR/.mcp.json" "$JARVIS_RUNTIME_WORKFLOW_DIR/.mcp.json"
+fi
+if [ ! -f "$JARVIS_RUNTIME_WORKFLOW_DIR/.mcp.json" ]; then
+    printf '{\n  "mcpServers": {}\n}\n' > "$JARVIS_RUNTIME_WORKFLOW_DIR/.mcp.json"
+fi
 
 # Prefer project venv python when available so `jarvis` module resolves consistently.
 if [ -x "$JARVIS_DIR/.venv/bin/python" ]; then
@@ -163,18 +193,36 @@ sync_menubar_binary_into_app_bundle() {
         echo "❌ Menu bar app failed: built binary missing at $MENUBAR_BUILD_BIN"
         exit 1
     fi
+    MENUBAR_BIN="$MENUBAR_BUILD_BIN"
+    if [ ! -f "$MENUBAR_APP_INFO" ]; then
+        echo "⚠️  Menu bar app bundle metadata missing; launching direct binary"
+        return 0
+    fi
     if [ ! -d "$(dirname "$MENUBAR_APP_BIN")" ]; then
-        echo "❌ Menu bar app failed: app bundle executable directory missing at $(dirname "$MENUBAR_APP_BIN")"
-        exit 1
+        echo "⚠️  Menu bar app bundle executable directory missing; launching direct binary"
+        return 0
     fi
     cp -f "$MENUBAR_BUILD_BIN" "$MENUBAR_APP_BIN"
     chmod +x "$MENUBAR_APP_BIN"
+    if cmp -s "$MENUBAR_BUILD_BIN" "$MENUBAR_APP_BIN"; then
+        MENUBAR_BIN="$MENUBAR_APP_BIN"
+        return 0
+    fi
+    build_sha="$(shasum -a 256 "$MENUBAR_BUILD_BIN" | awk '{print $1}')"
+    app_sha="$(shasum -a 256 "$MENUBAR_APP_BIN" | awk '{print $1}')"
+    if [ "$build_sha" = "$app_sha" ]; then
+        MENUBAR_BIN="$MENUBAR_APP_BIN"
+        return 0
+    fi
     if ! cmp -s "$MENUBAR_BUILD_BIN" "$MENUBAR_APP_BIN"; then
         echo "❌ Menu bar app failed: app bundle executable is out of sync with build output"
         echo "  build: $MENUBAR_BUILD_BIN"
         echo "  app:   $MENUBAR_APP_BIN"
+        echo "  build_sha: $build_sha"
+        echo "  app_sha:   $app_sha"
         exit 1
     fi
+    MENUBAR_BIN="$MENUBAR_APP_BIN"
 }
 
 verify_launchctl_program_target() {
@@ -189,6 +237,12 @@ verify_launchctl_program_target() {
         echo "  actual:   $current_program"
         exit 1
     fi
+}
+
+launchctl_program_target() {
+    local label="$1"
+    local gui_domain="gui/$(id -u)"
+    launchctl print "$gui_domain/$label" 2>/dev/null | awk -F'= ' '/program = / {gsub(/;/, "", $2); print $2; exit}'
 }
 
 verify_service_started() {
@@ -298,11 +352,11 @@ else
   echo "[daemon-wrapper] FATAL: missing required launch env: $DAEMON_LAUNCH_ENV" >&2
   exit 1
 fi
-if [ -f "$JARVIS_HOME/.env" ]; then
+if [ -f "$SYSTEM_JARVIS_ENV" ]; then
   set -a
   # shellcheck disable=SC1090
-  source "$JARVIS_HOME/.env" || {
-    echo "[daemon-wrapper] FATAL: failed to source $JARVIS_HOME/.env" >&2
+  source "$SYSTEM_JARVIS_ENV" || {
+    echo "[daemon-wrapper] FATAL: failed to source $SYSTEM_JARVIS_ENV" >&2
     exit 1
   }
   set +a
@@ -377,7 +431,7 @@ export ELEVENLABS_AGENT_ID=$(printf '%q' "${ELEVENLABS_AGENT_ID:-}")
 export X_BOOKMARKS_ACCESS_TOKEN=$(printf '%q' "${X_BOOKMARKS_ACCESS_TOKEN:-}")
 export X_BOOKMARKS_USER_ID=$(printf '%q' "${X_BOOKMARKS_USER_ID:-}")
 export JARVIS_OPENCODE_BIN=$(printf '%q' "${JARVIS_OPENCODE_BIN:-$HOME/.bun/bin/opencode}")
-export OPENCODE_CONFIG=$(printf '%q' "${OPENCODE_CONFIG:-$JARVIS_DIR/opencode.json}")
+export OPENCODE_CONFIG=$(printf '%q' "$SYSTEM_OPENCODE_CONFIG")
 export JARVIS_OPENCODE_AGENT=$(printf '%q' "${JARVIS_OPENCODE_AGENT:-jarvis-executor}")
 export JARVIS_OPENCODE_CHAT_AGENT=$(printf '%q' "${JARVIS_OPENCODE_CHAT_AGENT:-jarvis-chat}")
 export JARVIS_OPENCODE_TIMEOUT_SECS=$(printf '%q' "${JARVIS_OPENCODE_TIMEOUT_SECS:-}")
@@ -477,6 +531,20 @@ start_menubar_with_launchctl() {
     local gui_domain="gui/$(id -u)"
     local action_msg=""
     local err=""
+    local reload_service=0
+    if launchctl_service_loaded "$MENUBAR_LABEL"; then
+        local current_program=""
+        current_program="$(launchctl_program_target "$MENUBAR_LABEL" || true)"
+        if [ -n "$current_program" ] && [ "$current_program" != "$MENUBAR_BIN" ]; then
+            reload_service=1
+            echo "⚠️  Menu bar launchctl program changed; reloading LaunchAgent"
+        fi
+    fi
+
+    if [ "$reload_service" -eq 1 ]; then
+        launchctl bootout "$gui_domain/$MENUBAR_LABEL" >/dev/null 2>&1 || true
+    fi
+
     if launchctl_service_loaded "$MENUBAR_LABEL"; then
         action_msg="kickstart existing"
         if ! err="$(launchctl kickstart -k "$gui_domain/$MENUBAR_LABEL" 2>&1)"; then
@@ -578,10 +646,10 @@ for port in 9847 9848; do
 done
 
 # Load environment variables
-if [ -f "$JARVIS_HOME/.env" ]; then
+if [ -f "$SYSTEM_JARVIS_ENV" ]; then
     # shellcheck disable=SC1090
     set -a
-    source "$JARVIS_HOME/.env"
+    source "$SYSTEM_JARVIS_ENV"
     set +a
 fi
 if [ -f "$JARVIS_DIR/.env" ]; then

@@ -117,7 +117,7 @@ def check_imports() -> CheckResult:
 
 def check_config_integrity() -> CheckResult:
     """Validate config file exists and has required fields."""
-    config_path = JARVIS_HOME / "config.json"
+    config_path = JARVIS_HOME / "system" / "jarvis_config" / "config.json"
 
     if not config_path.exists():
         return CheckResult(

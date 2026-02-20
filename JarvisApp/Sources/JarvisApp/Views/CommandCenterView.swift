@@ -3,6 +3,8 @@ import SwiftUI
 enum CommandCenterTab: String, CaseIterable {
     case containers = "Containers"
     case workspace = "Workspace"
+    case mcp = "MCP"
+    case skills = "Skills"
     case traces = "Traces"
     case tools = "Tools"
 }
@@ -13,6 +15,18 @@ struct CommandCenterView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack {
+                Text("Control Plane")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                Spacer()
+                Text("Operational state")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+
             CommandCenterSummaryHeader(snapshot: ws.workspaceSnapshot, containerCount: ws.containers.count)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
@@ -35,6 +49,10 @@ struct CommandCenterView: View {
                 ContainerListView(containers: ws.containers)
             case .workspace:
                 WorkspaceSnapshotView(snapshot: ws.workspaceSnapshot)
+            case .mcp:
+                MCPListView(snapshot: ws.workspaceSnapshot)
+            case .skills:
+                SkillsListView(snapshot: ws.workspaceSnapshot)
             case .traces:
                 TraceListView(events: ws.workspaceSnapshot?.recentEvents ?? [])
             case .tools:
@@ -204,8 +222,34 @@ struct WorkspaceSnapshotView: View {
                                 ("Model", snapshot.runtimeConfig.modelExecutor ?? "unknown"),
                                 ("Workflow Mode", snapshot.runtimeConfig.a2aWorkflowMode ?? "auto"),
                                 ("A2A OpenCode Model", snapshot.runtimeConfig.a2aOpencodeModel ?? "unknown"),
-                                ("Task Timeout (s)", nonEmpty(snapshot.runtimeConfig.taskTimeoutSecs)),
                                 ("OpenCode Timeout (s)", nonEmpty(snapshot.runtimeConfig.opencodeTimeoutSecs)),
+                                ("Delegation Policy", snapshot.runtimeConfig.delegatedProviderPolicy ?? "unknown"),
+                                ("Delegation Permissions", snapshot.runtimeConfig.delegatedPermissionMode ?? "unknown"),
+                                ("MCP Config Source", snapshot.runtimeConfig.mcpConfigSource ?? "unknown"),
+                            ]
+                        )
+                        WorkspaceSection(
+                            title: "Capabilities",
+                            rows: [
+                                ("Tools", "\(snapshot.runtimeConfig.capabilityToolCount ?? 0)"),
+                                ("MCP Tools", "\(snapshot.runtimeConfig.capabilityMcpToolCount ?? 0)"),
+                                ("Agents", csvLimited(snapshot.runtimeConfig.capabilityAgents, limit: 6)),
+                                ("Hooks", csvLimited(snapshot.runtimeConfig.capabilityHooks, limit: 4)),
+                                ("Skills Engine", (snapshot.runtimeConfig.skillsEnabled ?? false) ? "enabled" : "disabled"),
+                                ("Skill Tool", (snapshot.runtimeConfig.skillToolAvailable ?? false) ? "available" : "unavailable"),
+                                ("Dynamic Skills", "\(snapshot.runtimeConfig.capabilitySkills.count)"),
+                                ("Discovered Skills", "\(snapshot.runtimeConfig.discoveredSkillCount ?? 0)"),
+                                ("Skills Preview", csvLimited(snapshot.runtimeConfig.discoveredSkillsPreview, limit: 6)),
+                                ("Static MCP", "\(snapshot.runtimeConfig.loadedStaticMcpServers.count) · \(csvLimited(snapshot.runtimeConfig.loadedStaticMcpServers, limit: 4))"),
+                                ("Dynamic MCP", "\(snapshot.runtimeConfig.loadedDynamicMcpServers.count) · \(csvLimited(snapshot.runtimeConfig.loadedDynamicMcpServers, limit: 4))"),
+                            ]
+                        )
+                        WorkspaceSection(
+                            title: "Activity",
+                            rows: [
+                                ("Generated At", snapshot.summary.generatedAt ?? "unknown"),
+                                ("Task Executions", "\(snapshot.taskExecutions?.count ?? 0)"),
+                                ("Recent Events", "\(snapshot.recentEvents?.count ?? 0)"),
                             ]
                         )
                         WorkspaceSection(
@@ -218,48 +262,30 @@ struct WorkspaceSnapshotView: View {
                                 ("Mapped Containers", "\(snapshot.summary.mappedContainerCount)"),
                             ]
                         )
-
-                        Divider()
-
-                        Text("Task Execution Config")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 16)
-
-                        if let taskRows = snapshot.taskExecutions, !taskRows.isEmpty {
-                            ForEach(taskRows) { row in
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(row.taskId)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                    Text(row.description)
-                                        .font(.caption)
-                                        .fontWeight(.medium)
-                                        .lineLimit(2)
-                                    Text("status=\(row.status) workflow=\(row.workflow) provider=\(row.providerType)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                    Text(row.modelId)
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                        .lineLimit(1)
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 5)
-                            }
-                        } else {
-                            Text("No recent task execution metadata")
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 6)
+                        if let paths = snapshot.paths {
+                            WorkspaceSection(
+                                title: "Jarvis Paths",
+                                rows: [
+                                    ("Jarvis Home", paths.jarvisHome ?? "unknown"),
+                                    ("System Dir", paths.systemDir ?? "unknown"),
+                                    ("Jarvis Config", paths.jarvisConfig ?? "unknown"),
+                                    ("OpenCode Config", paths.opencodeConfig ?? "unknown"),
+                                    ("Runtime Workflow", paths.runtimeWorkflowDir ?? "unknown"),
+                                    ("Runtime Docs", paths.runtimeDocsDir ?? "unknown"),
+                                    ("Runtime MCP Config", paths.runtimeMcpConfig ?? "unknown"),
+                                    ("A2A Token", paths.a2aToken ?? "unknown"),
+                                    ("Logs", paths.logsDir ?? "unknown"),
+                                    ("Database", paths.dbPath ?? "unknown"),
+                                    ("PIDs", paths.pidsDir ?? "unknown"),
+                                ]
+                            )
                         }
 
                         Divider()
+                            .padding(.horizontal, 16)
 
                         Text("Container ↔ Worktree")
-                            .font(.caption)
+                            .font(.footnote)
                             .fontWeight(.semibold)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 16)
@@ -274,32 +300,36 @@ struct WorkspaceSnapshotView: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     HStack {
                                         Text(container.name.isEmpty ? container.id : container.name)
-                                            .font(.caption)
+                                            .font(.callout)
                                             .fontWeight(.medium)
                                         Spacer()
                                         Text(container.status)
-                                            .font(.caption2)
+                                            .font(.footnote)
                                             .foregroundStyle(.secondary)
                                     }
                                     Text("Worktree: \(container.worktreePath ?? "unmapped")")
-                                        .font(.caption2)
+                                        .font(.footnote)
                                         .foregroundStyle(container.worktreePath == nil ? .orange : .secondary)
                                     if !container.mountPaths.isEmpty {
                                         Text("Mounts: \(container.mountPaths.joined(separator: ", "))")
-                                            .font(.caption2)
+                                            .font(.footnote)
                                             .foregroundStyle(.secondary)
                                             .lineLimit(2)
                                     }
                                 }
                                 .padding(.horizontal, 16)
-                                .padding(.vertical, 6)
+                                .padding(.vertical, 8)
+                                .background(Color.secondary.opacity(0.06))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .padding(.horizontal, 16)
                             }
                         }
 
                         Divider()
+                            .padding(.horizontal, 16)
 
                         Text("Discovered Worktrees")
-                            .font(.caption)
+                            .font(.footnote)
                             .fontWeight(.semibold)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 16)
@@ -313,15 +343,18 @@ struct WorkspaceSnapshotView: View {
                             ForEach(snapshot.worktrees) { worktree in
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(worktree.id)
-                                        .font(.caption)
+                                        .font(.callout)
                                         .fontWeight(.medium)
                                     Text(worktree.path)
-                                        .font(.caption2)
+                                        .font(.footnote)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(2)
                                 }
                                 .padding(.horizontal, 16)
-                                .padding(.vertical, 5)
+                                .padding(.vertical, 8)
+                                .background(Color.secondary.opacity(0.05))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .padding(.horizontal, 16)
                             }
                         }
                     }
@@ -343,6 +376,23 @@ struct WorkspaceSnapshotView: View {
         return "unbounded"
     }
 
+    private func csvOrNone(_ values: [String]) -> String {
+        if values.isEmpty {
+            return "none"
+        }
+        return values.joined(separator: ", ")
+    }
+
+    private func csvLimited(_ values: [String], limit: Int) -> String {
+        if values.isEmpty {
+            return "none"
+        }
+        if values.count <= limit {
+            return values.joined(separator: ", ")
+        }
+        return values.prefix(limit).joined(separator: ", ") + ", +\(values.count - limit) more"
+    }
+
 }
 
 struct TraceListView: View {
@@ -361,24 +411,27 @@ struct TraceListView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack {
                                     Text(event.eventType)
-                                        .font(.caption2)
+                                        .font(.footnote)
                                         .foregroundStyle(.secondary)
                                     Spacer()
                                     Text(timeLabel(event.timestamp))
-                                        .font(.caption2)
+                                        .font(.footnote)
                                         .foregroundStyle(.tertiary)
                                 }
                                 Text(event.summary)
-                                    .font(.caption)
+                                    .font(.callout)
                                     .lineLimit(3)
                                 if let taskId = event.taskId, !taskId.isEmpty {
                                     Text(taskId)
-                                        .font(.caption2)
+                                        .font(.footnote)
                                         .foregroundStyle(.tertiary)
                                 }
                             }
                             .padding(.horizontal, 16)
-                            .padding(.vertical, 6)
+                            .padding(.vertical, 8)
+                            .background(Color.secondary.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .padding(.horizontal, 16)
                         }
                     }
                     .padding(.vertical, 8)
@@ -396,30 +449,109 @@ struct TraceListView: View {
     }
 }
 
+struct MCPListView: View {
+    let snapshot: WorkspaceSnapshotResponse?
+
+    var body: some View {
+        let servers = snapshot?.runtimeConfig.discoveredMcpServers ?? []
+        Group {
+            if servers.isEmpty {
+                Text("No OpenCode MCP servers discovered")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 340)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(servers, id: \.self) { server in
+                            HStack(spacing: 8) {
+                                Image(systemName: "server.rack")
+                                    .foregroundStyle(.secondary)
+                                Text(server)
+                                    .font(.callout)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.secondary.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .padding(.horizontal, 16)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .frame(maxHeight: .infinity)
+    }
+}
+
+struct SkillsListView: View {
+    let snapshot: WorkspaceSnapshotResponse?
+
+    var body: some View {
+        let skills = snapshot?.runtimeConfig.discoveredSkills ?? []
+        Group {
+            if skills.isEmpty {
+                Text("No OpenCode skills discovered")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 340)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(skills, id: \.self) { skill in
+                            HStack(spacing: 8) {
+                                Image(systemName: "sparkles.rectangle.stack")
+                                    .foregroundStyle(.secondary)
+                                Text(skill)
+                                    .font(.callout)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.secondary.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .padding(.horizontal, 16)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .frame(maxHeight: .infinity)
+    }
+}
+
 private struct WorkspaceSection: View {
     let title: String
     let rows: [(String, String)]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.caption)
+                .font(.footnote)
                 .fontWeight(.semibold)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 16)
 
-            ForEach(rows, id: \.0) { row in
-                HStack(alignment: .top) {
-                    Text(row.0)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
-                    Text(row.1)
-                        .font(.caption2)
-                        .multilineTextAlignment(.trailing)
+            VStack(spacing: 6) {
+                ForEach(rows, id: \.0) { row in
+                    HStack(alignment: .top) {
+                        Text(row.0)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Text(row.1)
+                            .font(.callout)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    if row.0 != rows.last?.0 {
+                        Divider()
+                    }
                 }
                 .padding(.horizontal, 16)
             }
+            .padding(.vertical, 8)
+            .background(Color.secondary.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 16)
         }
     }
 }

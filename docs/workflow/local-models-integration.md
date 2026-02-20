@@ -65,15 +65,15 @@ Response fields used by app:
 
 ## Menu Bar Startup Guard (macOS)
 
-`start-jarvis.sh` now enforces a stable launch target for menu bar:
+`start-jarvis.sh` enforces a stable launch target for menu bar:
 
 - Builds Swift app (`swift build --package-path JarvisApp`)
-- Syncs built binary into app bundle executable path
-  - `JarvisApp/.build/debug/JarvisApp` -> `JarvisApp/.build/debug/JarvisApp.app/Contents/MacOS/JarvisApp`
-- Validates byte-for-byte sync (`cmp -s`)
-- Verifies `launchctl` program path matches expected app-bundle executable
+- Uses built executable as canonical program target
+  - `JarvisApp/.build/debug/JarvisApp`
+- If app bundle metadata exists, syncs into app-bundle executable path too
+- If launchctl has stale program target, auto-bootout + bootstrap to reload LaunchAgent
 
-This prevents stale/incorrect binary targets from causing menu bar crash loops.
+This prevents stale/incorrect binary targets from causing menu bar drift and startup mismatch failures.
 
 ## Configuration
 
@@ -85,10 +85,11 @@ anthropic | foundation | opencode
 
 Notes:
 
-- OpenCode can use repo-local `opencode.json` for MCP registration (for example Zapier MCP).
+- OpenCode runtime config is sourced from `~/.jarvis/system/opencode_config/opencode.json`.
 - A2A-origin execution uses `permission_mode="bypassPermissions"` to reduce delegated-task approval deadlocks.
 - OpenCode HTTP checks/calls are offloaded from the event loop in async paths to keep A2A polling responsive.
 - OpenCode config now includes `context7`, `deepwiki`, `context-graph`, and `token-efficient` MCP entries for retrieval + learning workflows.
+- Control Plane discovery surfaces are read from OpenCode runtime commands (`opencode mcp list`, `opencode debug skill`) rather than hardcoded lists.
 
 ## Testing
 

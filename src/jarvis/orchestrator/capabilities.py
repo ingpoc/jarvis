@@ -11,11 +11,11 @@ from typing import Any
 
 from claude_agent_sdk import AgentDefinition
 
-from jarvis.config import JARVIS_HOME
+from jarvis.config import JARVIS_DYNAMIC_CAPABILITIES, JARVIS_RUNTIME_WORKFLOW_DIR
 
 logger = logging.getLogger(__name__)
 
-_DYNAMIC_CAPS_FILE = JARVIS_HOME / "dynamic_capabilities.json"
+_DYNAMIC_CAPS_FILE = JARVIS_DYNAMIC_CAPABILITIES
 
 
 class DynamicCapabilitiesManager:
@@ -69,7 +69,7 @@ class DynamicCapabilitiesManager:
     def _persist(self) -> None:
         """Persist dynamic capabilities so they survive daemon restart."""
         try:
-            JARVIS_HOME.mkdir(parents=True, exist_ok=True)
+            JARVIS_RUNTIME_WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
             agents_payload: dict[str, dict] = {}
             for name, agent in self._agents.items():
                 agents_payload[name] = {

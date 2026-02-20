@@ -164,7 +164,7 @@ Verification after updates:
         enabled: true,
         config: {
           baseUrl: "http://127.0.0.1:9848",
-          tokenPath: "~/.jarvis/a2a_token",
+          tokenPath: "~/.jarvis/system/jarvis_config/a2a_token",
           defaultWait: false,
           defaultTimeoutSec: 18000,
           pollIntervalMs: 1000,
@@ -185,7 +185,7 @@ Verification after updates:
 
 1. `openclaw plugins list` shows `jarvis-bridge` as `loaded`.
 2. `openclaw skills info jarvis-coder` shows eligible/loaded.
-3. `python3 -m jarvis.cli a2a health -j` returns `status: ok`.
+3. `.venv/bin/python -m jarvis.cli a2a health -j` returns `status: ok`.
 4. In OpenClaw chat: `/jarvis-coder refactor auth middleware` delegates to Jarvis.
 5. In OpenClaw chat: `/jarvis-chief audit this repo and propose refactor plan` delegates to Jarvis.
 6. Optional explicit command path: `/jarvis add retries to HTTP client`.
@@ -243,8 +243,8 @@ AGENTS/TOOLS/BOOT implications:
 For coding tasks delegated from OpenClaw, run Jarvis on OpenCode:
 
 ```bash
-python3 -m jarvis.cli config models.executor=opencode/default
-python3 -m jarvis.cli config models.provider_type=opencode
+.venv/bin/python -m jarvis.cli config models.executor=opencode/default
+.venv/bin/python -m jarvis.cli config models.provider_type=opencode
 bash ./stop-jarvis.sh
 bash ./start-jarvis.sh
 ```
@@ -253,7 +253,7 @@ Why: if `provider_type=anthropic` while subscription is exhausted, delegated tas
 
 ### Register Zapier MCP in OpenCode
 
-For OpenCode-backed mail access, keep `opencode.json` in the Jarvis repo root:
+For OpenCode-backed mail access, keep runtime OpenCode config at `~/.jarvis/system/opencode_config/opencode.json`:
 
 ```json
 {
@@ -270,7 +270,7 @@ For OpenCode-backed mail access, keep `opencode.json` in the Jarvis repo root:
 }
 ```
 
-Then set `ZAPIER_MCP_TOKEN` in Jarvis daemon env (`~/.jarvis/.env`) and restart Jarvis.
+Then set `ZAPIER_MCP_TOKEN` in Jarvis daemon env (`~/.jarvis/system/jarvis_config/.env`) and restart Jarvis.
 
 ## Operational notes
 

@@ -68,7 +68,7 @@ async def test_run_task_offloads_network_calls_with_to_thread(monkeypatch: pytes
         payload: dict | None = None,
         timeout: int = 30,
     ) -> dict:
-        if method == "POST" and path == "/session":
+        if method == "POST" and path == "/session?directory=%2Ftmp%2Fproj":
             assert isinstance(payload, dict)
             assert payload.get("title") == "Jarvis delegated task"
             rules = payload.get("permission")
@@ -82,7 +82,7 @@ async def test_run_task_offloads_network_calls_with_to_thread(monkeypatch: pytes
             )
             assert timeout == 10
             return {"id": "sess-123"}
-        if method == "POST" and path == "/session/sess-123/message":
+        if method == "POST" and path == "/session/sess-123/message?directory=%2Ftmp%2Fproj":
             assert payload == {"parts": [{"type": "text", "text": "ping"}]}
             assert timeout == 180
             return {"parts": [{"type": "text", "text": "pong"}]}
@@ -92,7 +92,7 @@ async def test_run_task_offloads_network_calls_with_to_thread(monkeypatch: pytes
     monkeypatch.setattr(client, "ensure_available", fake_ensure_available)
     monkeypatch.setattr(client, "_request", fake_request)
 
-    result = await client.run_task("ping")
+    result = await client.run_task("ping", cwd="/tmp/proj")
 
     assert result.session_id == "sess-123"
     assert result.text == "pong"

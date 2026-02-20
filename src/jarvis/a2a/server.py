@@ -96,7 +96,7 @@ def create_a2a_app(config: JarvisConfig, orchestrator: Any = None, project_path:
                     "code": "invalid_token",
                     "message": "Invalid or missing Bearer token",
                     "remediation": "Provide valid token in Authorization header. "
-                                   "Token file should be at ~/.jarvis/a2a_token",
+                                   "Token file should be at ~/.jarvis/system/jarvis_config/a2a_token",
                 },
             )
         return True

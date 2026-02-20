@@ -30,7 +30,7 @@ Jarvis accepts tasks from multiple interfaces:
 
 ### OpenClaw -> Jarvis A2A Bridge
 
-Jarvis exposes A2A on `http://127.0.0.1:9848` and requires Bearer auth from `~/.jarvis/a2a_token`.
+Jarvis exposes A2A on `http://127.0.0.1:9848` and requires Bearer auth from `~/.jarvis/system/jarvis_config/a2a_token`.
 
 Use these CLI wrappers when wiring OpenClaw plugin methods:
 
@@ -47,7 +47,7 @@ Environment overrides:
 
 ```bash
 export JARVIS_A2A_URL=http://127.0.0.1:9848
-export JARVIS_A2A_TOKEN="$(cat ~/.jarvis/a2a_token)"
+export JARVIS_A2A_TOKEN="$(cat ~/.jarvis/system/jarvis_config/a2a_token)"
 ```
 
 ---

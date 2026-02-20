@@ -196,16 +196,24 @@ class OpenCodeClient:
         *,
         model_id: str | None = None,
         agent: str | None = None,
+        cwd: str | None = None,
         timeout_seconds: int = 180,
         on_progress: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
     ) -> OpenCodeRunResult:
         await self.ensure_available()
+        directory_query = f"?directory={urllib.parse.quote(str(cwd), safe='')}" if cwd else ""
 
         session_payload = {
             "title": "Jarvis delegated task",
             "permission": self._session_permission_rules(),
         }
-        session = await asyncio.to_thread(self._request, "POST", "/session", session_payload, 10)
+        session = await asyncio.to_thread(
+            self._request,
+            "POST",
+            f"/session{directory_query}",
+            session_payload,
+            10,
+        )
         session_id = str(session.get("id") or session.get("sessionID") or "").strip()
         if not session_id:
             raise OpenCodeClientError(f"OpenCode did not return session id: {session}")
@@ -226,7 +234,7 @@ class OpenCodeClient:
                     messages = await asyncio.to_thread(
                         self._request,
                         "GET",
-                        f"/session/{session_id}/message",
+                        f"/session/{session_id}/message{directory_query}",
                         None,
                         10,
                     )
@@ -283,7 +291,7 @@ class OpenCodeClient:
             response = await asyncio.to_thread(
                 self._request,
                 "POST",
-                f"/session/{session_id}/message",
+                f"/session/{session_id}/message{directory_query}",
                 body,
                 max(30, timeout_seconds),
             )

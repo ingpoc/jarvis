@@ -75,7 +75,7 @@ def build_agent_card(
         },
         "authentication": {
             "type": "bearer",
-            "description": "Bearer token from ~/.jarvis/a2a_token",
+            "description": "Bearer token from ~/.jarvis/system/jarvis_config/a2a_token",
         },
         "metadata": {
             "protocol": "a2a",

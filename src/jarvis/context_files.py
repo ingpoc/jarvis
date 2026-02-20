@@ -5,8 +5,18 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from jarvis.config import (
+    JARVIS_CONFIG,
+    JARVIS_HOME,
+    JARVIS_MCP_RUNTIME_CONFIG,
+    JARVIS_RUNTIME_WORKFLOW_DIR,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CORE_FILES = ["AGENTS.md", "workflow.md", "principles.md", "soul.md", "memory.md"]
+IMMUTABLE_CONTEXT_DIR = JARVIS_CONFIG.parent
+RUNTIME_CONTEXT_DIR = JARVIS_RUNTIME_WORKFLOW_DIR
+IMMUTABLE_CONTEXT_FILES = ["IDENTITY.md", "SOUL.md", "PRINCIPLES.md"]
+RUNTIME_CONTEXT_FILES = ["AGENTS.md", "workflow.md", "memory.md"]
 TURN_LOG_MARKER = "## Turn Log"
 PROJECT_CONTEXT_FILENAME = "PROJECT-CONTEXT.md"
 
@@ -46,23 +56,98 @@ PROJECT_CONTEXT_TEMPLATE = """# PROJECT-CONTEXT.md
 
 
 def ensure_core_context_files() -> None:
-    """No-op: core context is maintained in repo files, not generated."""
-    return None
+    """Ensure strict Jarvis runtime/system context files exist under ~/.jarvis."""
+    JARVIS_HOME.mkdir(parents=True, exist_ok=True)
+    IMMUTABLE_CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
+    RUNTIME_CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Immutable, human-managed baseline files
+    _seed_file(
+        IMMUTABLE_CONTEXT_DIR / "IDENTITY.md",
+        [
+            REPO_ROOT / "IDENTITY.md",
+        ],
+        "# IDENTITY\n\n- Human-managed immutable identity contract.\n",
+    )
+    _seed_file(
+        IMMUTABLE_CONTEXT_DIR / "SOUL.md",
+        [
+            REPO_ROOT / "soul.md",
+            REPO_ROOT / "SOUL.md",
+        ],
+        "# SOUL\n\n- Human-managed immutable values and behavior guardrails.\n",
+    )
+    _seed_file(
+        IMMUTABLE_CONTEXT_DIR / "PRINCIPLES.md",
+        [
+            REPO_ROOT / "principles.md",
+            REPO_ROOT / "PRINCIPLES.md",
+        ],
+        "# PRINCIPLES\n\n- Human-managed immutable engineering principles.\n",
+    )
+
+    # Mutable runtime workflow files
+    _seed_file(
+        RUNTIME_CONTEXT_DIR / "AGENTS.md",
+        [
+            REPO_ROOT / "AGENTS.md",
+        ],
+        "# AGENTS\n\n- Runtime workflow instructions.\n",
+    )
+    _seed_file(
+        RUNTIME_CONTEXT_DIR / "workflow.md",
+        [
+            REPO_ROOT / "workflow.md",
+            REPO_ROOT / "WORKFLOW.md",
+        ],
+        "# workflow\n\n- Runtime workflow playbook.\n",
+    )
+    _seed_file(
+        RUNTIME_CONTEXT_DIR / "memory.md",
+        [
+            REPO_ROOT / "memory.md",
+            REPO_ROOT / "MEMORY.md",
+        ],
+        "# memory\n\n- Runtime learning and memory rules.\n",
+    )
+
+    if not JARVIS_MCP_RUNTIME_CONFIG.exists():
+        repo_mcp = REPO_ROOT / ".mcp.json"
+        if repo_mcp.exists():
+            JARVIS_MCP_RUNTIME_CONFIG.write_text(repo_mcp.read_text())
+        else:
+            JARVIS_MCP_RUNTIME_CONFIG.write_text('{"mcpServers": {}}\n')
 
 
 def load_core_context(max_chars: int = 16000) -> str:
-    """Return compact core markdown context for prompts."""
+    """Return compact core markdown context from strict ~/.jarvis locations."""
+    ensure_core_context_files()
     sections: list[str] = []
-    for filename in CORE_FILES:
-        path = REPO_ROOT / filename
+    ordered_paths = [
+        *(IMMUTABLE_CONTEXT_DIR / f for f in IMMUTABLE_CONTEXT_FILES),
+        *(RUNTIME_CONTEXT_DIR / f for f in RUNTIME_CONTEXT_FILES),
+    ]
+    for path in ordered_paths:
         if not path.exists():
             continue
         text = path.read_text().strip()
         if not text:
             continue
-        sections.append(f"### {filename}\n{text}")
+        sections.append(f"### {path.name}\n{text}")
     joined = "\n\n".join(sections)
     return joined[:max_chars]
+
+
+def _seed_file(path: Path, candidates: list[Path], default_text: str) -> None:
+    """Create a file from first existing candidate or fallback text."""
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for source in candidates:
+        if source.exists():
+            path.write_text(source.read_text())
+            return
+    path.write_text(default_text)
 
 
 def resolve_project_jarvis_file(project_path: str | Path) -> Path:

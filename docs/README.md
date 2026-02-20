@@ -6,7 +6,7 @@ Progressive disclosure: Start here, dive deeper as needed.
 
 | Need | Document | Lines |
 |------|----------|-------|
-| How to work in this repo | [../CLAUDE.md](../CLAUDE.md) | ~100 |
+| How to work in this repo | [../AGENTS.md](../AGENTS.md) | compressed trigger/index |
 | Core principles | [principles/README.md](principles/README.md) | Index |
 | Platform capabilities | [capabilities/README.md](capabilities/README.md) | Index |
 | Research distillations | [workflow/README.md](workflow/README.md) | Index |
@@ -30,9 +30,10 @@ docs/
 │   ├── determinism.md     # Code > LLM judgment
 │   └── token-efficiency.md # Resource management
 ├── workflow/              # Research distillations (updated)
-│   ├── openai-harness.md  # OpenAI's 0-code experiment
-│   ├── verification-loops.md # Self-testing patterns
-│   └── garbage-collection.md # Tech debt management
+│   ├── openai-harness.md
+│   ├── openclaw-jarvis-integration.md
+│   ├── opencode-parallel-worktrees.md
+│   └── local-models-integration.md
 ├── architecture/          # Enforced rules (mechanical)
 │   ├── layers.md          # Layered architecture
 │   ├── taste-invariants.md # Style rules
@@ -45,10 +46,10 @@ docs/
 
 ## Reading Order
 
-1. **New to project**: CLAUDE.md → principles/agent-first.md → jarvis/conventions.md
+1. **New to project**: AGENTS.md → principles/agent-first.md → jarvis/conventions.md
 2. **Capability planning**: capabilities/README.md → capabilities/{platform}.md
-3. **Debugging issue**: jarvis/debugging.md → architecture/taste-invariants.md
-4. **Research background**: workflow/openai-harness.md → principles/progressive-disclosure.md
+3. **Debugging issue**: jarvis/debugging.md → jarvis/scripts.md
+4. **OpenClaw/Jarvis delegation**: workflow/openclaw-jarvis-integration.md → workflow/opencode-parallel-worktrees.md
 
 ## Maintenance
 
@@ -62,6 +63,6 @@ docs/
 
 | Source | Key Insight | Distilled In |
 |--------|-------------|--------------|
-| [OpenAI Harness Engineering](https://openai.com/index/harness-engineering/) | 0 manual code, environment > capability | workflow/openai-harness.md |
-| [Anthropic Long-Running Agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) | Feature lists, verification loops | workflow/verification-loops.md |
-| [Boris Cherny Claude Workflow](https://talent500.com/blog/claude-code-workflow-redefining-software-development/) | 5 specialized agents, CLAUDE.md as error repo | workflow/multi-agent.md |
+| [OpenAI Harness Engineering](https://openai.com/index/harness-engineering/) | Environment and process matter as much as model | workflow/openai-harness.md |
+| [OpenClaw docs](https://docs.openclaw.ai/tools/plugin) | Gateway/plugin architecture for delegation | workflow/openclaw-jarvis-integration.md |
+| [Claude Code worktrees guide](https://code.claude.com/docs/en/common-workflows#run-parallel-claude-code-sessions-with-git-worktrees) | Parallel execution via isolated worktrees | workflow/opencode-parallel-worktrees.md |

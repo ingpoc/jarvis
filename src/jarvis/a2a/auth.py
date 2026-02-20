@@ -2,14 +2,14 @@
 import secrets
 from pathlib import Path
 
-from jarvis.config import JARVIS_HOME
+from jarvis.config import JARVIS_A2A_TOKEN
 
 
 def get_token_path(configured_path: str = "") -> Path:
     """Get the path to the A2A token file."""
     if configured_path:
         return Path(configured_path)
-    return JARVIS_HOME / "a2a_token"
+    return JARVIS_A2A_TOKEN
 
 
 def read_token(token_path: str = "") -> str | None:

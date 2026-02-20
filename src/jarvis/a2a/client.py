@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from jarvis.config import JARVIS_HOME
+from jarvis.config import JARVIS_A2A_TOKEN
 
 
 TERMINAL_TASK_STATES = {
@@ -127,7 +127,7 @@ class JarvisA2AClient:
         if token_path is None and env_token_path:
             token_path = Path(env_token_path)
         if token_path is None:
-            token_path = JARVIS_HOME / "a2a_token"
+            token_path = JARVIS_A2A_TOKEN
 
         if token_path.exists():
             token = token_path.read_text().strip()
@@ -136,7 +136,7 @@ class JarvisA2AClient:
 
         raise A2AClientError(
             "Missing A2A token. Set JARVIS_A2A_TOKEN or provide token_path "
-            f"(default: {JARVIS_HOME / 'a2a_token'})."
+            f"(default: {JARVIS_A2A_TOKEN})."
         )
 
     def _auth_headers(self, require_auth: bool) -> dict[str, str]:

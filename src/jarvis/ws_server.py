@@ -11,6 +11,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -321,7 +323,10 @@ class JarvisWSServer:
 
             elif action == "get_available_tools":
                 if self._orchestrator:
-                    tools = self._orchestrator.get_capabilities().get("tools", [])
+                    tools = await asyncio.to_thread(self._discover_opencode_tools)
+                    if not tools:
+                        # Fallback to orchestrator capability inventory.
+                        tools = self._orchestrator.get_capabilities().get("tools", [])
                     result = {"tools": tools}
                 else:
                     result = {"error": "Orchestrator not connected"}
@@ -865,6 +870,17 @@ class JarvisWSServer:
     async def _build_workspace_snapshot(self) -> dict:
         """Return workspace/worktree/container snapshot for UI visibility."""
         from jarvis.container_tools import _run_container_cmd
+        from jarvis.config import (
+            JARVIS_A2A_TOKEN,
+            JARVIS_CONFIG,
+            JARVIS_DB,
+            JARVIS_LOGS,
+            JARVIS_MCP_RUNTIME_CONFIG,
+            JARVIS_OPENCODE_CONFIG,
+            JARVIS_PIDS,
+            JARVIS_RUNTIME_WORKFLOW_DIR,
+            JARVIS_SYSTEM_DIR,
+        )
 
         workspace = (
             Path(self._orchestrator.project_path if self._orchestrator else ".")
@@ -895,6 +911,39 @@ class JarvisWSServer:
         provider_type = getattr(models, "provider_type", None) if models else None
         model_executor = getattr(models, "executor", None) if models else None
         workspace_root = getattr(cfg, "workspace_root", None) if cfg else None
+        capabilities = self._orchestrator.get_capabilities() if self._orchestrator else {}
+        mcp_info = capabilities.get("mcp_servers", {}) if isinstance(capabilities, dict) else {}
+        static_mcp = mcp_info.get("static", []) if isinstance(mcp_info, dict) else []
+        dynamic_mcp = mcp_info.get("dynamic", []) if isinstance(mcp_info, dict) else []
+        capability_tools = capabilities.get("tools", []) if isinstance(capabilities, dict) else []
+        capability_agents = capabilities.get("agents", []) if isinstance(capabilities, dict) else []
+        capability_hooks = capabilities.get("hooks", []) if isinstance(capabilities, dict) else []
+        capability_skills = capabilities.get("skills", []) if isinstance(capabilities, dict) else []
+        skills_enabled = bool(capabilities.get("skills_enabled", False)) if isinstance(capabilities, dict) else False
+        delegated_provider_policy = os.environ.get("JARVIS_DELEGATED_PROVIDER_POLICY", "opencode_only")
+        delegated_permission_mode = os.environ.get("JARVIS_A2A_PERMISSION_MODE", "bypassPermissions")
+        opencode_permission_rules_count = 0
+        opencode_permission_profile = "unknown"
+        try:
+            from jarvis.opencode_client import get_opencode_client
+
+            opencode_client = get_opencode_client()
+            rules = opencode_client._session_permission_rules()
+            opencode_permission_rules_count = len(rules) if isinstance(rules, list) else 0
+            opencode_permission_profile = "custom" if opencode_permission_rules_count > 0 else "none"
+        except Exception:
+            pass
+        mcp_tool_count = (
+            len([t for t in capability_tools if isinstance(t, str) and t.startswith("mcp__")])
+            if isinstance(capability_tools, list)
+            else 0
+        )
+        skill_tool_available = (
+            any(t == "Skill" or t == "skill://Skill" for t in capability_tools)
+            if isinstance(capability_tools, list)
+            else False
+        )
+        opencode_inventory = await asyncio.to_thread(self._discover_opencode_inventory)
 
         return {
             "workspace_root": str(workspace),
@@ -906,12 +955,43 @@ class JarvisWSServer:
                 "a2a_opencode_model": os.environ.get("JARVIS_A2A_OPENCODE_MODEL", "opencode/glm-5-free"),
                 "task_timeout_secs": os.environ.get("JARVIS_TASK_TIMEOUT_SECS", ""),
                 "opencode_timeout_secs": os.environ.get("JARVIS_OPENCODE_TIMEOUT_SECS", "300"),
+                "delegated_provider_policy": delegated_provider_policy,
+                "delegated_permission_mode": delegated_permission_mode,
+                "opencode_session_permission_profile": opencode_permission_profile,
+                "opencode_session_permissions_count": opencode_permission_rules_count,
+                "mcp_config_source": str(JARVIS_MCP_RUNTIME_CONFIG),
+                "loaded_static_mcp_servers": static_mcp,
+                "loaded_dynamic_mcp_servers": dynamic_mcp,
+                "capability_tool_count": len(capability_tools) if isinstance(capability_tools, list) else 0,
+                "capability_mcp_tool_count": mcp_tool_count,
+                "capability_agents": capability_agents if isinstance(capability_agents, list) else [],
+                "capability_hooks": capability_hooks if isinstance(capability_hooks, list) else [],
+                "capability_skills": capability_skills if isinstance(capability_skills, list) else [],
+                "skills_enabled": skills_enabled,
+                "skill_tool_available": skill_tool_available,
+                "discovered_skill_count": len(opencode_inventory.get("skills", [])),
+                "discovered_skills_preview": opencode_inventory.get("skills", [])[:8],
+                "discovered_skills": opencode_inventory.get("skills", []),
+                "discovered_mcp_servers": opencode_inventory.get("mcp_servers", []),
             },
             "summary": {
                 "worktree_count": len(worktrees),
                 "container_count": len(mapped_containers),
                 "mapped_container_count": len([c for c in mapped_containers if c.get("worktree_path")]),
                 "generated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "paths": {
+                "jarvis_home": str(Path.home() / ".jarvis"),
+                "system_dir": str(JARVIS_SYSTEM_DIR),
+                "jarvis_config": str(JARVIS_CONFIG),
+                "opencode_config": str(JARVIS_OPENCODE_CONFIG),
+                "runtime_workflow_dir": str(JARVIS_RUNTIME_WORKFLOW_DIR),
+                "runtime_docs_dir": str(JARVIS_RUNTIME_WORKFLOW_DIR / "docs"),
+                "runtime_mcp_config": str(JARVIS_MCP_RUNTIME_CONFIG),
+                "a2a_token": str(JARVIS_A2A_TOKEN),
+                "logs_dir": str(JARVIS_LOGS),
+                "db_path": str(JARVIS_DB),
+                "pids_dir": str(JARVIS_PIDS),
             },
             "worktrees": worktrees,
             "containers": mapped_containers,
@@ -924,7 +1004,25 @@ class JarvisWSServer:
         if not self._orchestrator:
             return []
 
-        tasks = self._orchestrator.memory.list_tasks(self._orchestrator.project_path)[:limit]
+        cfg = getattr(self._orchestrator, "config", None)
+        configured_workspace_root = (
+            str(Path(cfg.workspace_root).expanduser().resolve())
+            if cfg and getattr(cfg, "workspace_root", None)
+            else None
+        )
+
+        scopes: list[str] = []
+        current_project = str(Path(self._orchestrator.project_path).expanduser().resolve())
+        scopes.append(current_project)
+        if configured_workspace_root and configured_workspace_root not in scopes:
+            scopes.append(configured_workspace_root)
+
+        by_id: dict[str, Any] = {}
+        for scope in scopes:
+            for task in self._orchestrator.memory.list_tasks(scope):
+                by_id[task.id] = task
+
+        tasks = sorted(by_id.values(), key=lambda t: t.updated_at, reverse=True)[:limit]
         if not tasks:
             return []
 
@@ -1104,6 +1202,96 @@ class JarvisWSServer:
                 seen.add(mount)
                 deduped.append(mount)
         return deduped
+
+    @staticmethod
+    def _discover_opencode_tools() -> list[str]:
+        """Discover tool surfaces from OpenCode runtime inventory."""
+        inventory = JarvisWSServer._discover_opencode_inventory()
+        return sorted(set(inventory.get("tools", [])))
+
+    @staticmethod
+    def _discover_opencode_inventory() -> dict[str, list[str]]:
+        """Discover OpenCode runtime inventory using native OpenCode CLI commands."""
+        from jarvis.config import JARVIS_OPENCODE_CONFIG
+
+        binary = os.environ.get("JARVIS_OPENCODE_BIN", str(Path.home() / ".bun" / "bin" / "opencode"))
+        env = os.environ.copy()
+        env["OPENCODE_CONFIG"] = str(JARVIS_OPENCODE_CONFIG)
+        discovered_tools: set[str] = set()
+        discovered_skills: set[str] = set()
+        discovered_mcp_servers: set[str] = set()
+
+        def run_cli(*args: str, timeout: int = 25) -> str:
+            try:
+                proc = subprocess.run(
+                    [binary, *args],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    timeout=timeout,
+                    check=False,
+                )
+                return (proc.stdout or "").strip()
+            except Exception:
+                return ""
+
+        # 1) Skills: OpenCode's own discovered skill catalog.
+        skill_out = run_cli("debug", "skill")
+        if skill_out:
+            skill_json_blob = ""
+            first = skill_out.find("[")
+            last = skill_out.rfind("]")
+            if first != -1 and last != -1 and last > first:
+                skill_json_blob = skill_out[first:last + 1]
+            try:
+                skill_data = json.loads(skill_json_blob or skill_out)
+            except json.JSONDecodeError:
+                skill_data = None
+            if isinstance(skill_data, list):
+                for entry in skill_data:
+                    if not isinstance(entry, dict):
+                        continue
+                    name = str(entry.get("name") or "").strip()
+                    if name:
+                        discovered_skills.add(name)
+                        discovered_tools.add(f"skill://{name}")
+            else:
+                # Fallback: OpenCode may truncate huge skill payloads; extract names from raw output.
+                for match in re.finditer(r'"name"\s*:\s*"([^"]+)"', skill_out):
+                    name = str(match.group(1)).strip()
+                    if name:
+                        discovered_skills.add(name)
+                        discovered_tools.add(f"skill://{name}")
+
+        # 2) MCP servers discovered by OpenCode runtime.
+        mcp_out = run_cli("mcp", "list")
+        if mcp_out:
+            ansi_free = re.sub(r"\x1B\[[0-9;]*[A-Za-z]", "", mcp_out)
+            for line in ansi_free.splitlines():
+                line = line.strip()
+                match = re.search(r"[✓✗]\s+([A-Za-z0-9._-]+)", line)
+                if match:
+                    server_name = match.group(1)
+                    discovered_mcp_servers.add(server_name)
+                    discovered_tools.add(f"mcp://{server_name}")
+
+        # 3) Session permission tool classes used for delegated execution.
+        from jarvis.opencode_client import get_opencode_client
+
+        try:
+            client = get_opencode_client()
+            for rule in client._session_permission_rules():
+                permission = str(rule.get("permission") or "").strip()
+                if permission:
+                    discovered_tools.add(f"opencode://permission/{permission}")
+        except Exception:
+            pass
+
+        return {
+            "tools": sorted(discovered_tools),
+            "skills": sorted(discovered_skills),
+            "mcp_servers": sorted(discovered_mcp_servers),
+        }
 
     def _broadcast_event(self, event_data: dict) -> None:
         """EventCollector listener callback: push events to all clients."""

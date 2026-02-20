@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib import parse, request
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from jarvis.config import JarvisConfig, ensure_jarvis_home
+from jarvis.config import JARVIS_LOGS, JARVIS_PIDS, JarvisConfig, ensure_jarvis_home
 from jarvis.notifications import set_slack_bot, set_voice_client
 from jarvis.orchestrator import JarvisOrchestrator
 from jarvis.ws_server import JarvisWSServer
@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 class CrashRecovery:
     """Daemon crash recovery: detects unclean shutdowns and recovers state."""
 
-    PID_FILE = Path.home() / ".jarvis" / "daemon.pid"
-    CRASH_LOG = Path.home() / ".jarvis" / "logs" / "crash.log"
+    PID_FILE = JARVIS_PIDS / "daemon.pid"
+    CRASH_LOG = JARVIS_LOGS / "crash.log"
 
     @classmethod
     def write_pid(cls) -> None:

@@ -8,14 +8,13 @@ Distilled research articles and patterns.
 | [openai-unlocking-codex-harness.md](openai-unlocking-codex-harness.md) | OpenAI Blog | Thread/turn/item protocol model; adapt loop interfaces, not runtime-specific wiring |
 | [openai-unrolling-codex-agent-loop.md](openai-unrolling-codex-agent-loop.md) | OpenAI Blog | Explicit agent loop design (role/instructions/tools/input + self-correction stages) |
 | [langchain-improving-deep-agents-harness-engineering.md](langchain-improving-deep-agents-harness-engineering.md) | X post + LangChain Blog | Trace-driven harness iteration + self-verification loop improved benchmark score with fixed model |
-| [verification-loops.md](verification-loops.md) | Anthropic | Feature lists, self-verification |
-| [garbage-collection.md](garbage-collection.md) | OpenAI | Continuous debt paydown |
 | [vercel-agents-md.md](vercel-agents-md.md) | Vercel | Passive context beats skills, 100% vs 79% |
 | [context-learning-loop.md](context-learning-loop.md) | Internal proposal | Traces → hooks → rules; verdict: Adapt (use existing skills, add hook enforcement) |
 | [draw-io-diagram-generation.md](draw-io-diagram-generation.md) | Process guide | Diagram generation workflow with draw.io (Mermaid/XML/CSV) |
-| [local-models-integration.md](local-models-integration.md) | Internal — updated 2026-02-20 | Foundation Models remain the only in-process local runtime; OpenCode is external provider path; menu bar startup uses app-bundle binary with sync guard to avoid crash loops |
+| [local-models-integration.md](local-models-integration.md) | Internal — updated 2026-02-20 | Foundation Models remain the only in-process local runtime; OpenCode is external provider path; menu bar startup auto-reloads stale launchctl targets |
 | [openclaw-jarvis-integration.md](openclaw-jarvis-integration.md) | OpenClaw docs + DeepWiki + live validation (2026-02-20) | Includes update-ownership map: where to change bridge code vs workspace `AGENTS/TOOLS/BOOT/docs`, plus non-blocking + stepwise delegation rules |
 | [opencode-parallel-worktrees.md](opencode-parallel-worktrees.md) | Claude Code docs + OpenCode docs + DeepWiki (2026-02-20) | Manager + parallel OpenCode subagents with per-role containerized git worktrees, deterministic gates, and PR/issue handoff |
+| [jarvis-autonomous-evolution.md](jarvis-autonomous-evolution.md) | Internal runtime contract | Jarvis updates docs/workflow continuously while keeping AGENTS compressed and trigger-based |
 | [harness-governance.md](harness-governance.md) | Internal policy | What is always-on vs progressive vs enforced, and cross-runtime (Claude + Codex) rules |
 | [harness-purpose-map.md](harness-purpose-map.md) | Internal policy | Why each enforced harness item exists and when to remove it |
 | [social-post-intake.md](social-post-intake.md) | Internal process | Fast extraction cascade for X/LinkedIn/Threads research links |
@@ -32,7 +31,7 @@ Distilled research articles and patterns.
 2. **openai-unrolling-codex-agent-loop.md** - Explicit loop design
 3. **openai-unlocking-codex-harness.md** - Protocol and runtime shape
 4. **langchain-improving-deep-agents-harness-engineering.md** - Trace-driven optimization loop
-5. **verification-loops.md** - How to verify progress
+5. **jarvis-autonomous-evolution.md** - How Jarvis self-updates docs/workflow with progressive loading
 
 ## Contribution
 
