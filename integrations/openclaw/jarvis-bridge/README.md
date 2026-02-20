@@ -22,7 +22,7 @@ Add under `plugins.entries.jarvis-bridge.config`:
   baseUrl: "http://127.0.0.1:9848",
   tokenPath: "~/.jarvis/a2a_token",
   defaultWait: false,
-  defaultTimeoutSec: 300,
+  defaultTimeoutSec: 18000,
   pollIntervalMs: 1000,
 }
 ```
@@ -39,3 +39,7 @@ Optional auth overrides:
 - Recommended split:
   - OpenClaw-native tools (Perplexity/Browser/Context7) for research discovery.
   - Jarvis delegation for execution-heavy work (coding, structured implementation, long-running actions).
+- Reliability pattern for long work:
+  - Delegate in small atomic steps with explicit completion tokens (`DONE_STEP1`, `DONE_STEP2`, ...).
+  - Default to non-blocking (`wait=false`) and only use `wait=true` for bounded checks.
+  - For coding tasks, explicitly state `OPENCODE ONLY` in the delegated task text.

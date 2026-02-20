@@ -21,7 +21,7 @@ import traceback
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -128,7 +128,35 @@ MAIL_ROUTE_PATTERNS = (
     "follow-up",
     "unread",
     "missed",
-    "reply",
+)
+
+A2A_WORKFLOW_MODES = {"auto", "single", "stepwise", "parallel"}
+A2A_PARALLEL_KEYWORDS = (
+    "parallel",
+    "subagent",
+    "sub-agent",
+    "worktree",
+    "worktrees",
+    "multiple agents",
+    "multi-agent",
+    "security review",
+    "code review",
+    "pull request",
+    "raise pr",
+)
+A2A_STEPWISE_KEYWORDS = (
+    "design",
+    "develop",
+    "implement",
+    "build",
+    "test",
+    "browser",
+    "e2e",
+    "api",
+    "start server",
+    "restart server",
+    "fix",
+    "verify",
 )
 
 
@@ -417,7 +445,14 @@ class JarvisOrchestrator:
         urls = self._extract_urls_from_text(text)
         if not urls:
             return 0
-        added = self.memory.add_research_sources(urls, source=source)
+        add_research_sources = getattr(self.memory, "add_research_sources", None)
+        if not callable(add_research_sources):
+            return 0
+        try:
+            added = int(add_research_sources(urls, source=source) or 0)
+        except Exception:
+            logger.debug("Failed to ingest research URLs from %s", source, exc_info=True)
+            return 0
         if added:
             self.events.emit(
                 "research_sources_added",
@@ -597,12 +632,11 @@ class JarvisOrchestrator:
             return (
                 "You are Jarvis, a pragmatic assistant for coding and operations. "
                 "Be concise, actionable, and explicit about failures. "
-                "For coding requests, delegate to coder-expert first. "
-                "For inbox/mail requests, delegate to mail-chief first."
+                "Choose tools, agents, and workflow dynamically at runtime based on the task and repository context."
             )
         return self._build_system_prompt()
 
-    def _build_options(self) -> ClaudeAgentOptions:
+    def _build_options(self, permission_mode: str = "acceptEdits") -> ClaudeAgentOptions:
         """Build Agent SDK options with all Jarvis integrations."""
         model_id = self.config.models.executor
         provider_type = self._effective_provider_type()
@@ -612,7 +646,7 @@ class JarvisOrchestrator:
         options = ClaudeAgentOptions(
             system_prompt=self._build_runtime_system_prompt(provider_type),
             allowed_tools=allowed_tools,
-            permission_mode="acceptEdits",
+            permission_mode=permission_mode,
             max_turns=self.config.budget.max_turns_per_task,
             max_budget_usd=self.config.budget.max_per_session_usd,
             model=model_id,
@@ -641,7 +675,7 @@ class JarvisOrchestrator:
 
     def _build_chat_options(self) -> ClaudeAgentOptions:
         """Build chat-focused options."""
-        return self._build_options()
+        return self._build_options(permission_mode="acceptEdits")
 
     async def _run_task_local(
         self,
@@ -778,11 +812,39 @@ class JarvisOrchestrator:
             self._ensure_opencode_config_env()
             client = get_opencode_client()
             agent_name = os.environ.get("JARVIS_OPENCODE_AGENT", "").strip() or None
+            timeout_seconds = int(os.environ.get("JARVIS_OPENCODE_TIMEOUT_SECS", "300"))
+            last_info_signature: str | None = None
+
+            async def on_progress(payload: dict[str, Any]) -> None:
+                nonlocal last_info_signature
+                if not isinstance(payload, dict):
+                    return
+                if str(payload.get("type") or "").strip().lower() == "message_info":
+                    info = payload.get("info")
+                    if isinstance(info, dict):
+                        role = str(info.get("role") or "").strip().lower()
+                        if role and role != "assistant":
+                            return
+                        path_info = info.get("path") if isinstance(info.get("path"), dict) else {}
+                        signature_payload = {
+                            "role": role,
+                            "providerID": info.get("providerID"),
+                            "modelID": info.get("modelID"),
+                            "agent": info.get("agent"),
+                            "cwd": (path_info or {}).get("cwd"),
+                        }
+                        signature = json.dumps(signature_payload, sort_keys=True, default=str)
+                        if signature == last_info_signature:
+                            return
+                        last_info_signature = signature
+                self._emit_opencode_progress(task_id, payload)
+
             run = await client.run_task(
                 task_description,
                 model_id=model_id,
                 agent=agent_name,
-                timeout_seconds=int(os.environ.get("JARVIS_OPENCODE_TIMEOUT_SECS", "300")),
+                timeout_seconds=timeout_seconds,
+                on_progress=on_progress,
             )
             result["session_id"] = run.session_id
             result["output"] = run.text
@@ -802,6 +864,92 @@ class JarvisOrchestrator:
             self.events.emit(EVENT_ERROR, str(e), task_id=task_id, metadata={"provider": "opencode"})
 
         return result
+
+    def _emit_opencode_progress(self, task_id: str, payload: dict[str, Any]) -> None:
+        """Emit timeline-friendly progress events from native OpenCode message payloads."""
+        if not isinstance(payload, dict):
+            return
+        payload_type = str(payload.get("type") or "").strip().lower()
+        if payload_type == "message_info":
+            info = payload.get("info")
+            if not isinstance(info, dict):
+                return
+            path_info = info.get("path") if isinstance(info.get("path"), dict) else {}
+            cwd = str((path_info or {}).get("cwd") or "")
+            provider_id = str(info.get("providerID") or "")
+            model_id = str(info.get("modelID") or "")
+            agent = str(info.get("agent") or "")
+            summary = f"OpenCode session cwd={cwd or 'unknown'} model={model_id or 'unknown'}"
+            self.events.emit(
+                "task_execution_config",
+                summary,
+                task_id=task_id,
+                metadata={
+                    "provider_type": provider_id or "opencode",
+                    "model_id": model_id,
+                    "agent": agent,
+                    "cwd": cwd,
+                    "session_id": str(payload.get("session_id") or ""),
+                    "source": "opencode_message_info",
+                },
+            )
+            return
+        if payload_type != "message_part":
+            return
+        part = payload.get("part")
+        if not isinstance(part, dict):
+            return
+        part_type = str(part.get("type") or "").strip().lower()
+        if not part_type:
+            return
+
+        metadata: dict[str, Any] = {
+            "tool": f"opencode:{part_type}",
+            "session_id": str(payload.get("session_id") or ""),
+        }
+        for key in ("command", "file", "path", "name", "reason", "text"):
+            value = part.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                metadata[key] = text[:1000]
+
+        summary = self._opencode_part_summary(part_type, part)
+        self.events.emit(
+            "tool_use",
+            summary,
+            task_id=task_id,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _opencode_part_summary(part_type: str, part: dict[str, Any]) -> str:
+        """Build concise summaries for OpenCode part stream events."""
+        if part_type == "step-start":
+            return "opencode step started"
+        if part_type == "step-finish":
+            reason = str(part.get("reason") or "").strip()
+            return f"opencode step finished ({reason})" if reason else "opencode step finished"
+        if part_type == "reasoning":
+            text = str(part.get("text") or "").strip()
+            return f"opencode reasoning: {text[:140]}" if text else "opencode reasoning"
+
+        # Tool-ish parts in OpenCode commonly include explicit names/commands/paths.
+        name = str(part.get("name") or "").strip()
+        command = str(part.get("command") or "").strip()
+        path = str(part.get("path") or "").strip()
+        if name:
+            return f"opencode {part_type}: {name}"
+        if command:
+            compact = re.sub(r"\s+", " ", command).strip()
+            return f"opencode {part_type}: {compact[:140]}"
+        if path:
+            return f"opencode {part_type}: {path}"
+        text = str(part.get("text") or "").strip()
+        if text:
+            return f"opencode {part_type}: {text[:140]}"
+        return f"opencode {part_type}"
 
     async def _chat_opencode(self, user_message: str, model_id: str) -> dict:
         """Handle chat via OpenCode server."""
@@ -857,6 +1005,184 @@ class JarvisOrchestrator:
                 "reply": f"OpenCode error: {e}",
                 "decision": {"mode": "chat", "confidence": 0.0, "reason": "opencode_error"},
             }
+
+    def _resolve_task_provider_for_origin(
+        self,
+        *,
+        origin: str,
+        provider_type: str,
+        model_id: str,
+    ) -> tuple[str, str]:
+        """Resolve provider/model for task execution, with A2A-specific policy overrides."""
+        if origin != "a2a":
+            return provider_type, model_id
+
+        # Policy: tasks delegated from OpenClaw through A2A must run on OpenCode only.
+        forced_provider = "opencode"
+        forced_model = model_id
+        if not (
+            forced_model.startswith("opencode/")
+            or forced_model.startswith("opencode:")
+            or forced_model == "opencode"
+        ):
+            forced_model = os.environ.get("JARVIS_A2A_OPENCODE_MODEL", "opencode/glm-5-free").strip()
+            if not forced_model:
+                forced_model = "opencode/glm-5-free"
+
+        if provider_type != forced_provider or forced_model != model_id:
+            logger.info(
+                "A2A provider override applied: provider %s -> %s, model %s -> %s",
+                provider_type,
+                forced_provider,
+                model_id,
+                forced_model,
+            )
+        return forced_provider, forced_model
+
+    @staticmethod
+    def _normalize_a2a_workflow_mode(raw_mode: str | None) -> str:
+        mode = str(raw_mode or "").strip().lower()
+        return mode if mode in A2A_WORKFLOW_MODES else "auto"
+
+    def _select_a2a_workflow(self, *, origin: str, task_description: str) -> tuple[str, str]:
+        """Use runtime autonomy for workflow selection."""
+        if origin == "a2a":
+            return "runtime", "runtime_autonomy"
+        return "runtime", "origin_non_a2a"
+
+    def _apply_a2a_workflow_prompt(self, *, task_description: str, workflow_mode: str) -> str:
+        """Do not inject deterministic workflow prompts; let runtime choose."""
+        return task_description
+
+    async def _finalize_task_result(
+        self,
+        *,
+        result: dict[str, Any],
+        provider_type: str,
+        specialist: str | None,
+        task_description: str,
+        tool_calls: list[dict[str, Any]],
+        task_id: str,
+        route: str,
+        workflow_mode: str,
+        origin: str,
+        emit_notifications: bool,
+        callback: Callable[[str, dict], None] | None,
+    ) -> dict:
+        """Finalize task bookkeeping, learning, and notifications for all providers."""
+        if provider_type not in {"foundation", "opencode"}:
+            self._enforce_coder_completion_gate(
+                specialist=specialist,
+                task_description=task_description,
+                tool_calls=tool_calls,
+                result=result,
+            )
+
+        # Update task record
+        final_status = result["status"]
+        if final_status not in ("completed", "failed", "cancelled"):
+            final_status = "failed"
+        self.memory.transition_task(
+            task_id,
+            final_status,
+            cost_usd=result["cost_usd"],
+            turns=result["turns"],
+            session_id=result["session_id"],
+            result=result["output"][:5000],
+        )
+
+        # Store decision trace
+        try:
+            trace_outcome = "success" if result["status"] == "completed" else "failure"
+            await self.tracer.store_trace(
+                category=TraceCategory.TASK_EXECUTION,
+                description=task_description[:500],
+                decision=(
+                    "Executed task "
+                    f"(route={route}, specialist={specialist or 'none'})"
+                ),
+                context={
+                    "turns": result["turns"],
+                    "cost": result["cost_usd"],
+                    "route": route,
+                },
+                outcome=trace_outcome,
+                project_path=self.project_path,
+            )
+        except Exception:
+            pass
+
+        # Self-learning: extract patterns from execution records
+        if self.config.knowledge.enable_learning:
+            try:
+                records = self.memory.get_execution_records(task_id=task_id, limit=1)
+                if records:
+                    learning_stats = await learn_from_task(
+                        task_id=task_id,
+                        project_path=self.project_path,
+                        memory=self.memory,
+                    )
+                    if learning_stats.get("errors_found", 0) > 0:
+                        logger.info(
+                            f"Learning loop: Task {task_id} - "
+                            f"{learning_stats['errors_found']} errors found, "
+                            f"{learning_stats['learnings_saved']} patterns saved, "
+                            f"{learning_stats['skills_flagged']} skill candidates flagged"
+                        )
+                    if learning_stats["learnings_saved"] > 0:
+                        self.events.emit(
+                            "learning_captured",
+                            f"Learned {learning_stats['learnings_saved']} patterns from task",
+                            task_id=task_id,
+                            metadata=learning_stats,
+                        )
+                else:
+                    logger.debug(f"Learning loop: Task {task_id} - No execution records to analyze")
+            except Exception as e:
+                logger.warning(f"Learning extraction failed for task {task_id}: {e}", exc_info=True)
+                self.events.emit(EVENT_ERROR, f"Learning extraction failed: {e}", task_id=task_id)
+        else:
+            logger.debug(f"Learning loop: Disabled by config for task {task_id}")
+
+        # Events + macOS notifications
+        if result["status"] == "completed":
+            self.events.emit(
+                EVENT_TASK_COMPLETE,
+                task_description,
+                task_id=task_id,
+                cost_usd=result["cost_usd"],
+                metadata={"origin": origin, "slack_notify": emit_notifications},
+            )
+            if emit_notifications:
+                await notify_task_completed(task_id, task_description, result["cost_usd"])
+        elif result["status"] in ("failed", "error"):
+            self.events.emit(
+                EVENT_ERROR,
+                result["output"][:200],
+                task_id=task_id,
+                metadata={
+                    "error": result["output"][:5000],
+                    "origin": origin,
+                    "slack_notify": emit_notifications,
+                },
+            )
+            if emit_notifications:
+                await notify_task_failed(task_id, task_description, result["output"][:100])
+
+        append_project_turn(
+            self.project_path,
+            actor=f"task:{origin}",
+            message=task_description,
+            outcome=(
+                f"status={result['status']} turns={result['turns']} "
+                f"cost=${result['cost_usd']:.2f}"
+            ),
+        )
+
+        if callback:
+            callback("task_completed", result)
+
+        return result
 
     def _ensure_opencode_config_env(self) -> None:
         """Point OpenCode to repo-local config when present."""
@@ -975,8 +1301,11 @@ class JarvisOrchestrator:
         if origin != "idle_research":
             self._ingest_research_urls_from_text(task_description, source=f"task:{origin}")
 
-        specialist, route = self._select_specialist(task_description)
-        routed_description = self._augment_prompt_for_specialist(task_description, specialist, mode="task")
+        specialist: str | None = None
+        route = "autonomous"
+        routed_description = task_description
+        workflow_mode = ""
+        workflow_reason = "autonomous_runtime"
 
         # Create task record
         task_id = f"task-{uuid.uuid4().hex[:8]}"
@@ -993,8 +1322,6 @@ class JarvisOrchestrator:
             metadata={
                 "origin": origin,
                 "slack_notify": emit_notifications,
-                "route": route,
-                "specialist": specialist,
             },
         )
         if callback:
@@ -1003,17 +1330,59 @@ class JarvisOrchestrator:
         # Use local providers directly (bypass Claude Agent SDK).
         provider_type = self._effective_provider_type()
         model_id = self.config.models.executor
+        provider_type, model_id = self._resolve_task_provider_for_origin(
+            origin=origin,
+            provider_type=provider_type,
+            model_id=model_id,
+        )
+        self.events.emit(
+            "task_execution_config",
+            f"provider={provider_type} model={model_id}",
+            task_id=task_id,
+            metadata={
+                "origin": origin,
+                "provider_type": provider_type,
+                "model_id": model_id,
+            },
+        )
 
         if provider_type == "foundation":
-            return await self._run_task_local(
-                task_id, task_description, provider_type, model_id, emit_notifications
+            local_result = await self._run_task_local(
+                task_id, routed_description, provider_type, model_id, emit_notifications
+            )
+            return await self._finalize_task_result(
+                result=local_result,
+                provider_type=provider_type,
+                specialist=specialist,
+                task_description=task_description,
+                tool_calls=[],
+                task_id=task_id,
+                route=route,
+                workflow_mode=workflow_mode,
+                origin=origin,
+                emit_notifications=emit_notifications,
+                callback=callback,
             )
         if provider_type == "opencode":
-            return await self._run_task_opencode(
-                task_id, task_description, model_id, emit_notifications
+            opencode_result = await self._run_task_opencode(
+                task_id, routed_description, model_id, emit_notifications
+            )
+            return await self._finalize_task_result(
+                result=opencode_result,
+                provider_type=provider_type,
+                specialist=specialist,
+                task_description=task_description,
+                tool_calls=[],
+                task_id=task_id,
+                route=route,
+                workflow_mode=workflow_mode,
+                origin=origin,
+                emit_notifications=emit_notifications,
+                callback=callback,
             )
 
-        options = self._build_options()
+        task_permission_mode = "bypassPermissions" if origin == "a2a" else "acceptEdits"
+        options = self._build_options(permission_mode=task_permission_mode)
         result = {
             "task_id": task_id,
             "status": "unknown",
@@ -1111,110 +1480,19 @@ class JarvisOrchestrator:
             # Clean up containers
             await self._cleanup_containers()
 
-        self._enforce_coder_completion_gate(
+        return await self._finalize_task_result(
+            result=result,
+            provider_type=provider_type,
             specialist=specialist,
             task_description=task_description,
             tool_calls=tool_calls,
-            result=result,
+            task_id=task_id,
+            route=route,
+            workflow_mode=workflow_mode,
+            origin=origin,
+            emit_notifications=emit_notifications,
+            callback=callback,
         )
-
-        # Update task record
-        final_status = result["status"]
-        if final_status not in ("completed", "failed", "cancelled"):
-            final_status = "failed"
-        self.memory.transition_task(
-            task_id,
-            final_status,
-            cost_usd=result["cost_usd"],
-            turns=result["turns"],
-            session_id=result["session_id"],
-            result=result["output"][:5000],
-        )
-
-        # Store decision trace
-        try:
-            trace_outcome = "success" if result["status"] == "completed" else "failure"
-            await self.tracer.store_trace(
-                category=TraceCategory.TASK_EXECUTION,
-                description=task_description[:500],
-                decision=f"Executed as single-agent task (route={route}, specialist={specialist or 'none'})",
-                context={"turns": result["turns"], "cost": result["cost_usd"], "route": route},
-                outcome=trace_outcome,
-                project_path=self.project_path,
-            )
-        except Exception:
-            pass
-
-        # Self-learning: extract patterns from execution records
-        if self.config.knowledge.enable_learning:
-            try:
-                # Check if we have execution records to learn from
-                records = self.memory.get_execution_records(task_id=task_id, limit=1)
-                if records:
-                    learning_stats = await learn_from_task(
-                        task_id=task_id,
-                        project_path=self.project_path,
-                        memory=self.memory,
-                    )
-                    if learning_stats.get("errors_found", 0) > 0:
-                        logger.info(
-                            f"Learning loop: Task {task_id} - "
-                            f"{learning_stats['errors_found']} errors found, "
-                            f"{learning_stats['learnings_saved']} patterns saved, "
-                            f"{learning_stats['skills_flagged']} skill candidates flagged"
-                        )
-                    if learning_stats["learnings_saved"] > 0:
-                        self.events.emit(
-                            "learning_captured",
-                            f"Learned {learning_stats['learnings_saved']} patterns from task",
-                            task_id=task_id,
-                            metadata=learning_stats,
-                        )
-                else:
-                    logger.debug(f"Learning loop: Task {task_id} - No execution records to analyze")
-            except Exception as e:
-                # Don't block task completion on learning failure
-                logger.warning(f"Learning extraction failed for task {task_id}: {e}", exc_info=True)
-                self.events.emit(EVENT_ERROR, f"Learning extraction failed: {e}", task_id=task_id)
-        else:
-            logger.debug(f"Learning loop: Disabled by config for task {task_id}")
-
-        # Events + macOS notifications
-        if result["status"] == "completed":
-            self.events.emit(
-                EVENT_TASK_COMPLETE,
-                task_description,
-                task_id=task_id,
-                cost_usd=result["cost_usd"],
-                metadata={"origin": origin, "slack_notify": emit_notifications},
-            )
-            if emit_notifications:
-                await notify_task_completed(task_id, task_description, result["cost_usd"])
-        elif result["status"] in ("failed", "error"):
-            self.events.emit(
-                EVENT_ERROR,
-                result["output"][:200],
-                task_id=task_id,
-                metadata={
-                    "error": result["output"][:5000],
-                    "origin": origin,
-                    "slack_notify": emit_notifications,
-                },
-            )
-            if emit_notifications:
-                await notify_task_failed(task_id, task_description, result["output"][:100])
-
-        append_project_turn(
-            self.project_path,
-            actor=f"task:{origin}",
-            message=task_description,
-            outcome=f"status={result['status']} turns={result['turns']} cost=${result['cost_usd']:.2f}",
-        )
-
-        if callback:
-            callback("task_completed", result)
-
-        return result
 
     async def _ensure_chat_client(self, channel_id: str | None = None) -> ClaudeSDKClient:
         """Get or create a ClaudeSDKClient for the given channel.
@@ -1331,8 +1609,9 @@ class JarvisOrchestrator:
             Dict with status, route, reply, decision (backward-compat shape).
         """
         self._ingest_research_urls_from_text(user_message, source=f"chat:{origin}")
-        specialist, route = self._select_specialist(user_message)
-        routed_message = self._augment_prompt_for_specialist(user_message, specialist, mode="chat")
+        specialist: str | None = None
+        route = "autonomous"
+        routed_message = user_message
 
         result = {
             "status": "unknown",
@@ -1349,7 +1628,7 @@ class JarvisOrchestrator:
         self.events.emit(
             "chat_user",
             user_message[:200],
-            metadata={"message": user_message[:5000], "route": route, "specialist": specialist},
+            metadata={"message": user_message[:5000]},
         )
 
         provider_type = self._effective_provider_type()

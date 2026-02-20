@@ -21,6 +21,15 @@ class _DummyMemory:
         self.calls.append((origin, project_path, user_message, reply))
 
 
+class _DummyResearchMemory:
+    def __init__(self):
+        self.calls = []
+
+    def add_research_sources(self, urls, source):
+        self.calls.append((urls, source))
+        return len(urls)
+
+
 async def _run(coro):
     return await coro
 
@@ -183,3 +192,113 @@ def test_handle_message_routes_mail_to_local_digest_for_opencode():
     assert result["decision"]["reason"] == "mail_digest_local"
     orch.run_mail_digest.assert_awaited_once_with(force=True, origin="chat:ws:test")
     orch._chat_opencode.assert_not_awaited()
+
+
+def test_ingest_research_urls_noop_when_memory_lacks_api():
+    orch = object.__new__(JarvisOrchestrator)
+    orch.memory = _DummyMemory()
+    orch.events = _DummyEvents()
+
+    added = JarvisOrchestrator._ingest_research_urls_from_text(
+        orch,
+        "Check http://127.0.0.1:4173 and https://example.com/docs",
+        source="task:a2a",
+    )
+
+    assert added == 0
+    assert orch.events.calls == []
+
+
+def test_ingest_research_urls_emits_event_when_supported():
+    orch = object.__new__(JarvisOrchestrator)
+    orch.memory = _DummyResearchMemory()
+    orch.events = _DummyEvents()
+
+    added = JarvisOrchestrator._ingest_research_urls_from_text(
+        orch,
+        "Check http://127.0.0.1:4173 and https://example.com/docs",
+        source="task:a2a",
+    )
+
+    assert added == 2
+    assert len(orch.memory.calls) == 1
+    assert len(orch.events.calls) == 1
+
+
+def test_resolve_task_provider_for_origin_forces_opencode_for_a2a():
+    orch = object.__new__(JarvisOrchestrator)
+
+    provider, model = JarvisOrchestrator._resolve_task_provider_for_origin(
+        orch,
+        origin="a2a",
+        provider_type="anthropic",
+        model_id="claude-sonnet-4-5-20250929",
+    )
+
+    assert provider == "opencode"
+    assert model.startswith("opencode/")
+
+
+def test_resolve_task_provider_for_origin_keeps_provider_for_non_a2a():
+    orch = object.__new__(JarvisOrchestrator)
+
+    provider, model = JarvisOrchestrator._resolve_task_provider_for_origin(
+        orch,
+        origin="ws",
+        provider_type="anthropic",
+        model_id="claude-sonnet-4-5-20250929",
+    )
+
+    assert provider == "anthropic"
+    assert model == "claude-sonnet-4-5-20250929"
+
+
+def test_select_a2a_workflow_single_for_simple_task():
+    orch = object.__new__(JarvisOrchestrator)
+    mode, reason = JarvisOrchestrator._select_a2a_workflow(
+        orch,
+        origin="a2a",
+        task_description="Reply with exactly PING_OK",
+    )
+    assert mode == "single"
+    assert reason == "simple_default"
+
+
+def test_select_a2a_workflow_stepwise_for_multi_stage_task():
+    orch = object.__new__(JarvisOrchestrator)
+    mode, reason = JarvisOrchestrator._select_a2a_workflow(
+        orch,
+        origin="a2a",
+        task_description=(
+            "Design and develop a React todo app, start server, run tests, "
+            "verify in browser and fix issues"
+        ),
+    )
+    assert mode == "stepwise"
+    assert reason.startswith("stepwise_signals:")
+
+
+def test_select_a2a_workflow_parallel_for_parallel_signals():
+    orch = object.__new__(JarvisOrchestrator)
+    mode, reason = JarvisOrchestrator._select_a2a_workflow(
+        orch,
+        origin="a2a",
+        task_description=(
+            "Use parallel subagent worktrees to implement feature, run tests, "
+            "do browser checks, and open pull request"
+        ),
+    )
+    assert mode == "parallel"
+    assert reason.startswith("parallel_signals:")
+
+
+def test_select_a2a_workflow_respects_env_override():
+    orch = object.__new__(JarvisOrchestrator)
+    with patch.dict("os.environ", {"JARVIS_A2A_WORKFLOW_MODE": "parallel"}, clear=False):
+        mode, reason = JarvisOrchestrator._select_a2a_workflow(
+            orch,
+            origin="a2a",
+            task_description="Reply with exactly PING_OK",
+        )
+    assert mode == "parallel"
+    assert reason == "env_override:parallel"

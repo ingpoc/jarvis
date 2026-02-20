@@ -29,6 +29,7 @@ Current model execution paths:
 - `provider_type=foundation` -> direct local execution (`_chat_local`, `_run_task_local`)
 - `provider_type=opencode` -> OpenCode execution (`_chat_opencode`, `_run_task_opencode`)
 - all other providers -> Claude Agent SDK path
+- `origin=a2a` task execution is policy-forced to OpenCode (model override to `JARVIS_A2A_OPENCODE_MODEL` or `opencode/glm-5-free`)
 
 ## WebSocket Contract (Menu Bar)
 
@@ -88,6 +89,9 @@ Notes:
 
 - `mlx` remains reserved for future direct runtime work.
 - OpenCode can use repo-local `opencode.json` for MCP registration (for example Zapier MCP).
+- A2A-origin execution uses `permission_mode="bypassPermissions"` to reduce delegated-task approval deadlocks.
+- OpenCode HTTP checks/calls are offloaded from the event loop in async paths to keep A2A polling responsive.
+- OpenCode config now includes `context7`, `deepwiki`, `context-graph`, and `token-efficient` MCP entries for retrieval + learning workflows.
 
 ## Testing
 
@@ -113,6 +117,8 @@ asyncio.run(t())"
 3. **OpenCode binary path**: daemon environment must include `JARVIS_OPENCODE_BIN` (defaulted in `start-jarvis.sh`).
 4. **Menu bar target drift**: always restart through `./start-jarvis.sh`, not ad-hoc launches.
 5. **Port ownership**: daemon serves WebSocket on `9847` and A2A on `9848`.
+6. **Delegated task timeout defaults**: `JARVIS_OPENCODE_TIMEOUT_SECS` controls long task runtime; `JARVIS_OPENCODE_CHAT_TIMEOUT_SECS` controls chat timeout.
+7. **URL-bearing delegated prompts**: orchestrator URL ingestion must be defensive when memory backend lacks `add_research_sources` (guarded in current code).
 
 ## Future Enhancements
 

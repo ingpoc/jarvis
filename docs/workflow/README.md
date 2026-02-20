@@ -16,7 +16,8 @@ Distilled research articles and patterns.
 | [draw-io-diagram-generation.md](draw-io-diagram-generation.md) | Process guide | Diagram generation workflow with draw.io (Mermaid/XML/CSV) |
 | [apple-mlx-frameworks.md](../apple-mlx/apple-mlx-frameworks.md) | DeepWiki Research | MLX for local LLM inference on Apple Silicon |
 | [local-models-integration.md](local-models-integration.md) | Internal — updated 2026-02-20 | Foundation Models remain the only in-process local runtime; OpenCode is external provider path; menu bar startup uses app-bundle binary with sync guard to avoid crash loops |
-| [openclaw-jarvis-integration.md](openclaw-jarvis-integration.md) | OpenClaw docs + DeepWiki + live validation (2026-02-19) | `registerGatewayMethod` must read `params`; OpenClaw `gateway call --params` maps to handler params; use OpenClaw-native research + Jarvis delegated execution split; for exhausted Anthropic subscription, set Jarvis coding provider to `opencode` or `foundation` |
+| [openclaw-jarvis-integration.md](openclaw-jarvis-integration.md) | OpenClaw docs + DeepWiki + live validation (2026-02-20) | Includes update-ownership map: where to change bridge code vs workspace `AGENTS/TOOLS/BOOT/docs`, plus non-blocking + stepwise delegation rules |
+| [opencode-parallel-worktrees.md](opencode-parallel-worktrees.md) | Claude Code docs + OpenCode docs + DeepWiki (2026-02-20) | Manager + parallel OpenCode subagents with per-role containerized git worktrees, deterministic gates, and PR/issue handoff |
 | [harness-governance.md](harness-governance.md) | Internal policy | What is always-on vs progressive vs enforced, and cross-runtime (Claude + Codex) rules |
 | [harness-purpose-map.md](harness-purpose-map.md) | Internal policy | Why each enforced harness item exists and when to remove it |
 | [social-post-intake.md](social-post-intake.md) | Internal process | Fast extraction cascade for X/LinkedIn/Threads research links |

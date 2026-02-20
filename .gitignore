@@ -56,3 +56,6 @@ JarvisiOS/.build/
 
 # Test artifacts
 .test/
+
+# Local task scratch/worktree artifacts
+tmp/

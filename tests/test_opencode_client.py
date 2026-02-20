@@ -39,6 +39,17 @@ def test_extract_text_prefers_last_text_part() -> None:
     assert client._extract_text_from_parts(payload) == "final answer"
 
 
+def test_session_permission_rules_include_bash_allow() -> None:
+    client = OpenCodeClient("http://127.0.0.1:4096", auto_start=False)
+    rules = client._session_permission_rules()
+    assert any(
+        rule.get("permission") == "bash"
+        and rule.get("pattern") == "*"
+        and rule.get("action") == "allow"
+        for rule in rules
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_task_offloads_network_calls_with_to_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     client = OpenCodeClient("http://127.0.0.1:4096", auto_start=False)
@@ -58,7 +69,17 @@ async def test_run_task_offloads_network_calls_with_to_thread(monkeypatch: pytes
         timeout: int = 30,
     ) -> dict:
         if method == "POST" and path == "/session":
-            assert payload == {"title": "Jarvis delegated task"}
+            assert isinstance(payload, dict)
+            assert payload.get("title") == "Jarvis delegated task"
+            rules = payload.get("permission")
+            assert isinstance(rules, list) and len(rules) > 0
+            assert any(
+                isinstance(rule, dict)
+                and rule.get("permission") == "bash"
+                and rule.get("pattern") == "*"
+                and rule.get("action") == "allow"
+                for rule in rules
+            )
             assert timeout == 10
             return {"id": "sess-123"}
         if method == "POST" and path == "/session/sess-123/message":

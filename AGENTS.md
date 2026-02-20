@@ -16,6 +16,9 @@ Agent-first development. Humans steer, agents execute.
 |large data → principles/token-efficiency.md
 |need a diagram / architecture diagram → workflow/draw-io-diagram-generation.md
 |local models / OpenCode / Foundation Models → workflow/local-models-integration.md
+|openclaw delegation / openclaw workspace docs / openclaw rule sync → workflow/openclaw-jarvis-integration.md
+|parallel subagents / git worktrees / containerized execution → workflow/opencode-parallel-worktrees.md
+|autonomous workflow choice / self-evolving execution loop → workflow/jarvis-autonomous-evolution.md
 |scripts/validation/build → jarvis/scripts.md
 |research paper/article/URL shared → load research-evaluator skill
 |X/LinkedIn/Threads post shared → workflow/social-post-intake.md then research-evaluator
@@ -26,7 +29,7 @@ Agent-first development. Humans steer, agents execute.
 |new optimization proposal / should we add this capability → capabilities/checklist.md
 |principles:{agent-first.md,progressive-disclosure.md,determinism.md,token-efficiency.md}
 |updating docs / storing bugs / context graph → workflow/context-learning-loop.md
-|workflow:{openai-harness.md,openai-unrolling-codex-agent-loop.md,openai-unlocking-codex-harness.md,langchain-improving-deep-agents-harness-engineering.md,vercel-agents-md.md,local-models-integration.md,context-learning-loop.md,harness-governance.md,harness-purpose-map.md,social-post-intake.md}
+|workflow:{openai-harness.md,openai-unrolling-codex-agent-loop.md,openai-unlocking-codex-harness.md,langchain-improving-deep-agents-harness-engineering.md,vercel-agents-md.md,local-models-integration.md,openclaw-jarvis-integration.md,opencode-parallel-worktrees.md,jarvis-autonomous-evolution.md,context-learning-loop.md,harness-governance.md,harness-purpose-map.md,social-post-intake.md}
 |capabilities:{README.md,checklist.md,codex.md,claude-code.md,claude-agent-sdk-python.md}
 |architecture:{layers.md,taste-invariants.md}
 |jarvis:{debugging.md,api-reference.md,conventions.md,scripts.md}
@@ -81,3 +84,24 @@ Agent-first development. Humans steer, agents execute.
 | Tools | Token-efficient MCP for large data |
 | Security | T2 (developer) - no prod deploys |
 | Verify | Tests pass (exit 0), lint passes, daemon healthy |
+
+---
+
+## Delegated Coding Workflow (Global)
+
+For tasks delegated from OpenClaw to Jarvis over A2A:
+
+1. Provider is OpenCode only (`provider_type=opencode`).
+2. Jarvis decides subagents, skills, workflow, worktrees, and containers autonomously at runtime from task context + docs.
+3. Frontend/UI tasks are incomplete unless browser-based validation is included.
+4. Large parallel work should follow `docs/workflow/opencode-parallel-worktrees.md`.
+5. Keep OpenClaw as router/research layer; keep Jarvis as execution layer.
+
+---
+
+## Docs + Compression Loop
+
+1. Jarvis may and should update `docs/` after non-trivial implementation or failure->fix work.
+2. Keep `AGENTS.md` compressed: only stable high-frequency rules and trigger/index pointers.
+3. Put detailed procedures and rationale in `docs/workflow/*.md`; reference them from `AGENTS.md` instead of duplicating.
+4. If a new repeated workflow appears, add one-line trigger in Docs Index and create/update the detailed workflow doc.

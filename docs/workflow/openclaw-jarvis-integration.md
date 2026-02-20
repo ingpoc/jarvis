@@ -35,6 +35,7 @@ Use this guide to make OpenClaw route execution tasks to Jarvis over A2A.
 - Keep OpenClaw as channel/router and research conductor.
 - Delegate execution-heavy tasks to Jarvis (`http://127.0.0.1:9848`) using A2A token auth.
 - Prevent repeated research loops by persisting a research/work ledger in workspace memory.
+- For large multi-stream engineering work, use the parallel execution pattern in `docs/workflow/opencode-parallel-worktrees.md`.
 
 ## Recommended Operating Split
 
@@ -124,6 +125,29 @@ Notes from docs + runtime behavior:
 - `PRINCIPLES.md` is custom (not a built-in injected file), so ensure `BOOT.md` explicitly points to it.
 - Keep `HEARTBEAT.md` short and action-oriented to avoid token waste.
 
+## OpenClaw Update Ownership Map
+
+When updating OpenClaw behavior, change the owner file first:
+
+| Change type | Owner file/location | Why |
+|-------------|---------------------|-----|
+| Bridge runtime behavior (JSON-RPC, wait/polling, task flow) | `integrations/openclaw/jarvis-bridge/index.ts` | Source of truth for tool/gateway behavior |
+| Bridge config defaults/schema | `integrations/openclaw/jarvis-bridge/openclaw.plugin.json` | Default values and allowed ranges |
+| Bridge operator instructions | `integrations/openclaw/jarvis-bridge/README.md` | Human-facing plugin usage |
+| OpenClaw command behavior (`/jarvis-chief`, `/jarvis-coder`) | `integrations/openclaw/jarvis-bridge/skills/*/SKILL.md` | Deterministic skill routing and task shaping |
+| OpenClaw live workspace operating rules | `/Users/gurusharan/Documents/remote-claude/Research/clawdbot/workspace/AGENTS.md` | Session contract actually read by OpenClaw |
+| OpenClaw tool routing policy | `/Users/gurusharan/Documents/remote-claude/Research/clawdbot/workspace/TOOLS.md` | Runtime tool-choice policy |
+| OpenClaw startup reads/health checks | `/Users/gurusharan/Documents/remote-claude/Research/clawdbot/workspace/BOOT.md` | Boot-time control plane |
+| OpenClaw workflow docs index | `/Users/gurusharan/Documents/remote-claude/Research/clawdbot/workspace/docs/workflow/README.md` | Compressed trigger-based docs routing |
+| OpenClaw queue + dedupe memory | `/Users/gurusharan/Documents/remote-claude/Research/clawdbot/workspace/references/{research-ledger.md,jarvis-work-queue.md}` | Durable anti-loop continuity |
+| Integration-level policy in this repo | `docs/workflow/openclaw-jarvis-integration.md` | Canonical cross-repo playbook |
+
+Verification after updates:
+
+1. `openclaw plugins list --json` shows expected `workspaceDir` and `jarvis-bridge` source path.
+2. `openclaw config get plugins.entries.jarvis-bridge.config --json` matches expected defaults.
+3. Run one direct RPC smoke test with `jarvis.delegateTask`.
+
 ## Recommended OpenClaw config
 
 ```json5
@@ -141,8 +165,8 @@ Notes from docs + runtime behavior:
         config: {
           baseUrl: "http://127.0.0.1:9848",
           tokenPath: "~/.jarvis/a2a_token",
-          defaultWait: true,
-          defaultTimeoutSec: 300,
+          defaultWait: false,
+          defaultTimeoutSec: 18000,
           pollIntervalMs: 1000,
         },
       },
@@ -166,8 +190,53 @@ Notes from docs + runtime behavior:
 5. In OpenClaw chat: `/jarvis-chief audit this repo and propose refactor plan` delegates to Jarvis.
 6. Optional explicit command path: `/jarvis add retries to HTTP client`.
 6. Direct RPC check:
-   - `openclaw gateway call jarvis.codeTask --params '{"task":"Reply with exactly: OPENCLAW_JARVIS_OK","wait":true}' --timeout 180000 --json`
+   - `openclaw gateway call jarvis.delegateTask --params '{"task":"Reply with exactly: OPENCLAW_JARVIS_OK","wait":true}' --timeout 180000 --json`
    - Expect `final.status: completed` and `final.result: OPENCLAW_JARVIS_OK`.
+
+## Delegation Reliability Notes (2026-02-20)
+
+- Prefer non-blocking bridge default (`defaultWait: false`) and explicitly set `wait: true` only for bounded tasks.
+- For long implementation work, split into atomic steps with completion markers (`DONE_STEP1`, `DONE_STEP2`, ...).
+- Keep coding delegation on OpenCode:
+  - `models.provider_type=opencode`
+  - `models.executor=opencode/<model>`
+- OpenClaw/A2A delegated tasks are runtime-forced to OpenCode provider in Jarvis (menu-bar chat provider switching remains independent).
+- If a delegated task stays `working` without `updatedAt` movement, cancel and re-submit a smaller step.
+
+### Workspace Rule Sync Checklist
+
+Ensure OpenClaw workspace control files mirror runtime behavior:
+
+- `AGENTS.md`: preferred RPC examples should default to non-blocking (`wait:false`) and mention step markers.
+- `TOOLS.md`: route implementation-heavy work via `jarvis_delegate_task` / `jarvis.delegateTask`.
+- `BOOT.md`: includes `AGENTS.md`, `TOOLS.md`, and ledgers in startup reads.
+- `references/jarvis-work-queue.md`: track atomic delegated steps and checkpoints.
+
+### OpenClaw-Owned Context Graph Loop
+
+OpenClaw should maintain its own continuity graph in addition to flat ledgers.
+
+Minimum contract:
+
+1. Before starting non-trivial work, query prior traces for similar scope:
+   - `context_query_traces(query=\"...\", category=\"...\")`
+2. After each non-trivial failure->fix or design decision, store a trace:
+   - `context_store_trace(decision=\"...\", category=\"...\", outcome=\"success|failure\")`
+3. After rollout validation, update outcome on pending traces:
+   - `context_update_outcome(trace_id=\"...\", outcome=\"success|failure\")`
+
+Recommended category map:
+
+- `research`: source verdicts and adoption decisions
+- `workflow`: routing/dedupe/automation decisions
+- `delegation`: Jarvis task-shaping and timeout behavior
+- `error`: concrete failure signatures and fixes
+
+AGENTS/TOOLS/BOOT implications:
+
+- `AGENTS.md`: must require query-before-new-work and store-after-non-trivial-fix.
+- `TOOLS.md`: must include context-graph tools in preferred evidence/memory path.
+- `BOOT.md`: should include a quick context-graph readiness check in startup routine.
 
 ## Coding Model Selection (Anthropic Exhausted)
 

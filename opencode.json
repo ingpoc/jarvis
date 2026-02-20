@@ -1,6 +1,184 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "list": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "bash": "allow",
+    "task": "allow",
+    "external_directory": "allow",
+    "todowrite": "allow",
+    "todoread": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "skill": "allow",
+    "lsp": "allow",
+    "question": "allow"
+  },
+  "skills": {
+    "paths": [
+      "~/.claude/skills"
+    ]
+  },
+  "agent": {
+    "jarvis-chat": {
+      "description": "General chat assistant for Jarvis menu bar conversations.",
+      "mode": "primary",
+      "model": "opencode/glm-5-free",
+      "prompt": "You are Jarvis chat. Be concise, actionable, and avoid unnecessary verbosity."
+    },
+    "jarvis-executor": {
+      "description": "Primary coding executor for delegated Jarvis tasks.",
+      "mode": "primary",
+      "model": "opencode/glm-5-free",
+      "prompt": "You are Jarvis executor. Complete delegated engineering tasks end-to-end with evidence. Choose workflow/subagents/tools autonomously at runtime from task context and docs. Prefer relevant skills when useful (testing, browser-testing/comet-browser-testing, context-graph, token-efficient, worktree-orchestrator, research-evaluator). For UI tasks, require browser-based validation before completion. After non-trivial fixes, update detailed docs under docs/workflow and keep AGENTS.md compressed by adding only concise trigger/index pointers.",
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "list": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "external_directory": "allow",
+        "todowrite": "allow",
+        "todoread": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "skill": "allow",
+        "lsp": "allow",
+        "question": "allow"
+      }
+    },
+    "jarvis-implementer": {
+      "description": "Implementation subagent for code changes.",
+      "mode": "subagent",
+      "model": "opencode/glm-5-free",
+      "prompt": "Implement the requested change with clean diffs and minimal risk.",
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "list": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "bash": "allow",
+        "external_directory": "allow",
+        "todowrite": "allow",
+        "todoread": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "skill": "allow",
+        "lsp": "allow",
+        "question": "allow"
+      }
+    },
+    "jarvis-tester": {
+      "description": "Testing subagent for unit/integration checks.",
+      "mode": "subagent",
+      "model": "opencode/glm-5-free",
+      "prompt": "Run and interpret tests deterministically. Provide concise failing/passing evidence.",
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "list": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "bash": "allow",
+        "external_directory": "allow",
+        "todowrite": "allow",
+        "todoread": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "skill": "allow",
+        "lsp": "allow",
+        "question": "allow"
+      }
+    },
+    "jarvis-browser-tester": {
+      "description": "Browser validation subagent for frontend flows.",
+      "mode": "subagent",
+      "model": "opencode/glm-5-free",
+      "prompt": "Perform browser-based checks for UI flows and report concrete evidence.",
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "list": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "bash": "allow",
+        "external_directory": "allow",
+        "todowrite": "allow",
+        "todoread": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "skill": "allow",
+        "lsp": "allow",
+        "question": "allow"
+      }
+    },
+    "jarvis-reviewer": {
+      "description": "Code review subagent for risk and quality checks.",
+      "mode": "subagent",
+      "model": "opencode/glm-5-free",
+      "prompt": "Review for correctness, regression risk, and maintainability.",
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "list": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "bash": "allow",
+        "external_directory": "allow",
+        "todowrite": "allow",
+        "todoread": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "skill": "allow",
+        "lsp": "allow",
+        "question": "allow"
+      }
+    }
+  },
   "mcp": {
+    "context7": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "npx",
+        "-y",
+        "@upstash/context7-mcp"
+      ]
+    },
+    "deepwiki": {
+      "type": "remote",
+      "enabled": true,
+      "url": "https://mcp.deepwiki.com/mcp"
+    },
+    "context-graph": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "uv",
+        "--directory",
+        "/Users/gurusharan/Documents/remote-claude/mcp-servers/context-graph-mcp",
+        "run",
+        "python",
+        "server.py"
+      ],
+      "environment": {
+        "VOYAGE_API_KEY": "{env:VOYAGE_API_KEY}"
+      }
+    },
+    "token-efficient": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "node",
+        "/Users/gurusharan/Documents/remote-claude/mcp-servers/token-efficient-mcp/dist/index.js"
+      ]
+    },
     "zapier": {
       "type": "remote",
       "enabled": true,

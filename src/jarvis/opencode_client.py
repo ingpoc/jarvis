@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import inspect
 import json
 import os
 import subprocess
@@ -12,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 
 @dataclass
@@ -168,6 +169,27 @@ class OpenCodeClient:
                 return {"providerID": provider_id, "modelID": model_name}
         return {"providerID": "opencode", "modelID": model}
 
+    def _session_permission_rules(self) -> list[dict[str, str]]:
+        """Allow non-interactive delegated execution without approval deadlocks."""
+        permissions = (
+            "read",
+            "edit",
+            "list",
+            "glob",
+            "grep",
+            "bash",
+            "task",
+            "external_directory",
+            "todowrite",
+            "todoread",
+            "webfetch",
+            "websearch",
+            "skill",
+            "lsp",
+            "question",
+        )
+        return [{"permission": permission, "pattern": "*", "action": "allow"} for permission in permissions]
+
     async def run_task(
         self,
         message: str,
@@ -175,15 +197,78 @@ class OpenCodeClient:
         model_id: str | None = None,
         agent: str | None = None,
         timeout_seconds: int = 180,
+        on_progress: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
     ) -> OpenCodeRunResult:
         await self.ensure_available()
 
-        session = await asyncio.to_thread(
-            self._request, "POST", "/session", {"title": "Jarvis delegated task"}, 10
-        )
+        session_payload = {
+            "title": "Jarvis delegated task",
+            "permission": self._session_permission_rules(),
+        }
+        session = await asyncio.to_thread(self._request, "POST", "/session", session_payload, 10)
         session_id = str(session.get("id") or session.get("sessionID") or "").strip()
         if not session_id:
             raise OpenCodeClientError(f"OpenCode did not return session id: {session}")
+
+        async def emit_progress(payload: dict[str, Any]) -> None:
+            if not on_progress:
+                return
+            maybe = on_progress(payload)
+            if inspect.isawaitable(maybe):
+                await maybe
+
+        monitor_stop = asyncio.Event()
+        seen_parts: set[str] = set()
+
+        async def monitor_messages() -> None:
+            while not monitor_stop.is_set():
+                try:
+                    messages = await asyncio.to_thread(
+                        self._request,
+                        "GET",
+                        f"/session/{session_id}/message",
+                        None,
+                        10,
+                    )
+                    if isinstance(messages, dict) and isinstance(messages.get("data"), list):
+                        messages = messages["data"]
+                    if isinstance(messages, list):
+                        for message_item in messages:
+                            if not isinstance(message_item, dict):
+                                continue
+                            info = message_item.get("info")
+                            if isinstance(info, dict):
+                                await emit_progress(
+                                    {
+                                        "type": "message_info",
+                                        "session_id": session_id,
+                                        "info": info,
+                                    }
+                                )
+                            parts = message_item.get("parts")
+                            if not isinstance(parts, list):
+                                continue
+                            for part in parts:
+                                if not isinstance(part, dict):
+                                    continue
+                                part_id = str(part.get("id") or "")
+                                part_key = part_id or json.dumps(part, sort_keys=True, default=str)
+                                if part_key in seen_parts:
+                                    continue
+                                seen_parts.add(part_key)
+                                await emit_progress(
+                                    {
+                                        "type": "message_part",
+                                        "session_id": session_id,
+                                        "part": part,
+                                    }
+                                )
+                except Exception:
+                    # Progress tracing is best-effort and should not fail task execution.
+                    pass
+                await asyncio.sleep(1.0)
+
+        monitor_task = asyncio.create_task(monitor_messages())
 
         body: dict[str, Any] = {
             "parts": [{"type": "text", "text": message}],
@@ -194,13 +279,22 @@ class OpenCodeClient:
         if agent:
             body["agent"] = agent
 
-        response = await asyncio.to_thread(
-            self._request,
-            "POST",
-            f"/session/{session_id}/message",
-            body,
-            max(30, timeout_seconds),
-        )
+        try:
+            response = await asyncio.to_thread(
+                self._request,
+                "POST",
+                f"/session/{session_id}/message",
+                body,
+                max(30, timeout_seconds),
+            )
+        finally:
+            monitor_stop.set()
+            if not monitor_task.done():
+                monitor_task.cancel()
+                try:
+                    await monitor_task
+                except asyncio.CancelledError:
+                    pass
         text = self._extract_text_from_parts(response)
         if not text:
             # Fallback for unexpected payload shape.

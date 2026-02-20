@@ -9,7 +9,7 @@ JARVIS_HOME = Path.home() / ".jarvis"
 JARVIS_DB = JARVIS_HOME / "jarvis.db"
 JARVIS_CONFIG = JARVIS_HOME / "config.json"
 JARVIS_LOGS = JARVIS_HOME / "logs"
-DEFAULT_WORKSPACE_ROOT = "/Users/gurusharan/Documents/remote-claude/Jarvisworkspace"
+DEFAULT_WORKSPACE_ROOT = str((JARVIS_HOME / "workspaces").expanduser())
 
 
 @dataclass
@@ -153,7 +153,7 @@ class JarvisConfig:
     idle: IdleConfig = field(default_factory=IdleConfig)
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     trust_tier: int = 1  # Default T1 (Assistant)
-    workspace_root: str | None = None  # Default workspace directory
+    workspace_root: str | None = DEFAULT_WORKSPACE_ROOT  # Default workspace directory
 
     @classmethod
     def load(cls) -> "JarvisConfig":

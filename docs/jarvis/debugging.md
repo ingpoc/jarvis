@@ -88,6 +88,27 @@ sed -n '1,160p' ~/Library/Logs/DiagnosticReports/<latest-file>.ips
 | Voice transcript generated but no reply | `send_voice` response path failing | Check `daemon.log` for `send_voice` response/error |
 | Voice does not transcribe | `mlx-whisper` or `ffmpeg` missing | Install dependencies in project env |
 | Events not broadcast | Wrong message format | Use `data` wrapper |
+| `'MemoryStore' object has no attribute 'add_research_sources'` during delegated tasks | URL ingestion path called on memory backend without research API | Update to latest code (guard in `orchestrator/core.py`), restart daemon, retry task |
+
+## A2A Delegation Hangs
+
+Symptoms:
+
+- `a2a get <task-id>` remains `working`
+- `updatedAt` does not advance for long periods
+
+Practical recovery:
+
+```bash
+python3 -m jarvis.cli a2a get <task-id> -j
+python3 -m jarvis.cli a2a cancel <task-id> -j
+python3 -m jarvis.cli a2a send "<smaller step task>" --non-blocking -j
+```
+
+Recommended pattern:
+
+- Keep bridge default non-blocking.
+- Use step-scoped tasks with explicit done tokens (`DONE_STEPn`).
 
 ## Event Types Broadcast
 

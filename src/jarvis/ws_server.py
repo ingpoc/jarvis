@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -740,6 +741,9 @@ class JarvisWSServer:
                     )
                     result = {"containers": [], "error": err[:2000]}
 
+            elif action == "get_workspace_snapshot":
+                result = await self._build_workspace_snapshot()
+
             elif action == "stop_container":
                 from jarvis.container_tools import _run_container_cmd
 
@@ -860,6 +864,249 @@ class JarvisWSServer:
             "memory": memory,
             "task_id": None,
         }
+
+    async def _build_workspace_snapshot(self) -> dict:
+        """Return workspace/worktree/container snapshot for UI visibility."""
+        from jarvis.container_tools import _run_container_cmd
+
+        workspace = (
+            Path(self._orchestrator.project_path if self._orchestrator else ".")
+            .expanduser()
+            .resolve()
+        )
+        worktrees = await asyncio.to_thread(self._discover_workspace_worktrees, workspace)
+
+        containers: list[dict] = []
+        cmd_result = await _run_container_cmd("list", "--format", "json", timeout=30)
+        if cmd_result["exit_code"] == 0 and cmd_result["stdout"]:
+            try:
+                parsed = json.loads(cmd_result["stdout"])
+                containers = [
+                    c
+                    for c in parsed
+                    if c.get("configuration", {}).get("id", "").startswith("jarvis-")
+                ]
+            except json.JSONDecodeError:
+                containers = []
+
+        mapped_containers = self._map_containers_to_worktrees(containers, worktrees)
+        task_executions = await asyncio.to_thread(self._build_task_execution_rows)
+        recent_events = await asyncio.to_thread(self._build_workspace_trace_events)
+
+        cfg = getattr(self._orchestrator, "config", None)
+        models = getattr(cfg, "models", None) if cfg else None
+        provider_type = getattr(models, "provider_type", None) if models else None
+        model_executor = getattr(models, "executor", None) if models else None
+        workspace_root = getattr(cfg, "workspace_root", None) if cfg else None
+
+        return {
+            "workspace_root": str(workspace),
+            "runtime_config": {
+                "provider_type": provider_type,
+                "model_executor": model_executor,
+                "workspace_root_config": workspace_root,
+                "a2a_workflow_mode": os.environ.get("JARVIS_A2A_WORKFLOW_MODE", "auto"),
+                "a2a_opencode_model": os.environ.get("JARVIS_A2A_OPENCODE_MODEL", "opencode/glm-5-free"),
+                "task_timeout_secs": os.environ.get("JARVIS_TASK_TIMEOUT_SECS", ""),
+                "opencode_timeout_secs": os.environ.get("JARVIS_OPENCODE_TIMEOUT_SECS", "300"),
+            },
+            "summary": {
+                "worktree_count": len(worktrees),
+                "container_count": len(mapped_containers),
+                "mapped_container_count": len([c for c in mapped_containers if c.get("worktree_path")]),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "worktrees": worktrees,
+            "containers": mapped_containers,
+            "task_executions": task_executions,
+            "recent_events": recent_events,
+        }
+
+    def _build_task_execution_rows(self, limit: int = 24) -> list[dict]:
+        """Build per-task runtime config rows from task and timeline state."""
+        if not self._orchestrator:
+            return []
+
+        tasks = self._orchestrator.memory.list_tasks(self._orchestrator.project_path)[:limit]
+        if not tasks:
+            return []
+
+        timeline = self._orchestrator.memory.get_timeline(limit=600)
+        by_task: dict[str, dict[str, Any]] = {}
+        for event in timeline:
+            task_id = event.get("task_id")
+            if not task_id:
+                continue
+            by_task.setdefault(task_id, {})
+            metadata = event.get("metadata") or {}
+            event_type = event.get("event_type")
+            if event_type == "task_workflow_selected":
+                by_task[task_id]["workflow"] = metadata.get("workflow")
+                by_task[task_id]["workflow_reason"] = metadata.get("reason")
+            elif event_type == "task_execution_config":
+                by_task[task_id]["provider_type"] = metadata.get("provider_type")
+                by_task[task_id]["model_id"] = metadata.get("model_id")
+                by_task[task_id]["workflow"] = metadata.get("workflow") or by_task[task_id].get("workflow")
+
+        rows: list[dict] = []
+        for task in tasks:
+            meta = by_task.get(task.id, {})
+            rows.append(
+                {
+                    "task_id": task.id,
+                    "description": task.description,
+                    "status": task.status,
+                    "provider_type": meta.get("provider_type", "unknown"),
+                    "model_id": meta.get("model_id", "unknown"),
+                    "workflow": meta.get("workflow", "autonomous"),
+                    "workflow_reason": meta.get("workflow_reason", ""),
+                    "updated_at": task.updated_at,
+                }
+            )
+        return rows
+
+    def _build_workspace_trace_events(self, limit: int = 20) -> list[dict]:
+        """Return recent high-signal events for workspace trace view."""
+        if not self._orchestrator:
+            return []
+
+        allowed = {
+            "task_start",
+            "task_workflow_selected",
+            "task_execution_config",
+            "tool_use",
+            "task_complete",
+            "error",
+        }
+        timeline = self._orchestrator.memory.get_timeline(limit=200)
+        events: list[dict] = []
+        for item in timeline:
+            event_type = item.get("event_type", "")
+            if event_type not in allowed:
+                continue
+            events.append(
+                {
+                    "id": str(item.get("id", "")),
+                    "timestamp": float(item.get("timestamp", 0.0) or 0.0),
+                    "event_type": event_type,
+                    "summary": str(item.get("summary", "")),
+                    "task_id": item.get("task_id"),
+                    "metadata": {
+                        str(k): str(v)
+                        for k, v in (item.get("metadata") or {}).items()
+                        if v is not None
+                    },
+                }
+            )
+            if len(events) >= limit:
+                break
+        return events
+
+    @staticmethod
+    def _discover_workspace_worktrees(workspace_root: Path, max_depth: int = 7) -> list[dict]:
+        """Find git worktrees under workspace root by scanning .git indirection files."""
+        workspace_root = workspace_root.resolve()
+        worktrees: list[dict] = []
+        seen: set[str] = set()
+
+        def _walk(path: Path, depth: int) -> None:
+            if depth > max_depth:
+                return
+            try:
+                entries = list(path.iterdir())
+            except OSError:
+                return
+
+            git_file = path / ".git"
+            if git_file.is_file():
+                try:
+                    text = git_file.read_text(errors="replace").strip()
+                except OSError:
+                    text = ""
+                if text.startswith("gitdir:") and "/worktrees/" in text:
+                    key = str(path)
+                    if key not in seen:
+                        seen.add(key)
+                        worktrees.append(
+                            {
+                                "id": path.name,
+                                "path": str(path),
+                            }
+                        )
+
+            for child in entries:
+                if not child.is_dir():
+                    continue
+                if child.name in {".git", ".venv", "node_modules", ".pytest_cache", "__pycache__"}:
+                    continue
+                _walk(child, depth + 1)
+
+        _walk(workspace_root, 0)
+        worktrees.sort(key=lambda item: item["path"])
+        return worktrees
+
+    def _map_containers_to_worktrees(self, containers: list[dict], worktrees: list[dict]) -> list[dict]:
+        """Attach mount paths and best worktree match per container."""
+        worktree_paths = [Path(w["path"]).resolve() for w in worktrees if w.get("path")]
+        mapped: list[dict] = []
+
+        for container in containers:
+            normalized = self._normalize_container(container)
+            mount_paths = self._extract_container_mount_paths(container)
+            best_match = None
+            for mount in mount_paths:
+                mount_path = Path(mount).expanduser().resolve()
+                for wt in worktree_paths:
+                    if mount_path == wt or wt in mount_path.parents or mount_path in wt.parents:
+                        best_match = str(wt)
+                        break
+                if best_match:
+                    break
+
+            normalized["mount_paths"] = mount_paths
+            normalized["worktree_path"] = best_match
+            mapped.append(normalized)
+
+        return mapped
+
+    @staticmethod
+    def _extract_container_mount_paths(container: dict) -> list[str]:
+        """Best-effort extraction of host mount paths from container JSON."""
+        config = container.get("configuration", {}) or {}
+        candidates = [
+            config.get("volumes"),
+            config.get("mounts"),
+            config.get("bindMounts"),
+            container.get("mounts"),
+        ]
+        mounts: list[str] = []
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+            if isinstance(candidate, list):
+                for item in candidate:
+                    if isinstance(item, str):
+                        host = item.split(":", 1)[0].strip()
+                        if host:
+                            mounts.append(host)
+                    elif isinstance(item, dict):
+                        host = (
+                            item.get("source")
+                            or item.get("hostPath")
+                            or item.get("path")
+                            or item.get("host")
+                        )
+                        if isinstance(host, str) and host:
+                            mounts.append(host)
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for mount in mounts:
+            if mount not in seen:
+                seen.add(mount)
+                deduped.append(mount)
+        return deduped
 
     def _broadcast_event(self, event_data: dict) -> None:
         """EventCollector listener callback: push events to all clients."""

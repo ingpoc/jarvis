@@ -12,7 +12,7 @@ NC='\033[0m'
 
 JARVIS_DIR="/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac"
 JARVIS_HOME="$HOME/.jarvis"
-JARVIS_WORKSPACE="/Users/gurusharan/Documents/remote-claude/Jarvisworkspace"
+JARVIS_WORKSPACE="${JARVIS_WORKSPACE:-$HOME/.jarvis/workspaces}"
 PID_DIR="$JARVIS_HOME/pids"
 LOG_DIR="$JARVIS_HOME/logs"
 LOCK_FILE="$PID_DIR/start.lock"
@@ -377,6 +377,9 @@ export ELEVENLABS_AGENT_ID=$(printf '%q' "${ELEVENLABS_AGENT_ID:-}")
 export X_BOOKMARKS_ACCESS_TOKEN=$(printf '%q' "${X_BOOKMARKS_ACCESS_TOKEN:-}")
 export X_BOOKMARKS_USER_ID=$(printf '%q' "${X_BOOKMARKS_USER_ID:-}")
 export JARVIS_OPENCODE_BIN=$(printf '%q' "${JARVIS_OPENCODE_BIN:-$HOME/.bun/bin/opencode}")
+export OPENCODE_CONFIG=$(printf '%q' "${OPENCODE_CONFIG:-$JARVIS_DIR/opencode.json}")
+export JARVIS_OPENCODE_AGENT=$(printf '%q' "${JARVIS_OPENCODE_AGENT:-jarvis-executor}")
+export JARVIS_OPENCODE_CHAT_AGENT=$(printf '%q' "${JARVIS_OPENCODE_CHAT_AGENT:-jarvis-chat}")
 export JARVIS_OPENCODE_TIMEOUT_SECS=$(printf '%q' "${JARVIS_OPENCODE_TIMEOUT_SECS:-}")
 export JARVIS_OPENCODE_CHAT_TIMEOUT_SECS=$(printf '%q' "${JARVIS_OPENCODE_CHAT_TIMEOUT_SECS:-}")
 EOF

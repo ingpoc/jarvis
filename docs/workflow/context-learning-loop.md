@@ -137,6 +137,15 @@ Workflow after fixing a bug:
 2. `context_store_trace(decision="<what broke> → <root cause> → <fix>", category="troubleshooting", outcome="success")`
 3. Rewrite the affected doc section to reflect current correct behavior only — no "Bugs Fixed" sections
 
+## AGENTS Compression Policy
+
+When Jarvis learns a new durable workflow pattern:
+
+1. Update the detailed workflow under `docs/workflow/*.md` first.
+2. Add or adjust a short trigger/index pointer in `AGENTS.md` Docs Index.
+3. Keep `AGENTS.md` compressed (high-signal contract), do not duplicate long procedural text there.
+4. Store non-trivial failure->fix history in context graph traces; docs remain current-state guidance.
+
 ## Anti-Patterns
 
 | Anti-Pattern | Problem |

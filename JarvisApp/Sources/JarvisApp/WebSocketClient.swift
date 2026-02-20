@@ -134,6 +134,7 @@ final class WebSocketClient: WebSocketClientProtocol {
     var containers: [ContainerInfo] = []
     var availableTools: [String] = []
     var activeTasks: [TaskProgress] = []
+    var workspaceSnapshot: WorkspaceSnapshotResponse?
     var isLoading = false
     var trustInfo: TrustInfo?
     var budgetInfo: BudgetInfo?
@@ -495,6 +496,12 @@ final class WebSocketClient: WebSocketClientProtocol {
                let resp = try? JSONDecoder().decode(AvailableToolsResponse.self, from: payload) {
                 availableTools = resp.tools
             }
+        case "get_workspace_snapshot":
+            if let data = json["data"] as? [String: Any],
+               let payload = try? JSONSerialization.data(withJSONObject: data),
+               let resp = try? JSONDecoder().decode(WorkspaceSnapshotResponse.self, from: payload) {
+                workspaceSnapshot = resp
+            }
         case "run_task":
             // Task was queued
             break
@@ -546,5 +553,6 @@ extension WebSocketClient {
         defer { isLoading = false }
         try? await sendWithoutResponse(action: "get_containers", data: nil)
         try? await sendWithoutResponse(action: "get_available_tools", data: nil)
+        try? await sendWithoutResponse(action: "get_workspace_snapshot", data: nil)
     }
 }

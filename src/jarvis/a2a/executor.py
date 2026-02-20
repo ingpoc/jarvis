@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
@@ -45,6 +46,7 @@ class JarvisAgentExecutor:
         self._orchestrator = orchestrator
         self._project_path = project_path
         self._active_tasks: dict[str, asyncio.Task] = {}
+        self._timeout_watchdogs: dict[str, asyncio.Task] = {}
         self._task_clients: dict[str, ClaudeSDKClient] = {}
         logger.info("JarvisAgentExecutor.__init__: getting emitter")
 
@@ -53,6 +55,10 @@ class JarvisAgentExecutor:
         self._openclaw_notifier = OpenClawNotifier.from_env()
 
         self._timeout = config.a2a.task_timeout_seconds
+        self._progress_heartbeat_seconds = max(
+            1.0,
+            float(os.environ.get("JARVIS_A2A_PROGRESS_HEARTBEAT_SECS", "5")),
+        )
         logger.info("JarvisAgentExecutor.__init__: initialization complete")
 
     def set_orchestrator(self, orchestrator: Any) -> None:
@@ -93,6 +99,7 @@ class JarvisAgentExecutor:
 
         # Start async execution
         async def execute():
+            heartbeat_task: asyncio.Task | None = None
             try:
                 # Update to working state
                 self.task_store.update_task_status(task.id, A2ATaskState.WORKING)
@@ -101,17 +108,29 @@ class JarvisAgentExecutor:
                     "status": A2ATaskState.WORKING.value,
                 })
 
-                # Get or create client for this context
-                channel_id = context_id or f"a2a-{task.id}"
-                client = await self.session_manager.get_client(channel_id, options)
-                self._task_clients[task.id] = client
+                async def heartbeat() -> None:
+                    while True:
+                        await asyncio.sleep(self._progress_heartbeat_seconds)
+                        current = self.task_store.get_task(task.id)
+                        if not current or current.status not in {A2ATaskState.SUBMITTED, A2ATaskState.WORKING}:
+                            return
+                        # Touch updated_at so long-running delegated tasks show forward progress.
+                        self.task_store.update_task_status(task.id, A2ATaskState.WORKING)
 
-                # Execute via orchestrator or client
+                heartbeat_task = asyncio.create_task(heartbeat())
+
+                channel_id = context_id or f"a2a-{task.id}"
+
+                # Execute via orchestrator or direct SDK client.
+                # Important: when orchestrator is configured (normal Jarvis path), do not
+                # initialize a separate SDK client here; that can block task startup.
                 if self._orchestrator:
                     result_text = await self._execute_with_orchestrator(
                         task.id, message, channel_id
                     )
                 else:
+                    client = await self.session_manager.get_client(channel_id, options)
+                    self._task_clients[task.id] = client
                     result_text = await self._execute_with_client(client, message)
 
                 # Add result as artifact
@@ -135,15 +154,23 @@ class JarvisAgentExecutor:
                 })
 
             except asyncio.CancelledError:
-                self.task_store.update_task_status(
-                    task.id,
-                    A2ATaskState.CANCELED,
-                    error="Task cancelled by user",
+                existing = self.task_store.get_task(task.id)
+                is_timeout_failure = bool(
+                    existing
+                    and existing.status == A2ATaskState.FAILED
+                    and existing.error
+                    and "timed out after" in existing.error
                 )
-                await self._emit_event(task.id, "task_canceled", {
-                    "taskId": task.id,
-                    "status": A2ATaskState.CANCELED.value,
-                })
+                if not is_timeout_failure:
+                    self.task_store.update_task_status(
+                        task.id,
+                        A2ATaskState.CANCELED,
+                        error="Task cancelled by user",
+                    )
+                    await self._emit_event(task.id, "task_canceled", {
+                        "taskId": task.id,
+                        "status": A2ATaskState.CANCELED.value,
+                    })
                 raise
             except Exception as e:
                 logger.exception(f"A2A task {task.id} failed: {e}")
@@ -158,12 +185,42 @@ class JarvisAgentExecutor:
                     "error": str(e),
                 })
             finally:
+                if heartbeat_task and not heartbeat_task.done():
+                    heartbeat_task.cancel()
                 self._task_clients.pop(task.id, None)
                 self._active_tasks.pop(task.id, None)
+                watchdog = self._timeout_watchdogs.pop(task.id, None)
+                if watchdog and not watchdog.done():
+                    watchdog.cancel()
 
         # Create asyncio task
         coro_task = asyncio.create_task(execute())
         self._active_tasks[task.id] = coro_task
+
+        # Non-blocking tasks must still enforce a hard runtime limit. Without this watchdog,
+        # delegated OpenClaw tasks can remain "working" indefinitely if the upstream call hangs.
+        if not blocking and self._timeout > 0:
+            async def timeout_watchdog(task_id: str) -> None:
+                await asyncio.sleep(self._timeout)
+                current = self.task_store.get_task(task_id)
+                if not current or current.status not in {A2ATaskState.SUBMITTED, A2ATaskState.WORKING}:
+                    return
+                timeout_error = f"Task timed out after {self._timeout} seconds"
+                self.task_store.update_task_status(
+                    task_id,
+                    A2ATaskState.FAILED,
+                    error=timeout_error,
+                )
+                await self._emit_event(task_id, "task_failed", {
+                    "taskId": task_id,
+                    "status": A2ATaskState.FAILED.value,
+                    "error": timeout_error,
+                })
+                running = self._active_tasks.get(task_id)
+                if running and not running.done():
+                    running.cancel()
+
+            self._timeout_watchdogs[task.id] = asyncio.create_task(timeout_watchdog(task.id))
 
         if blocking:
             try:
@@ -259,6 +316,9 @@ class JarvisAgentExecutor:
             return task
 
         # Cancel the asyncio task
+        watchdog = self._timeout_watchdogs.pop(task_id, None)
+        if watchdog and not watchdog.done():
+            watchdog.cancel()
         if task_id in self._active_tasks:
             self._active_tasks[task_id].cancel()
             try:

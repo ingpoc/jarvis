@@ -16,8 +16,10 @@ Use `jarvis_delegate_task` to offload execution-heavy tasks to Jarvis.
 
 1. Use OpenClaw-native research tools first for discovery (Perplexity, Browser, Context7).
 2. Delegate to Jarvis when work needs implementation depth, multi-step execution, or repository changes.
-3. Include a concrete objective and expected output in the delegated task.
-4. After completion, update memory and research/work ledgers to avoid repeated loops.
+3. Include a concrete objective and expected output in the delegated task; for coding execution prepend `OPENCODE ONLY.`.
+4. For long tasks, split into small delegated steps and require explicit done markers (`DONE_STEPn`) per step.
+5. Default to non-blocking delegation and reserve `wait=true` for bounded checkpoints.
+6. After completion, update memory and research/work ledgers to avoid repeated loops.
 
 ## Direct invocation
 
