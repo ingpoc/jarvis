@@ -1,16 +1,16 @@
 """Remote WebSocket server with WSS, JWT auth, and REST API.
 
 Separate from local ws_server.py (port 9847).
-Listens on 0.0.0.0:9848 for remote connections via Tailscale.
+Listens on 0.0.0.0:9850 for remote connections via Tailscale.
 """
 
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 import ssl
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PORT = 9848
+DEFAULT_PORT = 9850
 DEFAULT_BIND = "0.0.0.0"
 
 

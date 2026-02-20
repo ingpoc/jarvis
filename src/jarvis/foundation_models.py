@@ -34,21 +34,29 @@ class FoundationModelsClient:
         self._health_check_interval: float = 60.0  # Re-check every 60s
         self._request_count: int = 0
         self._total_latency_ms: float = 0
+        self._http_client = None
+
+    async def _get_http_client(self):
+        """Create/reuse a shared async client to avoid per-request churn."""
+        if self._http_client is None:
+            import httpx
+            self._http_client = httpx.AsyncClient(timeout=REQUEST_TIMEOUT)
+        return self._http_client
 
     async def _post(self, payload: dict) -> dict | None:
         """Send a POST request to the Foundation Models bridge."""
         try:
             import httpx
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-                response = await client.post(
-                    self.base_url,
-                    json=payload,
-                    timeout=REQUEST_TIMEOUT,
-                )
-                if response.status_code == 200:
-                    return response.json()
-                logger.debug(f"Bridge returned {response.status_code}")
-                return None
+            client = await self._get_http_client()
+            response = await client.post(
+                self.base_url,
+                json=payload,
+                timeout=REQUEST_TIMEOUT,
+            )
+            if response.status_code == 200:
+                return response.json()
+            logger.debug(f"Bridge returned {response.status_code}")
+            return None
         except ImportError:
             # Fallback to urllib if httpx not available
             return await self._post_urllib(payload)
@@ -56,6 +64,12 @@ class FoundationModelsClient:
             logger.debug(f"Bridge request failed: {e}")
             self._available = False
             return None
+
+    async def close(self) -> None:
+        """Close underlying HTTP client resources."""
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
 
     async def _post_urllib(self, payload: dict) -> dict | None:
         """Fallback POST using urllib (no httpx dependency)."""

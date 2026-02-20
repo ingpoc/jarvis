@@ -601,8 +601,6 @@ class JarvisOrchestrator:
             return "foundation"
         if model.startswith("opencode/") or model.startswith("opencode:") or model == "opencode":
             return "opencode"
-        if model.startswith("mlx-"):
-            return "mlx"
         return "anthropic"
 
     def _effective_provider_type(self) -> str:
@@ -611,7 +609,7 @@ class JarvisOrchestrator:
         derived = self._derive_provider_from_model(model_id)
         configured = str(getattr(self.config.models, "provider_type", "")).strip().lower()
 
-        valid = {"anthropic", "foundation", "mlx", "opencode"}
+        valid = {"anthropic", "foundation", "opencode"}
         if configured not in valid:
             return derived
         if configured == derived:
@@ -2146,7 +2144,7 @@ class JarvisOrchestrator:
                     provider = self._effective_provider_type()
                     local_model_id = (
                         self.config.models.executor
-                        if provider in ("foundation", "mlx")
+                        if provider == "foundation"
                         else "foundation-models"
                     )
 

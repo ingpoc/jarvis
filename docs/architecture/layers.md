@@ -45,7 +45,7 @@ Types → Config → Repo → Service → Runtime → UI
 | Types | `config.py` (models) |
 | Config | `config.py` (settings) |
 | Repo | `memory.py` |
-| Service | `model_router.py`, `mlx_inference.py` |
+| Service | `model_router.py` |
 | Runtime | `daemon.py`, `ws_server.py` |
 | UI | `orchestrator/core.py` |
 | Providers | `self_learning.py`, `macos_native.py` |

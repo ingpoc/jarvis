@@ -182,12 +182,12 @@ class IdleModeProcessor:
                         )
                         self.trigger_hibernate()
 
-                        # Unload MLX model to free memory
+                        # Unload local model resources to free memory.
                         try:
                             from jarvis.model_router import get_model_router
                             router = get_model_router()
                             await router.shutdown()
-                            logger.info("MLX model unloaded due to memory pressure")
+                            logger.info("Local model resources unloaded due to memory pressure")
                         except Exception as e:
                             logger.debug(f"Model unload on hibernation failed: {e}")
 

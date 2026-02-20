@@ -183,7 +183,6 @@ jarvis-mac/
 │       ├── Networking/     # WebSocket, REST, Auth
 │       ├── Models/         # Shared data models
 │       └── Utilities/      # Tailscale, events
-├── JarvisiOS/             # iPhone App (SwiftUI)
 └── scripts/               # Setup and utility scripts
 ```
 
@@ -312,9 +311,6 @@ mypy src/jarvis
 # Mac GUI
 cd JarvisApp
 swift build
-
-# iOS App
-# Open JarvisiOS/ in Xcode and build
 ```
 
 ## Troubleshooting

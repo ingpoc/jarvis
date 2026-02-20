@@ -346,8 +346,6 @@ class JarvisWSServer:
                         return "foundation"
                     if model_id.startswith("opencode/") or model_id.startswith("opencode:") or model_id == "opencode":
                         return "opencode"
-                    if model_id.startswith("mlx-"):
-                        return "mlx"
                     return "anthropic"
 
                 derived_provider_type = _provider_from_model(current_model)
@@ -356,7 +354,7 @@ class JarvisWSServer:
                     if config
                     else ""
                 )
-                if configured_provider_type not in {"anthropic", "foundation", "mlx", "opencode"}:
+                if configured_provider_type not in {"anthropic", "foundation", "opencode"}:
                     configured_provider_type = ""
 
                 provider_type = (
@@ -365,7 +363,7 @@ class JarvisWSServer:
                     else derived_provider_type
                 )
 
-                provider = provider_type if provider_type in {"foundation", "mlx", "opencode"} else "anthropic"
+                provider = provider_type if provider_type in {"foundation", "opencode"} else "anthropic"
 
                 afm_available = is_afm_available()
 
@@ -379,7 +377,6 @@ class JarvisWSServer:
                         "claude-haiku-4-5-20251001",
                     ],
                     "foundation_available": afm_available,
-                    "mlx_available": False,
                     "opencode_available_models": OPENCODE_FREE_MODELS,
                     "local_models": {
                         "foundation": {
@@ -389,7 +386,7 @@ class JarvisWSServer:
                     },
                     "runtime_provider": (
                         local_mgr.provider.value
-                        if local_mgr.provider and provider_type in {"foundation", "mlx"}
+                        if local_mgr.provider and provider_type in {"foundation"}
                         else None
                     ),
                 }

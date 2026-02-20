@@ -282,16 +282,17 @@ class JarvisDaemon:
         except Exception as e:
             logger.warning(f"Bootstrap skills install failed: {e}")
 
-        # Initialize model router only when MLX local inference is configured
-        if self.config.models.executor.startswith("mlx") or os.environ.get("JARVIS_MLX_ENABLED"):
-            try:
-                from jarvis.model_router import get_model_router
-                router = get_model_router()
-                init_result = await router.initialize()
-                logger.info(f"Model router initialized: MLX={init_result.get('mlx')}, "
-                            f"Foundation={init_result.get('foundation')}")
-            except Exception as e:
-                logger.warning(f"Model router initialization failed: {e}")
+        # Initialize model router for foundation/cloud routing metadata.
+        try:
+            from jarvis.model_router import get_model_router
+            router = get_model_router()
+            init_result = await router.initialize()
+            logger.info(
+                "Model router initialized: Foundation=%s",
+                init_result.get("foundation"),
+            )
+        except Exception as e:
+            logger.warning(f"Model router initialization failed: {e}")
 
         # Seed universal heuristics once at startup (idempotent)
         try:
@@ -310,15 +311,8 @@ class JarvisDaemon:
         # Idle introspection processor (must be set before IOKit check below)
         try:
             from jarvis.introspection_processor import IntrospectionProcessor
-            mlx_engine = None
-            try:
-                from jarvis.mlx_inference import get_mlx_engine
-                mlx_engine = get_mlx_engine()
-            except Exception as mlx_err:
-                logger.warning(f"MLX engine unavailable, using TF-IDF fallback: {mlx_err}")
             self._idle_processor = IntrospectionProcessor(
                 memory=self.orchestrator.memory,
-                mlx_engine=mlx_engine,
                 project_path=str(self.orchestrator.project_path) if self.orchestrator else None,
             )
             logger.info("Idle introspection processor initialized")
@@ -405,7 +399,7 @@ class JarvisDaemon:
                 if pressure and pressure.get("should_hibernate"):
                     if self._idle_processor:
                         self._idle_processor.trigger_hibernate()
-                    # Also unload MLX model to free memory
+                    # Also unload local model resources to free memory.
                     try:
                         from jarvis.model_router import get_model_router
                         router = get_model_router()
@@ -485,7 +479,7 @@ class JarvisDaemon:
         """Gracefully stop all services."""
         logger.info("Jarvis daemon stopping")
 
-        # Shutdown model router (unload MLX) if it was initialized
+        # Shutdown model router (unload local resources) if initialized.
         try:
             from jarvis.model_router import get_model_router
             router = get_model_router()
@@ -581,6 +575,7 @@ class JarvisDaemon:
     async def _start_remote_server(self) -> None:
         """Start remote WSS server and REST API."""
         try:
+            from jarvis.remote_server import DEFAULT_PORT as REMOTE_DEFAULT_PORT
             from jarvis.remote_server import JarvisRemoteServer, RESTAPIHandler
             from jarvis.auth import Authenticator
             from aiohttp import web
@@ -598,7 +593,7 @@ class JarvisDaemon:
             )
 
             # Start remote WSS server
-            remote_port = int(os.getenv("JARVIS_REMOTE_PORT", "9848"))
+            remote_port = int(os.getenv("JARVIS_REMOTE_PORT", str(REMOTE_DEFAULT_PORT)))
             remote_bind = os.getenv("JARVIS_REMOTE_BIND", "0.0.0.0")
 
             self._remote_server = JarvisRemoteServer(

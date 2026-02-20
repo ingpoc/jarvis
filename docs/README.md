@@ -36,7 +36,7 @@ docs/
 ├── architecture/          # Enforced rules (mechanical)
 │   ├── layers.md          # Layered architecture
 │   ├── taste-invariants.md # Style rules
-│   └── idle-introspection-framework.md # Local MLX model, idle-time learning loop
+│   └── idle-introspection-framework.md # Idle-time learning loop
 └── jarvis/                # Project-specific (evolving)
     ├── conventions.md     # Container, git, tools
     ├── debugging.md       # Common issues

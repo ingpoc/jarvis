@@ -64,6 +64,40 @@ class TestFoundationModelsClient:
         result2 = await client.is_available()
         assert result2 is False
 
+    @pytest.mark.asyncio
+    async def test_http_client_is_reused_and_can_close(self, monkeypatch: pytest.MonkeyPatch):
+        class DummyClient:
+            def __init__(self):
+                self.calls = 0
+                self.closed = False
+
+            async def post(self, *_args, **_kwargs):
+                self.calls += 1
+                return type("Resp", (), {"status_code": 200, "json": lambda self: {"status": "ok"}})()
+
+            async def aclose(self):
+                self.closed = True
+
+        async def fake_get_http_client(self):
+            if self._http_client is None:
+                self._http_client = DummyClient()
+            return self._http_client
+
+        client = FoundationModelsClient(base_url="http://127.0.0.1:19999")
+        monkeypatch.setattr(
+            FoundationModelsClient,
+            "_get_http_client",
+            fake_get_http_client,
+        )
+
+        await client._post({"action": "health"})
+        await client._post({"action": "health"})
+        assert client._http_client is not None
+        assert client._http_client.calls == 2
+
+        await client.close()
+        assert client._http_client is None
+
 
 class TestSingleton:
     """Test singleton pattern."""

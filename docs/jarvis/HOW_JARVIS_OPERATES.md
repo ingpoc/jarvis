@@ -128,7 +128,7 @@ Task Completes
 Voice in the app uses this path:
 
 1. macOS recorder captures audio.
-2. Local MLX Whisper transcribes speech.
+2. Local Whisper transcription backend transcribes speech.
 3. Client sends `send_voice` with `data.text` over WS.
 4. Server calls `JarvisOrchestrator.handle_message(...)` directly.
 5. Reply is returned in the same WS response and spoken in-app.

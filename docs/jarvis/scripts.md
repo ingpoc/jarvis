@@ -37,7 +37,6 @@ Run these **before submitting changes**:
 
 | Dependency | Verify |
 |------------|--------|
-| `mlx-whisper` in project `.venv` | `.venv/bin/python -c "import mlx_whisper"` |
 | `ffmpeg` on PATH | `ffmpeg -version` |
 
 ## Logs & Cache

@@ -1,7 +1,5 @@
 # Local Models Integration Guide
 
-For Apple/MLX repo lookup strategy, use `../apple-mlx/README.md` first.
-
 ## Overview
 
 Jarvis runtime no longer integrates the legacy local model-server path.
@@ -82,12 +80,11 @@ This prevents stale/incorrect binary targets from causing menu bar crash loops.
 `config.py` model provider types:
 
 ```text
-anthropic | foundation | mlx | opencode
+anthropic | foundation | opencode
 ```
 
 Notes:
 
-- `mlx` remains reserved for future direct runtime work.
 - OpenCode can use repo-local `opencode.json` for MCP registration (for example Zapier MCP).
 - A2A-origin execution uses `permission_mode="bypassPermissions"` to reduce delegated-task approval deadlocks.
 - OpenCode HTTP checks/calls are offloaded from the event loop in async paths to keep A2A polling responsive.
@@ -122,6 +119,5 @@ asyncio.run(t())"
 
 ## Future Enhancements
 
-1. Direct MLX provider implementation
-2. Better provider health telemetry in menu bar
-3. Provider-specific latency/cost panels in dashboard
+1. Better provider health telemetry in menu bar
+2. Provider-specific latency/cost panels in dashboard

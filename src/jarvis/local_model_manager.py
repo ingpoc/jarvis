@@ -4,7 +4,6 @@ Coordinates local model execution paths used by Jarvis.
 
 Provider Selection:
 - foundation-models: Direct AFM Python integration
-- mlx-*: Reserved for future direct MLX integration
 
 Memory Management:
 - Only one local provider active at a time
@@ -30,7 +29,6 @@ class ModelProviderType(Enum):
 
     ANTHROPIC = "anthropic"
     FOUNDATION = "foundation"
-    MLX = "mlx"
 
 
 class LocalModelManager:
@@ -52,8 +50,6 @@ class LocalModelManager:
         """Determine provider type from model ID."""
         if model_id == "foundation-models":
             return ModelProviderType.FOUNDATION
-        if model_id.startswith("mlx-"):
-            return ModelProviderType.MLX
         return ModelProviderType.ANTHROPIC
 
     async def switch_model(self, model_id: str) -> dict[str, Any]:

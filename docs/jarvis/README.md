@@ -52,7 +52,7 @@ src/jarvis/
 
 ```
 Voice tab (JarvisApp)
-  -> VoiceRecorder (records + MLX Whisper transcription on macOS)
+  -> VoiceRecorder (records + local Whisper transcription on macOS)
   -> WebSocket action: send_voice
   -> JarvisOrchestrator.handle_message(...)
   -> immediate reply payload

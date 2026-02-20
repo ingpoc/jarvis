@@ -5,12 +5,11 @@ When the system has been idle for config.idle.idle_threshold_minutes, this
 processor:
 
   Stage 1 — Cluster: embed skill_candidates + learnings using
-             nomic-embed-text-v1.5 (mlx-embedding-models), fall back to
-             TF-IDF Jaccard if the package is not installed.
+             TF-IDF Jaccard similarity.
 
-  Stage 2 — Synthesize: pass each significant cluster to the existing
-             MLXInferenceEngine (Qwen2.5-3B) to generate a draft .md rule
-             file written to .claude/rules/draft-introspect-*.md.
+  Stage 2 — Synthesize: generate deterministic draft .md rule content
+             for significant clusters and write to
+             .claude/rules/draft-introspect-*.md.
 
 Human review is required before a draft rule becomes active.
 """
@@ -18,7 +17,6 @@ Human review is required before a draft rule becomes active.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import subprocess
 from datetime import date, datetime
@@ -27,7 +25,6 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 INTROSPECT_LOG = Path.home() / ".jarvis" / "logs" / "introspect.log"
-EMBED_MODEL = "nomic-embed-text-v1.5"
 MAX_RUNS_PER_DAY = 2
 MIN_CLUSTER_SIZE = 2
 
@@ -70,9 +67,8 @@ class IntrospectionProcessor:
       stop()              — async, cleanup on daemon shutdown
     """
 
-    def __init__(self, memory, mlx_engine, project_path: str | None = None):
+    def __init__(self, memory, project_path: str | None = None):
         self.memory = memory
-        self.mlx = mlx_engine
         self.project_path = project_path
 
         self._idle = False
@@ -208,48 +204,8 @@ class IntrospectionProcessor:
     # ------------------------------------------------------------------
 
     async def _cluster(self, items: list[dict]) -> list[list[dict]]:
-        texts = [it["text"] for it in items]
-
-        try:
-            from mlx_embedding_models.embedding import EmbeddingModel
-            model = EmbeddingModel.from_registry(EMBED_MODEL)
-            embeddings = model.encode(texts)
-            self._log("  Embedding: nomic-embed-text-v1.5 (MLX)")
-            return self._cosine_clusters(items, embeddings, threshold=0.75)
-        except ImportError:
-            logger.debug("mlx-embedding-models not installed — using TF-IDF fallback")
-        except Exception as e:
-            logger.debug(f"MLX embedding failed ({e}) — using TF-IDF fallback")
-
-        self._log("  Embedding: TF-IDF Jaccard fallback")
+        self._log("  Embedding: TF-IDF Jaccard")
         return self._tfidf_clusters(items, threshold=0.3)
-
-    def _cosine_clusters(self, items: list[dict], embeddings, threshold: float) -> list[list[dict]]:
-        import math
-
-        n = len(items)
-        vecs = [embeddings[i].tolist() for i in range(n)]
-        norms = [math.sqrt(sum(x * x for x in v)) or 1.0 for v in vecs]
-
-        visited = [False] * n
-        clusters: list[list[dict]] = []
-
-        for i in range(n):
-            if visited[i]:
-                continue
-            cluster = [items[i]]
-            visited[i] = True
-            for j in range(i + 1, n):
-                if visited[j]:
-                    continue
-                dot = sum(a * b for a, b in zip(vecs[i], vecs[j]))
-                sim = dot / (norms[i] * norms[j])
-                if sim >= threshold:
-                    cluster.append(items[j])
-                    visited[j] = True
-            clusters.append(cluster)
-
-        return sorted(clusters, key=lambda c: len(c), reverse=True)
 
     def _tfidf_clusters(self, items: list[dict], threshold: float) -> list[list[dict]]:
         def tokens(text: str) -> set[str]:
@@ -283,75 +239,23 @@ class IntrospectionProcessor:
     # ------------------------------------------------------------------
 
     async def _generate_rule(self, cluster: list[dict]) -> str | None:
-        if not self.mlx.available:
-            self._log("  MLX not available — skipping generation")
-            return None
-
         examples = "\n".join(f"- {it['text']}" for it in cluster[:5])
-
-        # 2a: Identify root cause
-        summary_prompt = (
-            f"Here are {len(cluster)} similar recurring error patterns from an AI coding assistant:\n"
-            f"{examples}\n\n"
-            "In 2 sentences: what is the root cause, and what single rule would prevent all of them?\n"
-            'Output JSON only: {"root_cause": "...", "prevention_rule": "...", "severity": "high|medium|low"}'
+        return (
+            "## Pattern\n"
+            f"{len(cluster)} recurring patterns indicate a repeated implementation gap.\n\n"
+            "## Why It Happens\n"
+            "The workflow allows similar mistakes to repeat without a deterministic check.\n\n"
+            "## Prevention\n"
+            "Add a pre-merge validation step for this pattern family and fail fast on regressions.\n\n"
+            "## Detection\n"
+            "Alert when the same error signature appears 2+ times in recent learnings.\n\n"
+            "### Examples\n"
+            f"{examples}\n"
         )
-
-        try:
-            raw = await self.mlx.generate(
-                prompt=summary_prompt,
-                system_prompt="You identify root causes of software engineering errors. Output JSON only.",
-                max_tokens=200,
-                temperature=0.1,
-            )
-            summary = self._extract_json(raw)
-            if not summary:
-                self._log("  Could not parse root cause JSON — skipping")
-                return None
-        except Exception as e:
-            self._log(f"  Root cause generation failed: {e}")
-            return None
-
-        root_cause = summary.get("root_cause", "Unknown root cause")
-        prevention = summary.get("prevention_rule", "")
-        severity = summary.get("severity", "medium")
-
-        # 2b: Generate rule markdown
-        rule_prompt = (
-            "Write a .claude/rules/ markdown file for this recurring error pattern.\n"
-            "Structure exactly: ## Pattern, ## Why It Happens, "
-            "## Prevention (with before/after code), ## Detection\n"
-            "Max 50 lines. Specific and actionable.\n\n"
-            f"Pattern: {root_cause}\n"
-            f"Prevention: {prevention}\n"
-            f"Severity: {severity}\n"
-            f"Examples:\n{examples}"
-        )
-
-        try:
-            return await self.mlx.generate(
-                prompt=rule_prompt,
-                system_prompt="You write concise, actionable coding rules in markdown.",
-                max_tokens=600,
-                temperature=0.2,
-            )
-        except Exception as e:
-            self._log(f"  Rule generation failed: {e}")
-            return None
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    def _extract_json(self, text: str) -> dict | None:
-        try:
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start >= 0 and end > start:
-                return json.loads(text[start:end])
-        except Exception:
-            pass
-        return None
 
     def _write_draft(self, content: str, index: int) -> Path:
         if self.project_path:

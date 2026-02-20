@@ -161,7 +161,7 @@ def create_a2a_app(config: JarvisConfig, orchestrator: Any = None, project_path:
         if not message:
             return jsonrpc_error(-32602, "Missing 'message' parameter", request_id)
 
-        blocking = params.get("blocking", True)
+        blocking = params.get("blocking", False)
         context_id = params.get("contextId") or params.get("context_id")
 
         task = await executor.submit_task(

@@ -86,7 +86,7 @@ sed -n '1,160p' ~/Library/Logs/DiagnosticReports/<latest-file>.ips
 | `Orchestrator not connected` | Daemon not running | Restart daemon |
 | `Unknown action: send_voice` | Daemon not restarted after code update | Run `./stop-jarvis.sh && ./start-jarvis.sh` |
 | Voice transcript generated but no reply | `send_voice` response path failing | Check `daemon.log` for `send_voice` response/error |
-| Voice does not transcribe | `mlx-whisper` or `ffmpeg` missing | Install dependencies in project env |
+| Voice does not transcribe | transcription backend or `ffmpeg` missing | Install dependencies in project env |
 | Events not broadcast | Wrong message format | Use `data` wrapper |
 | `'MemoryStore' object has no attribute 'add_research_sources'` during delegated tasks | URL ingestion path called on memory backend without research API | Update to latest code (guard in `orchestrator/core.py`), restart daemon, retry task |
 
@@ -138,6 +138,5 @@ python3 scripts/jarvis_api_lint.py
 ## Voice Dependency Check (macOS)
 
 ```bash
-.venv/bin/python -c "import mlx_whisper; print(mlx_whisper.__version__)"
 ffmpeg -version
 ```

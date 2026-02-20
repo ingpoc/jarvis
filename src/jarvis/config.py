@@ -59,7 +59,7 @@ class ModelConfig:
     executor: str = "sonnet"
     reviewer: str = "sonnet"
     quick: str = "haiku"
-    provider_type: str = "anthropic"  # anthropic, foundation, mlx, opencode
+    provider_type: str = "anthropic"  # anthropic, foundation, opencode
 
 
 @dataclass
@@ -92,7 +92,7 @@ class A2AConfig:
     port: int = 9848  # Can override with JARVIS_A2A_PORT env var
     default_trust_tier: int = 1
     token_path: str = ""  # Empty means ~/.jarvis/a2a_token
-    task_timeout_seconds: int = 300  # 5 minutes for blocking tasks
+    task_timeout_seconds: int = 18000  # 5 hours for long-running delegated tasks
 
 
 @dataclass
@@ -231,6 +231,9 @@ class JarvisConfig:
         a2a_enabled = os.environ.get("JARVIS_A2A_ENABLED")
         if a2a_enabled:
             config.a2a.enabled = a2a_enabled.lower() in ("true", "1", "yes")
+        a2a_timeout = os.environ.get("JARVIS_A2A_TASK_TIMEOUT_SECONDS")
+        if a2a_timeout:
+            config.a2a.task_timeout_seconds = int(a2a_timeout)
 
         return config
 

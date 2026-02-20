@@ -11,10 +11,8 @@ Distilled research articles and patterns.
 | [verification-loops.md](verification-loops.md) | Anthropic | Feature lists, self-verification |
 | [garbage-collection.md](garbage-collection.md) | OpenAI | Continuous debt paydown |
 | [vercel-agents-md.md](vercel-agents-md.md) | Vercel | Passive context beats skills, 100% vs 79% |
-| [apple-container.md](../apple-mlx/apple-container.md) | Apple GitHub | Linux containers as VMs, XPC architecture |
 | [context-learning-loop.md](context-learning-loop.md) | Internal proposal | Traces → hooks → rules; verdict: Adapt (use existing skills, add hook enforcement) |
 | [draw-io-diagram-generation.md](draw-io-diagram-generation.md) | Process guide | Diagram generation workflow with draw.io (Mermaid/XML/CSV) |
-| [apple-mlx-frameworks.md](../apple-mlx/apple-mlx-frameworks.md) | DeepWiki Research | MLX for local LLM inference on Apple Silicon |
 | [local-models-integration.md](local-models-integration.md) | Internal — updated 2026-02-20 | Foundation Models remain the only in-process local runtime; OpenCode is external provider path; menu bar startup uses app-bundle binary with sync guard to avoid crash loops |
 | [openclaw-jarvis-integration.md](openclaw-jarvis-integration.md) | OpenClaw docs + DeepWiki + live validation (2026-02-20) | Includes update-ownership map: where to change bridge code vs workspace `AGENTS/TOOLS/BOOT/docs`, plus non-blocking + stepwise delegation rules |
 | [opencode-parallel-worktrees.md](opencode-parallel-worktrees.md) | Claude Code docs + OpenCode docs + DeepWiki (2026-02-20) | Manager + parallel OpenCode subagents with per-role containerized git worktrees, deterministic gates, and PR/issue handoff |
