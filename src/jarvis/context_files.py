@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from jarvis.config import (
     JARVIS_CONFIG,
     JARVIS_HOME,
     JARVIS_MCP_RUNTIME_CONFIG,
+    JARVIS_OPENCODE_CONFIG,
     JARVIS_RUNTIME_WORKFLOW_DIR,
 )
 
@@ -19,6 +21,7 @@ IMMUTABLE_CONTEXT_FILES = ["IDENTITY.md", "SOUL.md", "PRINCIPLES.md"]
 RUNTIME_CONTEXT_FILES = ["AGENTS.md", "workflow.md", "memory.md"]
 TURN_LOG_MARKER = "## Turn Log"
 PROJECT_CONTEXT_FILENAME = "PROJECT-CONTEXT.md"
+JARVIS_WORKSPACE_DYNAMIC_MCP = JARVIS_HOME / "workspaces" / ".opencode" / ".mcp.json"
 
 PROJECT_JARVIS_TEMPLATE = """# JARVIS.md
 
@@ -111,12 +114,17 @@ def ensure_core_context_files() -> None:
         "# memory\n\n- Runtime learning and memory rules.\n",
     )
 
-    if not JARVIS_MCP_RUNTIME_CONFIG.exists():
-        repo_mcp = REPO_ROOT / ".mcp.json"
-        if repo_mcp.exists():
-            JARVIS_MCP_RUNTIME_CONFIG.write_text(repo_mcp.read_text())
-        else:
-            JARVIS_MCP_RUNTIME_CONFIG.write_text('{"mcpServers": {}}\n')
+    if not _sync_runtime_mcp_from_opencode(
+        JARVIS_OPENCODE_CONFIG,
+        JARVIS_MCP_RUNTIME_CONFIG,
+        dynamic_overlay_path=JARVIS_WORKSPACE_DYNAMIC_MCP,
+    ):
+        if not JARVIS_MCP_RUNTIME_CONFIG.exists():
+            repo_mcp = REPO_ROOT / ".mcp.json"
+            if repo_mcp.exists():
+                JARVIS_MCP_RUNTIME_CONFIG.write_text(repo_mcp.read_text())
+            else:
+                JARVIS_MCP_RUNTIME_CONFIG.write_text('{"mcpServers": {}}\n')
 
 
 def load_core_context(max_chars: int = 16000) -> str:
@@ -148,6 +156,93 @@ def _seed_file(path: Path, candidates: list[Path], default_text: str) -> None:
             path.write_text(source.read_text())
             return
     path.write_text(default_text)
+
+
+def _sync_runtime_mcp_from_opencode(
+    opencode_config_path: Path,
+    runtime_mcp_path: Path,
+    *,
+    dynamic_overlay_path: Path | None = None,
+) -> bool:
+    """Sync runtime .mcp.json from opencode.json MCP section.
+
+    Returns True when sync succeeded (including empty MCP map), else False.
+    """
+    if not opencode_config_path.exists():
+        return False
+
+    try:
+        raw = json.loads(opencode_config_path.read_text())
+    except Exception:
+        return False
+
+    source_map = raw.get("mcp")
+    if not isinstance(source_map, dict):
+        # Explicitly keep runtime map empty if no MCP section is defined.
+        runtime_mcp_path.parent.mkdir(parents=True, exist_ok=True)
+        runtime_mcp_path.write_text('{"mcpServers": {}}\n')
+        return True
+
+    mcp_servers: dict[str, dict] = {}
+    for name, cfg in source_map.items():
+        if not isinstance(name, str) or not isinstance(cfg, dict):
+            continue
+        if cfg.get("enabled", True) is False:
+            continue
+
+        server: dict[str, object] = {}
+        server_type = str(cfg.get("type") or "").strip().lower()
+        if server_type == "remote" or "url" in cfg:
+            url = cfg.get("url")
+            if isinstance(url, str) and url.strip():
+                server["url"] = url.strip()
+        else:
+            command = cfg.get("command")
+            if isinstance(command, list) and command:
+                command_parts = [str(part) for part in command if str(part).strip()]
+                if command_parts:
+                    server["command"] = command_parts[0]
+                    if len(command_parts) > 1:
+                        server["args"] = command_parts[1:]
+            elif isinstance(command, str) and command.strip():
+                server["command"] = command.strip()
+                args = cfg.get("args")
+                if isinstance(args, list) and args:
+                    server["args"] = [str(part) for part in args if str(part).strip()]
+
+        env = cfg.get("environment")
+        if isinstance(env, dict) and env:
+            server["env"] = {str(k): str(v) for k, v in env.items()}
+
+        headers = cfg.get("headers")
+        if isinstance(headers, dict) and headers:
+            server["headers"] = {str(k): str(v) for k, v in headers.items()}
+
+        if server:
+            mcp_servers[name] = server
+
+    if dynamic_overlay_path and dynamic_overlay_path.exists():
+        try:
+            overlay_raw = json.loads(dynamic_overlay_path.read_text())
+            overlay_servers = overlay_raw.get("mcpServers", {})
+            if isinstance(overlay_servers, dict):
+                for name, cfg in overlay_servers.items():
+                    if not isinstance(name, str) or not isinstance(cfg, dict):
+                        continue
+                    if cfg.get("enabled", True) is False or cfg.get("disabled", False) is True:
+                        mcp_servers.pop(name, None)
+                        continue
+                    merged_cfg = {k: v for k, v in cfg.items() if k not in {"enabled", "disabled"}}
+                    if merged_cfg:
+                        mcp_servers[name] = merged_cfg
+        except Exception:
+            # Overlay is optional; invalid overlay must not block startup.
+            pass
+
+    payload = {"mcpServers": dict(sorted(mcp_servers.items()))}
+    runtime_mcp_path.parent.mkdir(parents=True, exist_ok=True)
+    runtime_mcp_path.write_text(json.dumps(payload, indent=2) + "\n")
+    return True
 
 
 def resolve_project_jarvis_file(project_path: str | Path) -> Path:

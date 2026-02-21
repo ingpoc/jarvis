@@ -273,15 +273,18 @@ Both modes share:
 - **PostMessage**: Cost tracking, token usage
 
 ### 2. MCP Servers
-- `jarvis-container`: Apple Container lifecycle
-- `jarvis-git`: Git operations
-- `jarvis-review`: Code review tools
-- `jarvis-browser`: Browser automation/testing
+- `context7`: Codebase documentation search
+- `deepwiki`: GitHub repository documentation
+- `context-graph`: Learning/trace storage (Voyage AI embeddings)
+- `token-efficient`: Large data processing (CSV, logs, code exec)
+- `zapier`: Automation integrations
 
-### 3. Learning Loop
-- Both modes save execution records
-- Both modes extract patterns after completion
-- Learnings are shared across modes
+### 3. Learning Loop (Self-Evolution)
+- Both modes save execution records to Context Graph
+- Query Context Graph BEFORE any architecture/implementation decision
+- Store traces AFTER any failure→fix path
+- 3+ occurrences → generate draft rule
+- 5+ validated → human promotes to AGENTS.md
 
 ### 4. Memory & State
 - Same `MemoryStore` (SQLite)

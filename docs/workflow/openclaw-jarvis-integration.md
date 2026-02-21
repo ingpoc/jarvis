@@ -229,6 +229,21 @@ Best-practice resume contract:
 3. If available, pass `resumeSessionId` to A2A `message/send` so OpenCode resumes even after daemon restart.
 4. Jarvis still keeps an in-memory `channel_id -> session_id` map for fast same-process resumes.
 
+### Dynamic MCP Overlay (Jarvis Self-Managed)
+
+MCP source of truth is split intentionally:
+
+1. Immutable base (human-managed): `~/.jarvis/system/opencode_config/opencode.json` (`mcp` section).
+2. Mutable overlay (Jarvis-managed): `~/.jarvis/workspaces/.opencode/.mcp.json` (`mcpServers` section).
+3. Effective runtime map (auto-generated on startup): `~/.jarvis/runtime_workflow/.mcp.json`.
+
+Merge rule:
+
+- Runtime `mcpServers = base(opencode.json.mcp enabled) + overlay(.opencode/.mcp.json)`.
+- Overlay can add/override entries.
+- Overlay can remove base entries with `{"disabled": true}` on that server key.
+- Do not hand-edit `~/.jarvis/runtime_workflow/.mcp.json`; it is generated output and will be overwritten on startup.
+
 ### OpenClaw-Owned Context Graph Loop
 
 OpenClaw should maintain its own continuity graph in addition to flat ledgers.

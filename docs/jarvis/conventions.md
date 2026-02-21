@@ -85,8 +85,18 @@ tests/
 | `JARVIS_LOG_DIR` | ~/.jarvis/logs | Log location |
 | `JARVIS_DB` | ~/.jarvis/jarvis.db | SQLite database |
 | `JARVIS_WORKSPACE` | ~/.jarvis/workspaces | Root for Jarvis-created execution workspaces |
-| `OPENCODE_CONFIG` | ~/.jarvis/system/opencode_config/opencode.json | OpenCode runtime config |
+| `OPENCODE_CONFIG` | N/A (auto-discovered in workspace) | OpenCode runtime config |
 | `JARVIS_A2A_TOKEN` | ~/.jarvis/system/jarvis_config/a2a_token | A2A auth token file |
+| `VOYAGE_API_KEY` | {env} | Context Graph MCP |
+| `ZAPIER_MCP_TOKEN` | {env} | Zapier MCP |
+
+### Workspace Auto-Discovery
+
+When OpenClaw spawns OpenCode in `~/.jarvis/workspaces/`:
+
+1. Finds `opencode.json` → loads MCP servers + agents
+2. Finds `AGENTS.md` → loads workspace rules
+3. Loads `instructions` from opencode.json → loads IDENTITY.md, SOUL.md, PRINCIPLES.md
 
 ### Runtime Ownership
 

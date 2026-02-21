@@ -19,6 +19,7 @@ Distilled research articles and patterns.
 | [harness-governance.md](harness-governance.md) | Internal policy | What is always-on vs progressive vs enforced, and cross-runtime (Claude + Codex) rules |
 | [harness-purpose-map.md](harness-purpose-map.md) | Internal policy | Why each enforced harness item exists and when to remove it |
 | [social-post-intake.md](social-post-intake.md) | Internal process | Fast extraction cascade for X/LinkedIn/Threads research links |
+| [github-account-isolation.md](github-account-isolation.md) | Internal ops (2026-02-21) | Two-account gh isolation: ingpoc (personal) vs openclaw-gurusharan (Jarvis), via separate GH_CONFIG_DIR + direnv |
 
 ## Skipped Evaluations
 

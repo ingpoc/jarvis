@@ -45,13 +45,86 @@ python3 scripts/validate_jarvis.py
 ~/.jarvis/
 ├── system/
 │   ├── jarvis_config/      # Human-managed runtime config (.env, config, launch env, A2A token)
-│   └── opencode_config/    # OpenCode config used by daemon/runtime
-├── runtime_workflow/       # Jarvis-managed workflow context (AGENTS.md, docs/, .mcp.json)
-├── workspaces/             # Task workspaces/worktrees created by Jarvis
-├── logs/                   # daemon.log, menubar.log
-├── pids/                   # process/service PID files
-└── jarvis.db               # runtime database
+│   │   ├── IDENTITY.md     # Who Jarvis is
+│   │   ├── SOUL.md         # How Jarvis behaves
+│   │   ├── PRINCIPLES.md   # Execution rules
+│   │   └── a2a_token       # A2A authentication
+│   └── opencode_config/    # OpenCode config (opencode.json)
+├── runtime_workflow/       # Jarvis-managed workflow context
+│   ├── AGENTS.md          # Global workspace rules
+│   ├── .mcp.json          # MCP server config
+│   └── docs/workflow/     # Detailed procedures
+├── workspaces/            # Task workspaces created by Jarvis
+│   ├── AGENTS.md          # Symlink → runtime_workflow/AGENTS.md
+│   ├── opencode.json      # Symlink → system/opencode_config/opencode.json
+│   ├── .mcp.json         # Symlink → runtime_workflow/.mcp.json
+│   ├── docs/             # Symlink → runtime_workflow/docs
+│   └── memory/           # Learning traces
+├── logs/                  # daemon.log, menubar.log
+├── pids/                  # process/service PID files
+└── jarvis.db              # runtime database
 ```
+
+## OpenCode Configuration
+
+OpenCode loads from `~/.jarvis/workspaces/` with:
+
+| File | Source | Purpose |
+|------|--------|---------|
+| `opencode.json` | `~/.jarvis/system/opencode_config/opencode.json` | MCP servers, agents, permissions |
+| `AGENTS.md` | `~/.jarvis/runtime_workflow/AGENTS.md` | Workspace rules |
+| Instructions | `~/.jarvis/system/jarvis_config/{IDENTITY,SOUL,PRINCIPLES}.md` | Identity loaded every session |
+
+### Config Layers (MCP)
+
+| Layer | Path | Owner | Rule |
+|------|------|-------|------|
+| Base MCP config | `~/.jarvis/system/opencode_config/opencode.json` (`mcp`) | Human-managed | Immutable source of truth |
+| Dynamic MCP overlay | `~/.jarvis/workspaces/.opencode/.mcp.json` (`mcpServers`) | Jarvis-managed | Add/override/remove runtime MCP entries |
+| Effective runtime MCP | `~/.jarvis/runtime_workflow/.mcp.json` (`mcpServers`) | Auto-generated | Derived at startup from base + overlay |
+
+Startup behavior:
+- Jarvis merges base + overlay into effective runtime MCP map.
+- Jarvis should never need to edit base `opencode.json` for dynamic MCP additions.
+- Do not hand-edit effective runtime `.mcp.json`; it is generated output.
+
+### MCP Servers Configured
+
+| Server | Type | Purpose |
+|--------|------|---------|
+| `context7` | local (npx) | Codebase search |
+| `deepwiki` | remote | Documentation search |
+| `context-graph` | local | Learning/trace storage |
+| `token-efficient` | local | Large data processing |
+| `zapier` | remote | Automation |
+
+### Startup Drift Check
+
+Run this quick verification after runtime/config changes:
+
+```bash
+# 1) Base config hash (track unexpected changes)
+shasum -a 256 ~/.jarvis/system/opencode_config/opencode.json
+
+# 2) Overlay presence/content
+test -f ~/.jarvis/workspaces/.opencode/.mcp.json && cat ~/.jarvis/workspaces/.opencode/.mcp.json || echo "NO_OVERLAY"
+
+# 3) Effective merged runtime keys
+jq -r '.mcpServers | keys[]' ~/.jarvis/runtime_workflow/.mcp.json
+```
+
+## Self-Evolution Loop
+
+```
+1. Query Context Graph BEFORE: context_query_traces(query="...", category="...")
+2. Execute task
+3. On failure→fix: context_store_trace(decision, category, outcome)
+4. On pattern (3+): generate draft rule
+5. Human review → promote to AGENTS.md
+6. Next session: better from learned patterns
+```
+
+See `docs/workflow/context-learning-loop.md` for details.
 
 Operational rule:
 

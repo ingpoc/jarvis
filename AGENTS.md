@@ -25,6 +25,7 @@ Agent-first development. Humans steer, agents execute.
 |research paper/article/URL shared → load research-evaluator skill
 |X/LinkedIn/Threads post shared → workflow/social-post-intake.md then research-evaluator
 |memory/continuity/decisions/preferences requested → memory/README.md
+|github accounts / gh auth / ingpoc / openclaw-gurusharan / GH_TOKEN / direnv → workflow/github-account-isolation.md
 |tool failure / tool discovery / rule placement → workflow/harness-governance.md
 |harness complexity / overengineering concerns → workflow/harness-purpose-map.md
 |optimizing codex / claude code / claude agent sdk capabilities → capabilities/README.md
@@ -51,6 +52,24 @@ Agent-first development. Humans steer, agents execute.
 ---
 
 ## Critical Rules
+
+### GitHub Account (MANDATORY — check before any gh command)
+
+**Always openclaw-gurusharan. Never ingpoc.**
+
+Inherited `GH_TOKEN` from the launch shell overrides `GH_CONFIG_DIR`. Always extract explicitly:
+
+```bash
+export GH_CONFIG_DIR=~/.jarvis/gh-config
+export GH_TOKEN=$(GH_CONFIG_DIR=~/.jarvis/gh-config GH_TOKEN= GITHUB_TOKEN= gh auth token --hostname github.com)
+export GITHUB_TOKEN=$GH_TOKEN
+# Verify:
+GH_CONFIG_DIR=~/.jarvis/gh-config gh auth status 2>&1 | grep openclaw-gurusharan
+```
+
+If grep returns empty → wrong account. Repeat the export steps. See `docs/workflow/github-account-isolation.md`.
+
+---
 
 ### WebSocket Format
 
