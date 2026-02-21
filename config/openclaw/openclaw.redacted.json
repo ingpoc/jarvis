@@ -1,7 +1,7 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.2.19-2",
-    "lastTouchedAt": "2026-02-21T14:45:26.670Z"
+    "lastTouchedAt": "2026-02-21T14:51:58.044Z"
   },
   "wizard": {
     "lastRunAt": "2026-01-27T08:38:50.426Z",
@@ -190,12 +190,8 @@
       "slack",
       "lobster",
       "llm-task",
-      "thread-ownership",
       "jarvis-bridge"
     ],
-    "load": {
-      "paths": []
-    },
     "entries": {
       "slack": {
         "enabled": true
@@ -208,9 +204,6 @@
       },
       "llm-task": {
         "enabled": true
-      },
-      "thread-ownership": {
-        "enabled": false
       },
       "jarvis-bridge": {
         "enabled": true,
