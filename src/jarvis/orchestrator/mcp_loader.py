@@ -68,7 +68,7 @@ class MCPConfigLoader:
         return configured
 
     def _parse_project_mcp_server(self, name: str, raw: object) -> dict | None:
-        """Parse one .mcp.json server entry into Claude Agent SDK format."""
+        """Parse one .mcp.json server entry into runtime MCP map format."""
         if not isinstance(raw, dict):
             return None
         if "url" in raw and raw.get("url"):

@@ -1,10 +1,9 @@
 [project]
 name = "jarvis-mac"
 version = "0.1.0"
-description = "Autonomous Mac-native development partner powered by Claude Agent SDK and Apple Containers"
+description = "Autonomous Mac-native development partner powered by OpenCode and Apple Containers"
 requires-python = ">=3.11"
 dependencies = [
-    "claude-agent-sdk>=0.1.0",
     "click>=8.1",
     "rich>=13.0",
     "mcp>=1.0",

@@ -416,13 +416,6 @@ write_daemon_launch_env() {
 export JARVIS_WORKSPACE=$(printf '%q' "${JARVIS_WORKSPACE:-}")
 export JARVIS_TASK_TIMEOUT_SECS=$(printf '%q' "${JARVIS_TASK_TIMEOUT_SECS:-}")
 export JARVIS_STALE_TASK_SECS=$(printf '%q' "${JARVIS_STALE_TASK_SECS:-}")
-export ANTHROPIC_DEFAULT_OPUS_MODEL=$(printf '%q' "${ANTHROPIC_DEFAULT_OPUS_MODEL:-}")
-export ANTHROPIC_DEFAULT_SONNET_MODEL=$(printf '%q' "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}")
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=$(printf '%q' "${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}")
-export ANTHROPIC_BASE_URL=$(printf '%q' "${ANTHROPIC_BASE_URL:-}")
-export ANTHROPIC_AUTH_TOKEN=$(printf '%q' "${ANTHROPIC_AUTH_TOKEN:-}")
-export ANTHROPIC_API_KEY=$(printf '%q' "${ANTHROPIC_API_KEY:-}")
-export CLAUDE_CODE_OAUTH_TOKEN=$(printf '%q' "${CLAUDE_CODE_OAUTH_TOKEN:-}")
 export JARVIS_API_TOKEN=$(printf '%q' "${JARVIS_API_TOKEN:-}")
 export ELEVENLABS_API_KEY=$(printf '%q' "${ELEVENLABS_API_KEY:-}")
 export ELEVENLABS_AGENT_ID=$(printf '%q' "${ELEVENLABS_AGENT_ID:-}")
@@ -662,14 +655,7 @@ export ELEVENLABS_API_KEY="${ELEVENLABS_API_KEY:-}"
 export ELEVENLABS_AGENT_ID="${ELEVENLABS_AGENT_ID:-}"
 export JARVIS_OPENCODE_TIMEOUT_SECS="${JARVIS_OPENCODE_TIMEOUT_SECS:-18000}"
 export JARVIS_OPENCODE_CHAT_TIMEOUT_SECS="${JARVIS_OPENCODE_CHAT_TIMEOUT_SECS:-1200}"
-# Model Configuration:
-# - For standard Anthropic Claude: leave ANTHROPIC_BASE_URL unset and set ANTHROPIC_API_KEY
-# - For z.ai (GLM models): set ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN
-# - With z.ai, use model aliases (opus/sonnet/haiku) which get mapped via ANTHROPIC_DEFAULT_*_MODEL env vars
-# - Current default: GLM-5 for all tiers (high performance)
-export ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-glm-5}"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-glm-5}"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-glm-5}"
+export JARVIS_A2A_OPENCODE_MODEL="${JARVIS_A2A_OPENCODE_MODEL:-opencode/glm-5-free}"
 export JARVIS_ENABLE_TUNNEL="${JARVIS_ENABLE_TUNNEL:-0}"
 # Default to launchctl for persistent, auto-restarting user services.
 export JARVIS_DAEMON_START_MODE="${JARVIS_DAEMON_START_MODE:-launchctl}"

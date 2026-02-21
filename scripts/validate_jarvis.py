@@ -282,7 +282,6 @@ def check_daemon_health() -> CheckResult:
 def check_dependencies() -> CheckResult:
     """Check required dependencies are installed."""
     required = [
-        "claude_agent_sdk",
         "click",
         "rich",
         "httpx",

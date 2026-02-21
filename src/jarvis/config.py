@@ -50,28 +50,16 @@ class BudgetConfig:
 class ModelConfig:
     """Model routing.
 
-    Supports standard Claude model IDs and z.ai GLM models via environment variables.
-
-    For z.ai/GLM models, use model aliases (opus/sonnet/haiku) and set environment:
-        export ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic
-        export ANTHROPIC_AUTH_TOKEN=<your-z.ai-api-key>
-        export ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5
-        export ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5
-        export ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5
-
-    Then set Jarvis to use aliases:
-        jarvis config models.executor=sonnet
-        jarvis config models.planner=opus
-
-    Local models (use provider_type to switch):
-        - foundation-models: Apple Foundation Models (direct Python)
+    OpenCode-only runtime:
+    - use explicit `opencode/*` model IDs
+    - no local model/provider switching
     """
 
-    planner: str = "opus"
-    executor: str = "sonnet"
-    reviewer: str = "sonnet"
-    quick: str = "haiku"
-    provider_type: str = "anthropic"  # anthropic, foundation, opencode
+    planner: str = "opencode/glm-5-free"
+    executor: str = "opencode/glm-5-free"
+    reviewer: str = "opencode/glm-5-free"
+    quick: str = "opencode/glm-5-free"
+    provider_type: str = "opencode"
 
 
 @dataclass
@@ -158,9 +146,6 @@ class JarvisConfig:
     @classmethod
     def load(cls) -> "JarvisConfig":
         """Load config from disk or return defaults.
-
-        Also checks ANTHROPIC_DEFAULT_*_MODEL env vars for GLM 4.7 routing.
-        Env vars override file config for model selection.
         """
         config = cls()
 
@@ -197,26 +182,6 @@ class JarvisConfig:
         if workspace_root:
             config.workspace_root = workspace_root
 
-        # Env var overrides (supports GLM 4.7 / z.ai proxy).
-        # Only apply alias-based overrides when the current value is still an alias.
-        # This preserves explicit model selections saved by the menu-bar model picker
-        # (for example: foundation-models or a concrete Claude model ID).
-        def _is_alias(value: str, alias: str) -> bool:
-            return str(value or "").strip().lower() == alias
-
-        opus_model = os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL")
-        sonnet_model = os.environ.get("ANTHROPIC_DEFAULT_SONNET_MODEL")
-        haiku_model = os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
-
-        if opus_model and _is_alias(config.models.planner, "opus"):
-            config.models.planner = opus_model
-        if sonnet_model and _is_alias(config.models.executor, "sonnet"):
-            config.models.executor = sonnet_model
-        if sonnet_model and _is_alias(config.models.reviewer, "sonnet"):
-            config.models.reviewer = sonnet_model
-        if haiku_model and _is_alias(config.models.quick, "haiku"):
-            config.models.quick = haiku_model
-
         # A2A env var overrides
         a2a_port = os.environ.get("JARVIS_A2A_PORT")
         if a2a_port:
@@ -227,6 +192,16 @@ class JarvisConfig:
         a2a_timeout = os.environ.get("JARVIS_A2A_TASK_TIMEOUT_SECONDS")
         if a2a_timeout:
             config.a2a.task_timeout_seconds = int(a2a_timeout)
+
+        # Enforce OpenCode-only model policy for cost-safe runtime.
+        default_opencode_model = os.environ.get("JARVIS_A2A_OPENCODE_MODEL", "opencode/glm-5-free").strip()
+        if not default_opencode_model:
+            default_opencode_model = "opencode/glm-5-free"
+        config.models.provider_type = "opencode"
+        for key in ("planner", "executor", "reviewer", "quick"):
+            current = str(getattr(config.models, key, "") or "").strip()
+            if not current.startswith("opencode/"):
+                setattr(config.models, key, default_opencode_model)
 
         return config
 
@@ -253,7 +228,7 @@ class JarvisConfig:
                 "executor": self.models.executor,
                 "reviewer": self.models.reviewer,
                 "quick": self.models.quick,
-                "provider_type": getattr(self.models, "provider_type", "anthropic"),
+                "provider_type": getattr(self.models, "provider_type", "opencode"),
             },
             "voice": {
                 "api_key": self.voice.api_key,

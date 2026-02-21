@@ -7,7 +7,7 @@ Use this checklist before implementing any new harness optimization.
 | Field | Value |
 |------|-------|
 | Proposal name | |
-| Target layer | `Codex` / `Claude Code` / `Claude Agent SDK` / `Jarvis app` |
+| Target layer | `Codex` / `Claude Code` / `Jarvis app` |
 | Problem statement | |
 | Expected outcome metric | |
 

@@ -2,10 +2,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from jarvis.orchestrator.core import (
-    CODER_EXPERT_AGENT,
-    JarvisOrchestrator,
-)
+from jarvis.orchestrator.core import CODER_EXPERT_AGENT, JarvisOrchestrator
 
 
 class _DigestEvents:
@@ -34,7 +31,7 @@ class _DigestMemory:
         self.threads.append(kwargs)
 
 
-def _make_digest_orch(provider_type: str, model_id: str) -> JarvisOrchestrator:
+def _make_digest_orch() -> JarvisOrchestrator:
     orch = object.__new__(JarvisOrchestrator)
     orch.project_path = "/tmp/project"
     orch.events = _DigestEvents()
@@ -52,8 +49,8 @@ def _make_digest_orch(provider_type: str, model_id: str) -> JarvisOrchestrator:
             include_weekends=True,
         ),
         models=SimpleNamespace(
-            executor=model_id,
-            provider_type=provider_type,
+            executor="opencode/glm-5-free",
+            provider_type="opencode",
         ),
     )
     return orch
@@ -113,32 +110,16 @@ def test_coder_gate_requires_verification_commands():
     assert "Quality gate failed" in result["output"]
 
 
-def test_mail_digest_mode_prefers_local_for_foundation(monkeypatch):
+def test_mail_digest_mode_is_local():
     orch = object.__new__(JarvisOrchestrator)
-    orch._effective_provider_type = lambda: "foundation"
-    monkeypatch.delenv("JARVIS_MAIL_DIGEST_MODE", raising=False)
     assert orch._mail_digest_mode() == "local"
 
 
-def test_mail_digest_mode_prefers_local_for_opencode(monkeypatch):
-    orch = object.__new__(JarvisOrchestrator)
-    orch._effective_provider_type = lambda: "opencode"
-    monkeypatch.delenv("JARVIS_MAIL_DIGEST_MODE", raising=False)
-    assert orch._mail_digest_mode() == "local"
-
-
-def test_mail_digest_mode_prefers_sdk_for_non_foundation(monkeypatch):
-    orch = object.__new__(JarvisOrchestrator)
-    orch._effective_provider_type = lambda: "anthropic"
-    monkeypatch.delenv("JARVIS_MAIL_DIGEST_MODE", raising=False)
-    assert orch._mail_digest_mode() == "sdk"
-
-
-def test_run_mail_digest_executes_local_pipeline_for_foundation(monkeypatch):
-    orch = _make_digest_orch("foundation", "foundation-models")
+def test_run_mail_digest_executes_local_pipeline(monkeypatch):
+    orch = _make_digest_orch()
 
     payload = {
-        "summary": "Foundation digest",
+        "summary": "Inbox digest",
         "urgent": [{"thread_id": "t-1", "subject": "Security alert", "next_action": "Respond"}],
         "reply_today": [],
         "waiting_on_them": [],
@@ -151,18 +132,11 @@ def test_run_mail_digest_executes_local_pipeline_for_foundation(monkeypatch):
         assert local_model_id is None
         return payload, "local digest"
 
-    monkeypatch.delenv("JARVIS_MAIL_DIGEST_MODE", raising=False)
-    with patch(
-        "jarvis.orchestrator.core.ZapierMailClient.from_env",
-        return_value=object(),
-    ):
-        with patch(
-            "jarvis.orchestrator.core.LocalMailDigestService.build_digest",
-            _fake_build_digest,
-        ):
+    with patch("jarvis.orchestrator.core.ZapierMailClient.from_env", return_value=object()):
+        with patch("jarvis.orchestrator.core.LocalMailDigestService.build_digest", _fake_build_digest):
             result = asyncio.run(orch.run_mail_digest(force=True))
 
     assert result["status"] == "completed"
     assert result["mode"] == "local"
-    assert result["digest"]["raw_summary"] == "Foundation digest"
+    assert result["digest"]["raw_summary"] == "Inbox digest"
     assert len(orch.memory.saved) == 1

@@ -9,14 +9,10 @@ private struct ChatModelOption: Identifiable, Hashable {
 }
 
 private enum ChatProviderKey: String, CaseIterable {
-    case anthropic
-    case foundation
     case opencode
 
     var label: String {
         switch self {
-        case .anthropic: return "Anthropic"
-        case .foundation: return "Foundation"
         case .opencode: return "OpenCode"
         }
     }
@@ -48,8 +44,8 @@ struct ChatWorkspaceView: View {
     @State private var messages: [ChatWorkspaceMessage] = []
     @State private var isSending = false
     @State private var activeSendToken: UUID?
-    @State private var selectedModelId = "claude-sonnet-4-5-20250929"
-    @State private var selectedProvider: ChatProviderKey = .anthropic
+    @State private var selectedModelId = "opencode/glm-5-free"
+    @State private var selectedProvider: ChatProviderKey = .opencode
     @State private var inputFocused = false
     @State private var seenEventIds: Set<String> = []
 
@@ -184,30 +180,17 @@ struct ChatWorkspaceView: View {
     }
 
     private var providerOptions: [ChatProviderKey] {
-        var options: [ChatProviderKey] = [.anthropic, .opencode]
-        if webSocket.modelStatus?.foundationAvailable ?? true {
-            options.append(.foundation)
-        }
-        return options
+        [.opencode]
     }
 
     private var allModelOptions: [ChatModelOption] {
-        var options: [ChatModelOption] = [
-            .init(id: "claude-sonnet-4-5-20250929", name: "Claude Sonnet 4.5", provider: "Anthropic", icon: "brain"),
-            .init(id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "Anthropic", icon: "brain"),
-            .init(id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "Anthropic", icon: "brain"),
-        ]
-
-        if webSocket.modelStatus?.foundationAvailable ?? true {
-            options.append(.init(id: "foundation-models", name: "Foundation Models", provider: "Apple", icon: "apple.logo"))
-        }
+        var options: [ChatModelOption] = []
 
         let fallbackOpenCodeModels = [
             "minimax-m2.5-free",
             "glm-5-free",
             "kimi-k2.5-free",
             "big-pickle",
-            "openai/gpt-5-nano",
         ]
         let rawOpenCodeModels = webSocket.modelStatus?.opencodeAvailableModels ?? fallbackOpenCodeModels
         for rawModel in rawOpenCodeModels {
@@ -233,14 +216,7 @@ struct ChatWorkspaceView: View {
     }
 
     private var modelOptionsForSelectedProvider: [ChatModelOption] {
-        switch selectedProvider {
-        case .anthropic:
-            return allModelOptions.filter { $0.provider == "Anthropic" }
-        case .foundation:
-            return allModelOptions.filter { $0.id == "foundation-models" }
-        case .opencode:
-            return allModelOptions.filter { $0.provider == "OpenCode" }
-        }
+        allModelOptions.filter { $0.provider == "OpenCode" }
     }
 
     private func syncFromModelStatus(_ status: ModelStatusInfo?) {
@@ -251,20 +227,8 @@ struct ChatWorkspaceView: View {
     }
 
     private func providerForModel(_ modelId: String, providerHint: String?) -> ChatProviderKey {
-        let hint = (providerHint ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if hint == "opencode" {
-            return .opencode
-        }
-        if hint == "foundation" {
-            return .foundation
-        }
-        if modelId == "foundation-models" {
-            return .foundation
-        }
-        if modelId.hasPrefix("opencode/") || modelId.hasPrefix("opencode:") || modelId == "opencode" {
-            return .opencode
-        }
-        return .anthropic
+        _ = (modelId, providerHint)
+        return .opencode
     }
 
     private func selectDefaultModelForProvider(_ provider: ChatProviderKey) {

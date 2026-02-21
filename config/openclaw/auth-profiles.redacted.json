@@ -1,12 +1,10 @@
 {
   "version": 1,
   "profiles": {
-    "qwen-portal:qwen-cli": {
-      "type": "oauth",
-      "provider": "qwen-portal",
-      "access": "***REDACTED***",
-      "refresh": "***REDACTED***",
-      "expires": 1754831396991
+    "openrouter:default": {
+      "type": "api_key",
+      "provider": "openrouter",
+      "key": "***REDACTED***"
     }
   }
 }

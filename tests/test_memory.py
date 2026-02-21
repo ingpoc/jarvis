@@ -234,15 +234,15 @@ class TestTokenUsage:
 
     def test_record_token_usage(self, memory):
         uid = memory.record_token_usage(
-            session_id="s-1", task_id="t-1", model="claude-sonnet-4.5",
+            session_id="s-1", task_id="t-1", model="opencode/glm-5-free",
             prompt_tokens=1000, completion_tokens=500,
             cost_usd=0.015, project_path="/proj",
         )
         assert uid > 0
 
     def test_get_token_usage(self, memory):
-        memory.record_token_usage("s-1", "t-1", "claude", 100, 50, 0.01, "/proj")
-        memory.record_token_usage("s-1", "t-2", "claude", 200, 100, 0.02, "/proj")
+        memory.record_token_usage("s-1", "t-1", "opencode/glm-5-free", 100, 50, 0.01, "/proj")
+        memory.record_token_usage("s-1", "t-2", "opencode/glm-5-free", 200, 100, 0.02, "/proj")
         usage = memory.get_token_usage(session_id="s-1")
         assert len(usage) == 2
         assert usage[0]["total_tokens"] == 300  # DESC order, most recent first

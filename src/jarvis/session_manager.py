@@ -1,13 +1,11 @@
-"""Session manager for per-channel ClaudeSDKClient isolation.
+"""Session manager placeholder for OpenCode-only runtime.
 
-Prevents context bleeding between different channels (A2A, CLI, WS).
+Legacy Claude SDK session pooling has been removed.
 """
 
 import asyncio
 import logging
 from typing import Any
-
-from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
 from jarvis.config import JarvisConfig
 
@@ -15,10 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 class SessionManager:
-    """Manages per-channel ClaudeSDKClient instances."""
+    """Manages per-channel client objects.
+
+    In OpenCode-only mode we do not provision Claude SDK clients. This
+    class remains as a compatibility surface for callers that still import it.
+    """
 
     _instance: "SessionManager | None" = None
-    _clients: dict[str, ClaudeSDKClient]
+    _clients: dict[str, Any]
     _config: JarvisConfig
     _lock: asyncio.Lock
 
@@ -36,46 +38,38 @@ class SessionManager:
     async def get_client(
         self,
         channel_id: str,
-        options: ClaudeAgentOptions | None = None,
-    ) -> ClaudeSDKClient:
-        """Get or create a ClaudeSDKClient for the given channel.
-
-        Creates the client and calls connect() exactly once per channel.
-        """
-        async with self._lock:
-            if channel_id not in self._clients:
-                client = ClaudeSDKClient(options=options)
-                await client.connect()
-                self._clients[channel_id] = client
-                logger.debug(f"Created and connected client for channel {channel_id}")
-            return self._clients[channel_id]
+        options: Any | None = None,
+    ) -> Any:
+        """OpenCode-only mode does not create SDK clients."""
+        _ = (channel_id, options)
+        raise RuntimeError(
+            "SessionManager.get_client is unavailable: Claude Agent SDK runtime was removed."
+        )
 
     async def close_client(self, channel_id: str) -> None:
-        """Close and remove a specific client.
-
-        Calls disconnect() to properly shut down the SDK client.
-        """
+        """Close and remove a specific client if present."""
         async with self._lock:
             if channel_id in self._clients:
                 client = self._clients.pop(channel_id)
                 try:
-                    await client.disconnect()
-                    logger.debug(f"Disconnected client for channel {channel_id}")
+                    disconnect = getattr(client, "disconnect", None)
+                    if callable(disconnect):
+                        await disconnect()
+                    logger.debug("Disconnected client for channel %s", channel_id)
                 except Exception as e:
-                    logger.warning(f"Error disconnecting client for {channel_id}: {e}")
+                    logger.warning("Error disconnecting client for %s: %s", channel_id, e)
 
     async def close_all(self) -> None:
-        """Close all clients on shutdown.
-
-        Calls disconnect() on each client for proper SDK lifecycle.
-        """
+        """Close all tracked clients on shutdown."""
         async with self._lock:
             for channel_id, client in self._clients.items():
                 try:
-                    await client.disconnect()
-                    logger.debug(f"Disconnected client for channel {channel_id}")
+                    disconnect = getattr(client, "disconnect", None)
+                    if callable(disconnect):
+                        await disconnect()
+                    logger.debug("Disconnected client for channel %s", channel_id)
                 except Exception as e:
-                    logger.warning(f"Error disconnecting client for {channel_id}: {e}")
+                    logger.warning("Error disconnecting client for %s: %s", channel_id, e)
             self._clients.clear()
 
     def get_active_channel_ids(self) -> list[str]:

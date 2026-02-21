@@ -10,7 +10,7 @@ import os
 import shutil
 import uuid
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
+from jarvis.sdk_compat import create_sdk_mcp_server, tool
 
 from jarvis.config import JarvisConfig
 from jarvis.container_templates import detect_template, get_template, build_setup_script

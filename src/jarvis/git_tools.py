@@ -14,7 +14,7 @@ import json
 import os
 from pathlib import Path
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
+from jarvis.sdk_compat import create_sdk_mcp_server, tool
 from jarvis.context_files import ensure_project_context_file, ensure_project_jarvis_file
 
 

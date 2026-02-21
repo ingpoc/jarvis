@@ -58,19 +58,15 @@ src/jarvis/
 ├── ws_server.py               # WebSocket API surface
 ├── orchestrator/              # Message handling pipeline
 │   └── core.py                # Main orchestrator
-├── local_model_manager.py     # AFM local runtime switching
-├── afm_integration.py         # Apple Foundation Models integration
+├── opencode_client.py         # OpenCode task/chat runtime client
 ├── config.py                  # Configuration
 └── self_learning.py           # Learning loops
 
 scripts/
 ├── validate_jarvis.py         # Full project validation
-├── validate_local_models.py   # Local models validation
-├── test_local_models.py       # Local model integration smoke tests
 └── jarvis_api_lint.py         # WebSocket format linter
 
 tests/
-├── test_model_router.py
 ├── test_orchestrator_handle_message.py
 └── test_skill_generator.py
 ```

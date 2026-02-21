@@ -30,7 +30,7 @@ Standalone OpenClaw runtime operations (gateway/channels/model auth/sandbox/pair
 | `registerGatewayMethod` handler args come from `params` | Yes | DeepWiki + live behavior | Using `payload` caused empty inputs; switching to `params` fixed call path |
 | `openclaw gateway call --params` maps to plugin handler params | Yes | DeepWiki + successful `jarvis.codeTask` calls | Confirmed end-to-end with structured JSON params |
 | OpenClaw can route coding tasks to external executor over gateway/plugin | Yes | Live plugin run | Verified with `OPENCLAW_JARVIS_OK` and code-generation task |
-| Non-Anthropic fallback is needed when Anthropic subscription is exhausted | Yes | Runtime test evidence | Use `opencode` provider (or `foundation` for lightweight local turns) to keep delegation operational |
+| OpenCode-only delegation keeps spend predictable | Yes | Runtime test evidence | Force `provider_type=opencode` and free OpenCode model IDs for all delegated tasks |
 
 ## Goal
 
@@ -44,7 +44,7 @@ Standalone OpenClaw runtime operations (gateway/channels/model auth/sandbox/pair
 | Work type | Primary runtime | Why |
 |-----------|------------------|-----|
 | Discovery research (agent harness trends, market scan, doc lookup) | OpenClaw (Perplexity/Browser/Context7) | Faster source collection, native MCP access |
-| Execution-heavy tasks (coding/refactor/repo implementation, long procedural tasks) | Jarvis via A2A | Better implementation loop and local model routing controls |
+| Execution-heavy tasks (coding/refactor/repo implementation, long procedural tasks) | Jarvis via A2A | Better implementation loop with OpenCode-only routing controls |
 | Session continuity and dedupe | OpenClaw MEMORY + daily logs + research ledger | Avoid re-researching the same topic and preserve next-step queue |
 
 ## What was implemented in this repo
@@ -75,7 +75,7 @@ OpenClaw was upgraded from passive heartbeat-only behavior to scheduled research
 Created via `openclaw cron add`:
 
 1. `research-harness-scan` every 6h
-2. `research-openai-anthropic-updates` every 6h
+2. `research-model-updates` every 6h
 3. `research-indian-stocks-scan` every 12h
 
 All jobs target `session=main` with `wake=next-heartbeat` and system-event payloads that enforce:
@@ -270,18 +270,16 @@ AGENTS/TOOLS/BOOT implications:
 - `TOOLS.md`: must include context-graph tools in preferred evidence/memory path.
 - `BOOT.md`: should include a quick context-graph readiness check in startup routine.
 
-## Coding Model Selection (Anthropic Exhausted)
+## Coding Model Selection (OpenCode-Only)
 
-For coding tasks delegated from OpenClaw, run Jarvis on OpenCode:
+For coding tasks delegated from OpenClaw, keep Jarvis pinned to OpenCode free models:
 
 ```bash
-.venv/bin/python -m jarvis.cli config models.executor=opencode/default
+.venv/bin/python -m jarvis.cli config models.executor=opencode/glm-5-free
 .venv/bin/python -m jarvis.cli config models.provider_type=opencode
 bash ./stop-jarvis.sh
 bash ./start-jarvis.sh
 ```
-
-Why: if `provider_type=anthropic` while subscription is exhausted, delegated tasks can fail upstream before execution.
 
 ### Register Zapier MCP in OpenCode
 

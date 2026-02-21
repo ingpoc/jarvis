@@ -15,7 +15,7 @@ Agent-first development. Humans steer, agents execute.
 |tests failing → principles/determinism.md
 |large data → principles/token-efficiency.md
 |need a diagram / architecture diagram → workflow/draw-io-diagram-generation.md
-|local models / OpenCode / Foundation Models → workflow/local-models-integration.md
+|OpenCode runtime / model routing → workflow/local-models-integration.md
 |openclaw gateway / slack / model auth / sandbox / pairing issues → workflow/openclaw-integration.md
 |openclaw delegation / openclaw workspace docs / openclaw rule sync → workflow/openclaw-jarvis-integration.md
 |parallel subagents / git worktrees / containerized execution → workflow/opencode-parallel-worktrees.md
@@ -28,12 +28,12 @@ Agent-first development. Humans steer, agents execute.
 |github accounts / gh auth / ingpoc / openclaw-gurusharan / GH_TOKEN / direnv → workflow/github-account-isolation.md
 |tool failure / tool discovery / rule placement → workflow/harness-governance.md
 |harness complexity / overengineering concerns → workflow/harness-purpose-map.md
-|optimizing codex / claude code / claude agent sdk capabilities → capabilities/README.md
+|optimizing codex / claude code capabilities → capabilities/README.md
 |new optimization proposal / should we add this capability → capabilities/checklist.md
 |principles:{agent-first.md,progressive-disclosure.md,determinism.md,token-efficiency.md}
 |updating docs / storing bugs / context graph → workflow/context-learning-loop.md
 |workflow:{openai-harness.md,openai-unrolling-codex-agent-loop.md,openai-unlocking-codex-harness.md,langchain-improving-deep-agents-harness-engineering.md,vercel-agents-md.md,local-models-integration.md,openclaw-integration.md,openclaw-jarvis-integration.md,opencode-parallel-worktrees.md,jarvis-autonomous-evolution.md,context-learning-loop.md,harness-governance.md,harness-purpose-map.md,social-post-intake.md}
-|capabilities:{README.md,checklist.md,codex.md,claude-code.md,claude-agent-sdk-python.md}
+|capabilities:{README.md,checklist.md,codex.md,claude-code.md}
 |architecture:{layers.md,taste-invariants.md}
 |jarvis:{debugging.md,api-reference.md,conventions.md,scripts.md}
 ```
@@ -46,7 +46,7 @@ Agent-first development. Humans steer, agents execute.
 |------|---------|
 | Start | `./start-jarvis.sh` |
 | Stop | `./stop-jarvis.sh` |
-| Test WS | `python3 scripts/validate_local_models.py` |
+| Test WS | `python3 scripts/validate_jarvis.py --full` |
 | Lint | `python3 scripts/jarvis_api_lint.py` |
 
 ---

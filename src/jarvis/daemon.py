@@ -255,18 +255,6 @@ class JarvisDaemon:
         except Exception as e:
             logger.warning(f"Bootstrap skills install failed: {e}")
 
-        # Initialize model router for foundation/cloud routing metadata.
-        try:
-            from jarvis.model_router import get_model_router
-            router = get_model_router()
-            init_result = await router.initialize()
-            logger.info(
-                "Model router initialized: Foundation=%s",
-                init_result.get("foundation"),
-            )
-        except Exception as e:
-            logger.warning(f"Model router initialization failed: {e}")
-
         # Seed universal heuristics once at startup (idempotent)
         try:
             from jarvis.universal_heuristics import auto_seed_project
@@ -316,12 +304,6 @@ class JarvisDaemon:
                     )
                     logger.info("IOKit HID idle detection active")
 
-                # Load credentials from Keychain
-                from jarvis.macos_native import keychain_retrieve
-                kc_api_key = keychain_retrieve("com.jarvis.anthropic", "api_key")
-                if kc_api_key:
-                    os.environ.setdefault("ANTHROPIC_API_KEY", kc_api_key)
-                    logger.info("Loaded API key from Keychain")
         except ImportError:
             pass
         except Exception as e:
@@ -363,16 +345,9 @@ class JarvisDaemon:
                 if pressure and pressure.get("should_hibernate"):
                     if self._idle_processor:
                         self._idle_processor.trigger_hibernate()
-                    # Also unload local model resources to free memory.
-                    try:
-                        from jarvis.model_router import get_model_router
-                        router = get_model_router()
-                        await router.shutdown()
-                    except Exception:
-                        pass
                     logger.warning(
                         f"Memory pressure CRITICAL ({pressure.get('free_mb', '?')}MB free) "
-                        "— hibernated + unloaded local models"
+                        "— hibernated"
                     )
 
             except asyncio.CancelledError:
@@ -442,14 +417,6 @@ class JarvisDaemon:
     async def stop(self) -> None:
         """Gracefully stop all services."""
         logger.info("Jarvis daemon stopping")
-
-        # Shutdown model router (unload local resources) if initialized.
-        try:
-            from jarvis.model_router import get_model_router
-            router = get_model_router()
-            await router.shutdown()
-        except Exception as e:
-            logger.debug(f"Model router shutdown error: {e}")
 
         # Cancel IOKit idle loop
         if hasattr(self, "_iokit_idle_task") and self._iokit_idle_task:

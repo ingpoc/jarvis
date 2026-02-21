@@ -163,9 +163,9 @@ Add config group (example):
    - idle processing
    This supports prioritizing structured learning/reflection instead of inventing a new memory base layer first.
 
-2. `anthropics/claude-agent-sdk-python` DeepWiki confirms:
-   - hooks, subagents, MCP integration, session resume/fork, interrupt support
-   This supports SDK-first architecture and specifically prioritizing interrupt cancellation.
+2. `sst/opencode` DeepWiki confirms:
+   - subagents, MCP integration, session continuity, and runtime controls
+   This supports OpenCode-first architecture and prioritizing robust cancellation/timeout handling.
 
 3. `ingpoc/jarvis` DeepWiki highlights container tooling limitations as a reliability bottleneck.
    This supports prioritizing runtime/cancellation/state correctness before advanced autonomous research workers.

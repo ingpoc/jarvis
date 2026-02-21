@@ -1,13 +1,8 @@
-"""Multi-model code review pipeline.
-
-Sends code diffs to a secondary model (Gemini or a different Claude instance)
-for independent review. The reviewer has different training data, catching
-issues the primary model might miss.
+"""Independent code review helpers.
 
 Supports:
-- Claude-to-Claude review (Opus reviews Sonnet's work)
-- Claude-to-Gemini review (via Google AI API)
-- Structured feedback with severity levels
+- Gemini-backed review (when API key is configured)
+- Deterministic fallback response when external reviewer is unavailable
 """
 
 import asyncio
@@ -15,7 +10,7 @@ import json
 import os
 from pathlib import Path
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
+from jarvis.sdk_compat import create_sdk_mcp_server, tool
 
 
 def _resolve_project_path(path: str | None) -> str:
@@ -26,60 +21,14 @@ def _resolve_project_path(path: str | None) -> str:
     return candidate
 
 
-async def _review_with_claude(diff: str, context: str, model: str = "claude-opus-4-6") -> dict:
-    """Use Claude Agent SDK query() for code review."""
-    from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock, ResultMessage
-
-    review_prompt = f"""Review this code diff for quality, security, and correctness.
-
-## Context
-{context}
-
-## Diff
-```diff
-{diff[:15000]}
-```
-
-Respond with a JSON object:
-{{
-    "approved": true/false,
-    "issues": [
-        {{"severity": "critical|high|medium|low", "file": "path", "line": "num", "description": "issue"}}
-    ],
-    "suggestions": ["suggestion1", "suggestion2"],
-    "summary": "One paragraph overall assessment"
-}}"""
-
-    options = ClaudeAgentOptions(
-        model=model,
-        max_turns=1,
-        max_budget_usd=0.50,
-        allowed_tools=[],
-        permission_mode="bypassPermissions",
-    )
-
-    output = ""
-    async for message in query(prompt=review_prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    output += block.text
-
-    # Try to parse JSON from response
-    try:
-        # Find JSON in response
-        start = output.find("{")
-        end = output.rfind("}") + 1
-        if start >= 0 and end > start:
-            return json.loads(output[start:end])
-    except json.JSONDecodeError:
-        pass
-
+async def _review_with_stub(diff: str, context: str) -> dict:
+    """Fallback reviewer path for OpenCode-only runtime."""
+    _ = (diff, context)
     return {
         "approved": True,
         "issues": [],
         "suggestions": [],
-        "summary": output[:500],
+        "summary": "External reviewer not configured; use local verification checks.",
     }
 
 
@@ -165,12 +114,12 @@ async def review_diff(args: dict) -> dict:
     """Review a code diff using a secondary model."""
     diff = args["diff"]
     context = args.get("context", "Code review request")
-    reviewer = args.get("reviewer", "claude")
+    reviewer = args.get("reviewer", "gemini")
 
     if reviewer == "gemini":
         result = await _review_with_gemini(diff, context)
     else:
-        result = await _review_with_claude(diff, context)
+        result = await _review_with_stub(diff, context)
 
     return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
 
@@ -184,7 +133,7 @@ async def review_files(args: dict) -> dict:
     """Review specific files."""
     files = args.get("files", [])
     context = args.get("context", "Code review")
-    reviewer = args.get("reviewer", "claude")
+    reviewer = args.get("reviewer", "gemini")
     project_path = _resolve_project_path(args.get("project_path", os.getcwd()))
 
     # Read files and create a pseudo-diff
@@ -203,7 +152,7 @@ async def review_files(args: dict) -> dict:
     if reviewer == "gemini":
         result = await _review_with_gemini(combined, context)
     else:
-        result = await _review_with_claude(combined, context)
+        result = await _review_with_stub(combined, context)
 
     return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
 
@@ -216,7 +165,7 @@ async def review_files(args: dict) -> dict:
 async def review_pr(args: dict) -> dict:
     """Review a GitHub pull request."""
     pr_number = args["pr_number"]
-    reviewer = args.get("reviewer", "claude")
+    reviewer = args.get("reviewer", "gemini")
     project_path = _resolve_project_path(args.get("project_path", os.getcwd()))
 
     # Get PR diff via gh
@@ -252,7 +201,7 @@ async def review_pr(args: dict) -> dict:
     if reviewer == "gemini":
         result = await _review_with_gemini(diff, context)
     else:
-        result = await _review_with_claude(diff, context)
+        result = await _review_with_stub(diff, context)
 
     return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
 

@@ -11,7 +11,7 @@ Distilled research articles and patterns.
 | [vercel-agents-md.md](vercel-agents-md.md) | Vercel | Passive context beats skills, 100% vs 79% |
 | [context-learning-loop.md](context-learning-loop.md) | Internal proposal | Traces → hooks → rules; verdict: Adapt (use existing skills, add hook enforcement) |
 | [draw-io-diagram-generation.md](draw-io-diagram-generation.md) | Process guide | Diagram generation workflow with draw.io (Mermaid/XML/CSV) |
-| [local-models-integration.md](local-models-integration.md) | Internal — updated 2026-02-20 | Foundation Models remain the only in-process local runtime; OpenCode is external provider path; menu bar startup auto-reloads stale launchctl targets |
+| [local-models-integration.md](local-models-integration.md) | Internal — updated 2026-02-21 | OpenCode-only runtime policy, free-model pinning, and WS/A2A routing rules |
 | [openclaw-integration.md](openclaw-integration.md) | OpenClaw docs + DeepWiki + live validation (2026-02-20) | Standalone OpenClaw operations: sandbox/pairing/auth/slack/gateway reliability |
 | [openclaw-jarvis-integration.md](openclaw-jarvis-integration.md) | OpenClaw docs + DeepWiki + live validation (2026-02-20) | Jarvis delegation contract: bridge ownership map, non-blocking task flow, and workspace rule sync |
 | [opencode-parallel-worktrees.md](opencode-parallel-worktrees.md) | Claude Code docs + OpenCode docs + DeepWiki (2026-02-20) | Manager + parallel OpenCode subagents with per-role containerized git worktrees, deterministic gates, and PR/issue handoff |

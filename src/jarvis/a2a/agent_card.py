@@ -20,7 +20,7 @@ class AgentEndpoint:
 
 def build_agent_card(
     name: str = "Jarvis",
-    description: str = "Autonomous Mac-native development partner powered by Claude Agent SDK",
+    description: str = "Autonomous Mac-native development partner powered by OpenCode runtime",
     version: str = "0.1.0",
     capabilities: list[str] | None = None,
     base_url: str = "",

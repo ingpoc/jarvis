@@ -8,7 +8,6 @@ __version__ = "0.5.0"
 
 __all__ = [
     "JarvisOrchestrator",
-    "MultiAgentPipeline",
     "ContainerTemplate",
     "DockerFallback",
     "get_docker_fallback",
@@ -29,9 +28,6 @@ __all__ = [
     "build_incremental_context",
     "seed_universal_heuristics",
     "auto_seed_project",
-    "ModelRouter",
-    "get_model_router",
-    "ModelTier",
     "generate_skills_from_patterns",
     "select_session_skills",
     "MAX_SKILLS_PER_SESSION",
@@ -41,7 +37,6 @@ __all__ = [
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "JarvisOrchestrator": ("jarvis.orchestrator", "JarvisOrchestrator"),
-    "MultiAgentPipeline": ("jarvis.agents", "MultiAgentPipeline"),
     "ContainerTemplate": ("jarvis.container_templates", "ContainerTemplate"),
     "DockerFallback": ("jarvis.container_templates", "DockerFallback"),
     "get_docker_fallback": ("jarvis.container_templates", "get_docker_fallback"),
@@ -62,9 +57,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "build_incremental_context": ("jarvis.context_layers", "build_incremental_context"),
     "seed_universal_heuristics": ("jarvis.universal_heuristics", "seed_universal_heuristics"),
     "auto_seed_project": ("jarvis.universal_heuristics", "auto_seed_project"),
-    "ModelRouter": ("jarvis.model_router", "ModelRouter"),
-    "get_model_router": ("jarvis.model_router", "get_model_router"),
-    "ModelTier": ("jarvis.model_router", "ModelTier"),
     "generate_skills_from_patterns": ("jarvis.skill_generator", "generate_skills_from_patterns"),
     "select_session_skills": ("jarvis.skill_generator", "select_session_skills"),
     "MAX_SKILLS_PER_SESSION": ("jarvis.skill_generator", "MAX_SKILLS_PER_SESSION"),

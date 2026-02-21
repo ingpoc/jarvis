@@ -1,19 +1,7 @@
 {
   "meta": {
-    "lastTouchedVersion": "2026.2.19-2",
-    "lastTouchedAt": "2026-02-21T14:51:58.044Z"
-  },
-  "wizard": {
-    "lastRunAt": "2026-01-27T08:38:50.426Z",
-    "lastRunVersion": "2026.1.24-3",
-    "lastRunCommand": "onboard",
-    "lastRunMode": "local"
-  },
-  "browser": {
-    "enabled": false,
-    "headless": true,
-    "noSandbox": true,
-    "attachOnly": false
+    "lastTouchedVersion": "2026.2.21-1",
+    "lastTouchedAt": "2026-02-21T21:00:00.000Z"
   },
   "auth": {
     "profiles": {}
@@ -33,34 +21,10 @@
         "openrouter/arcee-ai/trinity-mini:free": {}
       },
       "workspace": "/Users/gurusharan/Documents/remote-claude/Research/clawdbot/workspace",
-      "compaction": {
-        "mode": "safeguard",
-        "memoryFlush": {
-          "enabled": true,
-          "softThresholdTokens": "***REDACTED***",
-          "prompt": "Write durable notes to memory/YYYY-MM-DD.md and update references/research-ledger.md if relevant. Reply NO_REPLY if nothing to store.",
-          "systemPrompt": "Session nearing compaction. Store durable memory now."
-        }
-      },
-      "heartbeat": {
-        "every": "15m"
-      },
       "maxConcurrent": 4,
-      "subagents": {
-        "maxConcurrent": 8
-      },
       "sandbox": {
         "mode": "off",
-        "workspaceAccess": "***REDACTED***",
-        "scope": "agent",
-        "docker": {
-          "readOnlyRoot": true,
-          "network": "none",
-          "user": "1000:1000",
-          "capDrop": [
-            "ALL"
-          ]
-        }
+        "scope": "agent"
       }
     }
   },
@@ -70,73 +34,29 @@
       "group:sessions",
       "group:messaging",
       "group:automation",
-      "lobster",
-      "llm-task",
-      "cron"
+      "llm-task"
     ],
     "deny": [
       "browser",
       "canvas",
-      "gateway",
       "group:fs",
       "group:runtime",
       "group:ui",
-      "group:web",
-      "nodes"
+      "group:web"
     ],
     "elevated": {
-      "enabled": false,
-      "allowFrom": {
-        "slack": [
-          "#all-clawdbot",
-          "#aadharchain"
-        ],
-        "webchat": [
-          "session:*"
-        ]
-      }
-    },
-    "exec": {
-      "host": "gateway",
-      "security": "full",
-      "backgroundMs": 10000,
-      "timeoutSec": 1800,
-      "cleanupMs": 1800000
+      "enabled": false
     }
-  },
-  "messages": {
-    "ackReaction": "eyes",
-    "ackReactionScope": "group-mentions"
   },
   "commands": {
-    "native": "auto",
-    "nativeSkills": "auto",
     "restart": true
-  },
-  "hooks": {
-    "internal": {
-      "enabled": true,
-      "entries": {
-        "boot-md": {
-          "enabled": true
-        },
-        "command-logger": {
-          "enabled": true
-        },
-        "session-memory": {
-          "enabled": true
-        }
-      }
-    }
   },
   "channels": {
     "slack": {
       "mode": "socket",
-      "webhookPath": "***REDACTED***",
       "enabled": true,
       "botToken": "***REDACTED***",
       "appToken": "***REDACTED***",
-      "userTokenReadOnly": "***REDACTED***",
       "groupPolicy": "allowlist",
       "channels": {
         "#all-clawdbot": {
@@ -152,54 +72,19 @@
     "port": 18789,
     "mode": "local",
     "bind": "loopback",
-    "controlUi": {
-      "enabled": false
-    },
     "auth": {
       "mode": "token",
       "token": "***REDACTED***"
-    },
-    "tailscale": {
-      "mode": "off",
-      "resetOnExit": false
-    },
-    "http": {
-      "endpoints": {
-        "chatCompletions": {
-          "enabled": true
-        }
-      }
-    }
-  },
-  "skills": {
-    "load": {
-      "extraDirs": [
-        "~/.openclaw/skills"
-      ],
-      "watch": true,
-      "watchDebounceMs": 250
-    },
-    "install": {
-      "preferBrew": true,
-      "nodeManager": "npm"
     }
   },
   "plugins": {
     "allow": [
-      "mcp-bridge",
       "slack",
-      "lobster",
       "llm-task",
       "jarvis-bridge"
     ],
     "entries": {
       "slack": {
-        "enabled": true
-      },
-      "mcp-bridge": {
-        "enabled": true
-      },
-      "lobster": {
         "enabled": true
       },
       "llm-task": {

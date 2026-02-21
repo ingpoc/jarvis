@@ -5,12 +5,9 @@ import logging
 import os
 from typing import Any
 
-from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
-
 from jarvis.a2a.models import A2ATask, A2ATaskState, A2AArtifact
 from jarvis.a2a.task_store import A2ATaskStore
 from jarvis.a2a.streaming import get_emitter
-from jarvis.session_manager import SessionManager
 from jarvis.config import JarvisConfig
 from jarvis.openclaw_notifier import OpenClawNotifier
 
@@ -26,7 +23,7 @@ class JarvisAgentExecutor:
         self,
         config: JarvisConfig,
         task_store: A2ATaskStore | None = None,
-        session_manager: SessionManager | None = None,
+        session_manager: Any | None = None,
         orchestrator: Any = None,
         project_path: str | None = None,
     ):
@@ -40,14 +37,14 @@ class JarvisAgentExecutor:
         self.task_store = task_store or A2ATaskStore()
         logger.info("JarvisAgentExecutor.__init__: task_store created")
 
-        self.session_manager = session_manager or SessionManager.get_instance()
-        logger.info("JarvisAgentExecutor.__init__: session_manager initialized")
+        self.session_manager = session_manager
+        logger.info("JarvisAgentExecutor.__init__: session_manager disabled in OpenCode-only mode")
 
         self._orchestrator = orchestrator
         self._project_path = project_path
         self._active_tasks: dict[str, asyncio.Task] = {}
         self._timeout_watchdogs: dict[str, asyncio.Task] = {}
-        self._task_clients: dict[str, ClaudeSDKClient] = {}
+        self._task_clients: dict[str, Any] = {}
         logger.info("JarvisAgentExecutor.__init__: getting emitter")
 
         self._emitter = get_emitter()
@@ -75,7 +72,7 @@ class JarvisAgentExecutor:
         blocking: bool = True,
         context_id: str | None = None,
         resume_session_id: str | None = None,
-        options: ClaudeAgentOptions | None = None,
+        options: Any | None = None,
     ) -> A2ATask:
         """Submit a new task for execution.
 
@@ -84,7 +81,7 @@ class JarvisAgentExecutor:
             blocking: If True, wait for completion; if False, return immediately
             context_id: Optional context ID for session isolation
             resume_session_id: Optional OpenCode session id for explicit resume
-            options: Optional ClaudeAgentOptions for the client
+                    options: Reserved for compatibility; ignored in OpenCode-only mode
 
         Returns:
             A2ATask with current status
@@ -123,9 +120,7 @@ class JarvisAgentExecutor:
 
                 channel_id = context_id or f"a2a-{task.id}"
 
-                # Execute via orchestrator or direct SDK client.
-                # Important: when orchestrator is configured (normal Jarvis path), do not
-                # initialize a separate SDK client here; that can block task startup.
+                # Execute via orchestrator only in OpenCode-only mode.
                 opencode_session_id: str | None = None
                 if self._orchestrator:
                     orchestrator_result = await self._execute_with_orchestrator(
@@ -144,9 +139,7 @@ class JarvisAgentExecutor:
                     else:
                         result_text = str(orchestrator_result)
                 else:
-                    client = await self.session_manager.get_client(channel_id, options)
-                    self._task_clients[task.id] = client
-                    result_text = await self._execute_with_client(client, message)
+                    raise RuntimeError("No orchestrator configured for OpenCode-only A2A execution")
 
                 # Add result as artifact
                 if result_text:
@@ -288,28 +281,6 @@ class JarvisAgentExecutor:
 
         except Exception as e:
             logger.exception(f"Orchestrator execution failed for {task_id}: {e}")
-            raise
-
-    async def _execute_with_client(
-        self,
-        client: ClaudeSDKClient,
-        message: str,
-    ) -> str:
-        """Execute message with Claude SDK client directly.
-
-        Used when no orchestrator is configured.
-        """
-        try:
-            await client.query(message)
-            result_text = ""
-            async for msg in client.receive_response():
-                if hasattr(msg, 'content'):
-                    for block in msg.content:
-                        if hasattr(block, 'text'):
-                            result_text += block.text + "\n"
-            return result_text.strip() or f"Task received: {message[:100]}"
-        except Exception as e:
-            logger.exception(f"Direct client execution failed: {e}")
             raise
 
     async def _emit_event(self, task_id: str, event_type: str, data: dict) -> None:

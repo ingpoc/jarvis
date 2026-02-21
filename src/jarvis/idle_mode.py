@@ -182,15 +182,6 @@ class IdleModeProcessor:
                         )
                         self.trigger_hibernate()
 
-                        # Unload local model resources to free memory.
-                        try:
-                            from jarvis.model_router import get_model_router
-                            router = get_model_router()
-                            await router.shutdown()
-                            logger.info("Local model resources unloaded due to memory pressure")
-                        except Exception as e:
-                            logger.debug(f"Model unload on hibernation failed: {e}")
-
                 except ImportError:
                     pass  # Not on macOS
                 except Exception as e:

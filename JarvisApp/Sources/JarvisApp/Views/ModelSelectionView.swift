@@ -12,19 +12,11 @@ struct ModelInfo: Identifiable {
 }
 
 enum ModelProvider: String, CaseIterable {
-    case anthropic = "Anthropic Claude"
     case opencode = "OpenCode (Zen)"
-    case glm = "GLM (z.ai)"
-    case mlx = "MLX (Apple Silicon)"
-    case foundation = "Foundation Models"
     
     var icon: String {
         switch self {
-        case .anthropic: return "brain"
         case .opencode: return "shippingbox.fill"
-        case .glm: return "cpu"
-        case .mlx: return "memorychip"
-        case .foundation: return "apple.logo"
         }
     }
 }
@@ -33,11 +25,9 @@ enum ModelProvider: String, CaseIterable {
 
 struct ModelSelectionView: View {
     @Environment(\.webSocket) private var webSocket
-    @State private var selectedModelId: String = "claude-sonnet-4-5-20250929"
-    @State private var currentProvider: String = "anthropic"
+    @State private var selectedModelId: String = "opencode/glm-5-free"
+    @State private var currentProvider: String = "opencode"
     @State private var isLoading = false
-    @State private var mlxAvailable = false
-    @State private var foundationAvailable = true  // Default to true - AFM available on macOS 26+
     
     private var modelStatus: ModelStatusInfo? {
         webSocket.modelStatus
@@ -45,32 +35,6 @@ struct ModelSelectionView: View {
     
     private var models: [ModelInfo] {
         var allModels: [ModelInfo] = []
-        
-        // Anthropic models - always available
-        allModels.append(ModelInfo(
-            id: "claude-sonnet-4-5-20250929",
-            name: "Claude Sonnet 4.5",
-            provider: .anthropic,
-            description: "Best balance of speed and capability",
-            isAvailable: true,
-            isSelected: selectedModelId == "claude-sonnet-4-5-20250929"
-        ))
-        allModels.append(ModelInfo(
-            id: "claude-opus-4-6",
-            name: "Claude Opus 4.6",
-            provider: .anthropic,
-            description: "Most capable model for complex tasks",
-            isAvailable: true,
-            isSelected: selectedModelId == "claude-opus-4-6"
-        ))
-        allModels.append(ModelInfo(
-            id: "claude-haiku-4-5-20251001",
-            name: "Claude Haiku 4.5",
-            provider: .anthropic,
-            description: "Fast responses for simple tasks",
-            isAvailable: true,
-            isSelected: selectedModelId == "claude-haiku-4-5-20251001"
-        ))
 
         // OpenCode free models (Zen)
         let fallbackOpenCodeModels = [
@@ -78,7 +42,6 @@ struct ModelSelectionView: View {
             "glm-5-free",
             "kimi-k2.5-free",
             "big-pickle",
-            "openai/gpt-5-nano",
         ]
         let openCodeModels = modelStatus?.opencodeAvailableModels ?? fallbackOpenCodeModels
         for model in openCodeModels {
@@ -92,40 +55,6 @@ struct ModelSelectionView: View {
                 isSelected: selectedModelId == id
             ))
         }
-        
-        // MLX models - hide for now since not implemented
-        // if mlxAvailable {
-        //     allModels.append(ModelInfo(
-        //         id: "mlx-qwen3-3b",
-        //         name: "Qwen3 3B (MLX)",
-        //         provider: .mlx,
-        //         description: "On-device inference via MLX",
-        //         isAvailable: true,
-        //         isSelected: selectedModelId == "mlx-qwen3-3b"
-        //     ))
-        // }
-        
-        // Foundation Models - always available on macOS 26+
-        if foundationAvailable {
-            allModels.append(ModelInfo(
-                id: "foundation-models",
-                name: "Foundation Models",
-                provider: .foundation,
-                description: currentProvider == "foundation" ? "● Active (direct Python)" : "Apple on-device AI (~1s)",
-                isAvailable: true,
-                isSelected: selectedModelId == "foundation-models"
-            ))
-        }
-        
-        // GLM - unavailable
-        allModels.append(ModelInfo(
-            id: "glm-5",
-            name: "GLM-5 (z.ai)",
-            provider: .glm,
-            description: "Subscription expired",
-            isAvailable: false,
-            isSelected: selectedModelId == "glm-5"
-        ))
         
         return allModels
     }
@@ -162,7 +91,6 @@ struct ModelSelectionView: View {
         .onAppear {
             syncFromModelStatus(modelStatus)
             webSocket.sendCommand(action: "get_model_status")
-            checkLocalModels()
         }
         .onChange(of: modelStatus?.currentModel) { _ in
             syncFromModelStatus(modelStatus)
@@ -184,41 +112,6 @@ struct ModelSelectionView: View {
         if let provider = status.providerType ?? status.provider, !provider.isEmpty {
             currentProvider = provider
         }
-        if let available = status.foundationAvailable {
-            foundationAvailable = available
-        }
-    }
-
-    private func checkLocalModels() {
-        // Directly check Foundation Models availability via Python
-        DispatchQueue.global().async {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/.venv/bin/python")
-            task.arguments = ["-c", "import sys; sys.path.insert(0, '/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac/src'); from jarvis.afm_integration import is_afm_available; print('available' if is_afm_available() else 'unavailable')"]
-            task.currentDirectoryURL = URL(fileURLWithPath: "/Users/gurusharan/Documents/remote-claude/Codex/jarvis-mac")
-            
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = pipe
-            
-            do {
-                try task.run()
-                task.waitUntilExit()
-                
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                
-                DispatchQueue.main.async {
-                    self.foundationAvailable = output.contains("available")
-                    print("Foundation Models check: \(output.trimmingCharacters(in: .whitespacesAndNewlines))")
-                }
-            } catch {
-                print("Error checking Foundation: \(error)")
-            }
-        }
-        
-        // Also request model status from daemon
-        webSocket.sendCommand(action: "get_model_status")
     }
     
     private func providerSection(provider: ModelProvider, models: [ModelInfo]) -> some View {
@@ -311,11 +204,7 @@ struct ModelSelectionView: View {
     
     private func providerColor(_ provider: ModelProvider) -> Color {
         switch provider {
-        case .anthropic: return .purple
         case .opencode: return .green
-        case .glm: return .blue
-        case .mlx: return .cyan
-        case .foundation: return .red
         }
     }
     

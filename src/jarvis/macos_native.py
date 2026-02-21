@@ -149,7 +149,7 @@ def keychain_store(service: str, account: str, password: str) -> bool:
     """Store a credential in the macOS Keychain.
 
     Args:
-        service: Service name (e.g., "com.jarvis.anthropic")
+        service: Service name (e.g., "com.jarvis.opencode")
         account: Account name (e.g., "api_key")
         password: The secret value
 
@@ -191,7 +191,7 @@ def keychain_retrieve(service: str, account: str) -> str | None:
     """Retrieve a credential from the macOS Keychain.
 
     Args:
-        service: Service name (e.g., "com.jarvis.anthropic")
+        service: Service name (e.g., "com.jarvis.opencode")
         account: Account name (e.g., "api_key")
 
     Returns:

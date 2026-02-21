@@ -1,11 +1,11 @@
-"""Core orchestrator: wires Claude Agent SDK with Apple Containers.
+"""Core orchestrator: OpenCode-first execution with Apple Containers.
 
 Supports two modes:
 - Single-agent (Phase 1): Direct task execution with one agent
-- Multi-agent (Phase 2): Planner -> Executor(s) -> Tester -> Reviewer pipeline
+- Pipeline alias (Phase 2): mapped to single-agent execution in OpenCode-only mode
 
-Uses the Python Agent SDK with:
-- Custom MCP tools for Apple Container lifecycle, Git, and Review
+Uses OpenCode runtime with:
+- Dynamic tool/MCP capability wiring
 - Hooks for budget enforcement and trust checks
 - Session resume for continuity
 - macOS native notifications
@@ -25,17 +25,6 @@ from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-from claude_agent_sdk import (
-    AssistantMessage,
-    ClaudeAgentOptions,
-    ClaudeSDKClient,
-    HookMatcher,
-    ResultMessage,
-    SystemMessage,
-    TextBlock,
-    ToolUseBlock,
-)
 
 from jarvis.budget import BudgetController
 from jarvis.code_orchestrator import CodeOrchestrator
@@ -62,8 +51,6 @@ from jarvis.notifications import (
 )
 from jarvis.review_tools import create_review_mcp_server
 from jarvis.trust import TrustEngine
-from jarvis.session_manager import SessionManager
-from jarvis.agents import MultiAgentPipeline
 from jarvis.self_learning import learn_from_task
 
 # Subpackage modules
@@ -71,14 +58,6 @@ from jarvis.orchestrator.capabilities import DynamicCapabilitiesManager
 from jarvis.orchestrator.mcp_loader import MCPConfigLoader
 from jarvis.orchestrator.prompts import SystemPromptBuilder
 from jarvis.orchestrator.hooks import OrchestratorHooks
-
-
-def _safe_json_parse(text: str, default: Any = None) -> Any:
-    """Safely parse JSON, returning default on failure."""
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, TypeError):
-        return default
 
 
 logger = logging.getLogger(__name__)
@@ -205,8 +184,7 @@ class JarvisOrchestrator:
         self.loop_detector = LoopDetector(max_iterations=self.config.budget.max_turns_per_subtask)
         self.events = EventCollector(memory=self.memory)
         self._chat_lock = asyncio.Lock()
-        self._chat_client: ClaudeSDKClient | None = None  # Deprecated: use SessionManager
-        self._session_manager = SessionManager.get_instance()
+        self._chat_client: Any | None = None
         self._channel_id = "default"  # Default channel for this orchestrator
         # Preserve OpenCode conversation continuity per logical channel/context.
         self._opencode_session_by_channel: dict[str, str] = {}
@@ -230,10 +208,9 @@ class JarvisOrchestrator:
             "errors": ["preflight_not_run"],
             "warnings": [],
             "provider": {
-                "base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
-                "token_present": bool(
-                    os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
-                ),
+                "type": "opencode",
+                "config_path": str(JARVIS_OPENCODE_CONFIG),
+                "config_present": JARVIS_OPENCODE_CONFIG.exists(),
             },
             "models": {
                 "planner": self.config.models.planner,
@@ -310,13 +287,11 @@ class JarvisOrchestrator:
         return len(self._build_mail_tool_allowlist()) > 0
 
     def _mail_digest_mode(self) -> str:
-        """Resolve mail digest execution mode: local or sdk."""
-        mode = os.environ.get("JARVIS_MAIL_DIGEST_MODE", "auto").strip().lower()
-        if mode in ("local", "sdk"):
-            return mode
+        """Resolve mail digest execution mode.
 
-        provider = self._effective_provider_type()
-        return "local" if provider in ("foundation", "opencode") else "sdk"
+        OpenCode-only runtime.
+        """
+        return "local"
 
     def _has_mail_mcp_server(self) -> bool:
         """Detect whether a mail-related MCP server is configured."""
@@ -387,7 +362,7 @@ class JarvisOrchestrator:
         return False
 
     def _extract_command_for_tool_call(self, tool_name: str, tool_input: Any) -> str:
-        """Best-effort command extraction from ToolUseBlock input."""
+        """Best-effort command extraction from tool-call input payload."""
         if not isinstance(tool_input, dict):
             return ""
         if tool_name == "Bash":
@@ -590,7 +565,7 @@ class JarvisOrchestrator:
         return result
 
     async def _post_message_hook(self, input_data: dict, context: dict) -> dict:
-        """Hook: track token usage and costs from ResultMessage events."""
+        """Hook: track token usage and costs from tool/message events."""
         self._init_hooks()
         context["session_id"] = self._session_id
         context["model"] = self.config.models.executor
@@ -599,83 +574,36 @@ class JarvisOrchestrator:
     def _derive_provider_from_model(self, model_id: str) -> str:
         """Infer provider from model ID for config-coherency checks."""
         model = str(model_id or "")
-        if model == "foundation-models":
-            return "foundation"
         if model.startswith("opencode/") or model.startswith("opencode:") or model == "opencode":
             return "opencode"
-        return "anthropic"
+        return "opencode"
 
     def _effective_provider_type(self) -> str:
-        """Resolve a coherent provider_type from configured provider + current model."""
+        """OpenCode-only policy: always return opencode."""
         model_id = self.config.models.executor
         derived = self._derive_provider_from_model(model_id)
-        configured = str(getattr(self.config.models, "provider_type", "")).strip().lower()
-
-        valid = {"anthropic", "foundation", "opencode"}
-        if configured not in valid:
-            return derived
-        if configured == derived:
-            return configured
-
-        # Mismatch: prefer derived provider so runtime doesn't route tasks incorrectly.
-        logger.warning(
-            "provider_type mismatch (configured=%s, derived=%s, model=%s); using derived provider",
-            configured,
-            derived,
-            model_id,
-        )
+        configured = str(getattr(self.config.models, "provider_type", "")).strip().lower() or "opencode"
+        if configured != "opencode" or derived != "opencode":
+            logger.warning(
+                "provider_type/model mismatch (configured=%s, derived=%s, model=%s); forcing opencode",
+                configured,
+                derived,
+                model_id,
+            )
         return derived
 
     def _build_runtime_system_prompt(self, provider_type: str) -> str:
-        """Return provider-aware system prompt to fit local model context budgets."""
-        if provider_type == "foundation":
-            return (
-                "You are Jarvis, a pragmatic assistant for coding and operations. "
-                "Be concise, actionable, and explicit about failures. "
-                "Choose tools, agents, and workflow dynamically at runtime based on the task and repository context."
-            )
+        """Return provider-aware system prompt."""
+        _ = provider_type
         return self._build_system_prompt()
 
-    def _build_options(self, permission_mode: str = "acceptEdits") -> ClaudeAgentOptions:
-        """Build Agent SDK options with all Jarvis integrations."""
-        model_id = self.config.models.executor
-        provider_type = self._effective_provider_type()
-        allowed_tools = self._build_allowed_tools()
-        mcp_servers = self._build_mcp_servers()
-
-        options = ClaudeAgentOptions(
-            system_prompt=self._build_runtime_system_prompt(provider_type),
-            allowed_tools=allowed_tools,
-            permission_mode=permission_mode,
-            max_turns=self.config.budget.max_turns_per_task,
-            max_budget_usd=self.config.budget.max_per_session_usd,
-            model=model_id,
-            cwd=self.project_path,
-            mcp_servers=mcp_servers,
-            env={},
-            hooks={
-                "PreToolUse": [
-                    HookMatcher(hooks=[self._pre_tool_hook]),
-                ],
-                "PostToolUse": [
-                    HookMatcher(hooks=[self._post_tool_hook]),
-                ],
-                "PostMessage": [
-                    HookMatcher(hooks=[self._post_message_hook]),
-                ],
-            },
-            agents=self._capabilities.agents or None,
-        )
-
-        # Resume previous session if available
-        if self._session_id:
-            options.resume = self._session_id
-
-        return options
-
-    def _build_chat_options(self) -> ClaudeAgentOptions:
-        """Build chat-focused options."""
-        return self._build_options(permission_mode="acceptEdits")
+    def _build_options(self, permission_mode: str = "acceptEdits") -> dict[str, Any]:
+        """Compatibility shim retained for callers that inspect allowed tools."""
+        _ = permission_mode
+        return {
+            "allowed_tools": self._build_allowed_tools(),
+            "mcp_servers": self._build_mcp_servers(),
+        }
 
     async def _run_task_local(
         self,
@@ -685,109 +613,26 @@ class JarvisOrchestrator:
         model_id: str,
         emit_notifications: bool,
     ) -> dict:
-        """Run task using a local model directly.
-
-        This bypasses the Claude Agent SDK and calls local models directly.
-        """
-        from jarvis.local_model_manager import get_local_model_manager
-
-        result = {
+        """Legacy local-model path is disabled in OpenCode-only mode."""
+        _ = (task_description, provider_type, model_id, emit_notifications)
+        return {
             "task_id": task_id,
-            "status": "unknown",
+            "status": "failed",
             "cost_usd": 0.0,
             "turns": 1,
             "session_id": None,
-            "output": "",
+            "output": "Local model execution is disabled. Configure opencode/* model IDs.",
         }
 
-        try:
-            local_mgr = get_local_model_manager()
-
-            # Ensure the correct provider is active
-            await local_mgr.switch_model(model_id)
-
-            # Generate response
-            response = await local_mgr.generate(task_description)
-
-            result["output"] = response.get("content", "")
-            result["status"] = "completed"
-            result["cost_usd"] = 0.0
-
-            # Emit completion event
-            self.events.emit(
-                EVENT_TASK_COMPLETE,
-                result["output"],
-                task_id=task_id,
-                metadata={"status": "completed", "provider": provider_type},
-            )
-
-            if emit_notifications:
-                await notify_task_completed(task_id, result["output"])
-
-        except Exception as e:
-            result["status"] = "failed"
-            result["output"] = f"Error: {str(e)}"
-            self.events.emit(
-                EVENT_ERROR,
-                str(e),
-                task_id=task_id,
-            )
-
-        return result
-
     async def _chat_local(self, user_message: str, provider_type: str, model_id: str) -> dict:
-        """Handle chat via local model, bypassing Claude Agent SDK."""
-        from jarvis.local_model_manager import get_local_model_manager
-
-        try:
-            local_mgr = get_local_model_manager()
-            await local_mgr.switch_model(model_id)
-            response = await local_mgr.generate(user_message)
-            reply = response.get("content", "").strip()
-
-            self.events.emit(
-                "chat_assistant",
-                reply[:200],
-                cost_usd=0.0,
-                metadata={"reply": reply[:5000], "tools": [], "provider": provider_type},
-            )
-            decision = {
-                "mode": "chat",
-                "confidence": 1.0,
-                "reason": f"local_model:{provider_type}",
-            }
-            self.events.emit(
-                "chat_route",
-                f"mode=chat provider={provider_type}",
-                metadata={"decision": decision},
-            )
-            self.memory.save_channel_turn("message", self.project_path, user_message, reply)
-            append_project_turn(
-                self.project_path,
-                actor="chat:local",
-                message=user_message,
-                outcome=reply[:500],
-            )
-            return {
-                "status": "completed",
-                "route": "chat",
-                "reply": reply,
-                "decision": decision,
-            }
-        except Exception as e:
-            tb = traceback.format_exc()
-            logger.error("local chat failed: %s\n%s", e, tb)
-            self.events.emit(
-                EVENT_ERROR,
-                str(e)[:200],
-                metadata={"error": str(e), "provider": provider_type},
-            )
-            return {
-                "status": "error",
-                "route": "chat",
-                "reply": f"Local model error: {e}",
-                "decision": {"mode": "chat", "confidence": 0.0, "reason": "local_model_error"},
-            }
+        """Legacy local-model chat path is disabled in OpenCode-only mode."""
+        _ = (user_message, provider_type, model_id)
+        return {
+            "status": "error",
+            "route": "chat",
+            "reply": "Local model chat is disabled. Configure opencode/* model IDs.",
+            "decision": {"mode": "chat", "confidence": 0.0, "reason": "local_model_disabled"},
+        }
 
     async def _run_task_opencode(
         self,
@@ -1031,11 +876,8 @@ class JarvisOrchestrator:
         provider_type: str,
         model_id: str,
     ) -> tuple[str, str]:
-        """Resolve provider/model for task execution, with A2A-specific policy overrides."""
-        if origin != "a2a":
-            return provider_type, model_id
-
-        # Policy: tasks delegated from OpenClaw through A2A must run on OpenCode only.
+        """Resolve provider/model for task execution (OpenCode-only policy)."""
+        _ = origin
         forced_provider = "opencode"
         forced_model = model_id
         if not (
@@ -1088,7 +930,7 @@ class JarvisOrchestrator:
         callback: Callable[[str, dict], None] | None,
     ) -> dict:
         """Finalize task bookkeeping, learning, and notifications for all providers."""
-        if provider_type not in {"foundation", "opencode"}:
+        if provider_type != "opencode":
             self._enforce_coder_completion_gate(
                 specialist=specialist,
                 task_description=task_description,
@@ -1246,7 +1088,7 @@ class JarvisOrchestrator:
         ]
         dynamic_agents = sorted(self._capabilities.agents.keys())
         dynamic_skills = sorted(self._capabilities.skills.keys())
-        tools = sorted(set(self._build_options().allowed_tools or self._build_allowed_tools()))
+        tools = sorted(set(self._build_allowed_tools()))
         capability_tools = tools + [f"mcp://{n}" for n in (static_names + dynamic_names)]
         capability_tools += ["hook://PreToolUse", "hook://PostToolUse"]
         capability_tools += [
@@ -1314,9 +1156,8 @@ class JarvisOrchestrator:
         Returns:
             Task result dict with status, cost, session_id
         """
-        # Note: channel_id is passed through to _ensure_chat_client() for session isolation.
-        # We do NOT call set_channel() here to avoid mutating shared _channel_id state
-        # which would cause race conditions with concurrent A2A tasks.
+        # Note: we do NOT call set_channel() here to avoid mutating shared
+        # _channel_id state and introducing race conditions with concurrent A2A tasks.
         if origin != "idle_research":
             self._ingest_research_urls_from_text(task_description, source=f"task:{origin}")
 
@@ -1346,7 +1187,7 @@ class JarvisOrchestrator:
         if callback:
             callback("task_started", {"id": task_id, "description": task_description})
 
-        # Use local providers directly (bypass Claude Agent SDK).
+        # Execute through OpenCode runtime.
         provider_type = self._effective_provider_type()
         model_id = self.config.models.executor
         provider_type, model_id = self._resolve_task_provider_for_origin(
@@ -1365,151 +1206,20 @@ class JarvisOrchestrator:
             },
         )
 
-        if provider_type == "foundation":
-            local_result = await self._run_task_local(
-                task_id, routed_description, provider_type, model_id, emit_notifications
-            )
-            return await self._finalize_task_result(
-                result=local_result,
-                provider_type=provider_type,
-                specialist=specialist,
-                task_description=task_description,
-                tool_calls=[],
-                task_id=task_id,
-                route=route,
-                workflow_mode=workflow_mode,
-                origin=origin,
-                emit_notifications=emit_notifications,
-                callback=callback,
-            )
-        if provider_type == "opencode":
-            opencode_result = await self._run_task_opencode(
-                task_id,
-                routed_description,
-                model_id,
-                emit_notifications,
-                channel_id=channel_id,
-                resume_session_id=resume_session_id,
-            )
-            return await self._finalize_task_result(
-                result=opencode_result,
-                provider_type=provider_type,
-                specialist=specialist,
-                task_description=task_description,
-                tool_calls=[],
-                task_id=task_id,
-                route=route,
-                workflow_mode=workflow_mode,
-                origin=origin,
-                emit_notifications=emit_notifications,
-                callback=callback,
-            )
-
-        task_permission_mode = "bypassPermissions" if origin == "a2a" else "acceptEdits"
-        options = self._build_options(permission_mode=task_permission_mode)
-        result = {
-            "task_id": task_id,
-            "status": "unknown",
-            "cost_usd": 0.0,
-            "turns": 0,
-            "session_id": None,
-            "output": "",
-        }
-        tool_calls: list[dict[str, Any]] = []
-
-        try:
-
-            async def _run_query() -> None:
-                async with ClaudeSDKClient(options=options) as client:
-                    await client.query(routed_description)
-
-                    async for message in client.receive_response():
-                        # Extract session ID
-                        if isinstance(message, SystemMessage):
-                            if message.subtype == "init":
-                                self._session_id = message.data.get("session_id")
-                                result["session_id"] = self._session_id
-
-                        # Track assistant output
-                        elif isinstance(message, AssistantMessage):
-                            for block in message.content:
-                                if isinstance(block, TextBlock):
-                                    if callback:
-                                        callback("assistant_text", {"text": block.text})
-                                    result["output"] += block.text + "\n"
-                                elif isinstance(block, ToolUseBlock):
-                                    tool_calls.append(
-                                        {
-                                            "name": block.name,
-                                            "input": block.input,
-                                            "command": self._extract_command_for_tool_call(
-                                                block.name, block.input
-                                            ),
-                                        }
-                                    )
-                                    if callback:
-                                        callback(
-                                            "tool_use",
-                                            {
-                                                "tool": block.name,
-                                                "input": block.input,
-                                            },
-                                        )
-
-                        # Final result
-                        elif isinstance(message, ResultMessage):
-                            cost = message.total_cost_usd or 0.0
-                            result["cost_usd"] = cost
-                            result["turns"] = message.num_turns
-                            result["status"] = "completed" if not message.is_error else "failed"
-
-                            # Record cost
-                            self.budget.record_cost(cost, message.num_turns, task_description)
-
-                            # Update trust
-                            if not message.is_error:
-                                upgrade_msg = self.trust.record_success(self.project_path)
-                                if upgrade_msg and callback:
-                                    callback("trust_upgrade", {"message": upgrade_msg})
-                            else:
-                                self.trust.record_failure(self.project_path)
-
-            # Task runtime watchdog:
-            # - unset/empty: unbounded (no timeout)
-            # - <= 0: unbounded (no timeout)
-            # - > 0: seconds
-            raw_timeout = os.environ.get("JARVIS_TASK_TIMEOUT_SECS", "").strip()
-            max_runtime_seconds = int(raw_timeout) if raw_timeout else 0
-
-            if max_runtime_seconds <= 0:
-                await _run_query()
-            else:
-                await asyncio.wait_for(_run_query(), timeout=max_runtime_seconds)
-        except asyncio.TimeoutError:
-            result["status"] = "error"
-            timeout_display = os.environ.get("JARVIS_TASK_TIMEOUT_SECS", "").strip() or "unbounded"
-            result["output"] = (
-                f"Task timed out after {timeout_display} seconds.\n"
-                "Execution was terminated to avoid indefinite in_progress state."
-            )
-            self.trust.record_failure(self.project_path)
-        except Exception as e:
-            tb = traceback.format_exc()
-            logger.error("run_task failed: %s\n%s", e, tb)
-            result["status"] = "error"
-            result["output"] = f"{e}\n\nTraceback:\n{tb}"
-            self.trust.record_failure(self.project_path)
-
-        finally:
-            # Clean up containers
-            await self._cleanup_containers()
-
+        opencode_result = await self._run_task_opencode(
+            task_id,
+            routed_description,
+            model_id,
+            emit_notifications,
+            channel_id=channel_id,
+            resume_session_id=resume_session_id,
+        )
         return await self._finalize_task_result(
-            result=result,
+            result=opencode_result,
             provider_type=provider_type,
             specialist=specialist,
             task_description=task_description,
-            tool_calls=tool_calls,
+            tool_calls=[],
             task_id=task_id,
             route=route,
             workflow_mode=workflow_mode,
@@ -1518,46 +1228,26 @@ class JarvisOrchestrator:
             callback=callback,
         )
 
-    async def _ensure_chat_client(self, channel_id: str | None = None) -> ClaudeSDKClient:
-        """Get or create a ClaudeSDKClient for the given channel.
-
-        Args:
-            channel_id: Channel identifier for session isolation.
-                       If None, uses the orchestrator's default channel.
-        """
-        channel = channel_id or self._channel_id
-        return await self._session_manager.get_client(channel, self._build_chat_options())
-
     def set_channel(self, channel_id: str) -> None:
         """Set the default channel for this orchestrator instance."""
         self._channel_id = channel_id
 
     async def _reset_chat_client(self, channel_id: str | None = None) -> None:
-        """Reset clients for session cleanup.
-
-        Args:
-            channel_id: If provided, reset only this channel's client.
-                       If None, reset the legacy single client only.
-        """
-        # Reset the legacy single client (deprecated)
+        """Reset chat/session state for cleanup."""
+        _ = channel_id
         if self._chat_client is not None:
             try:
-                await self._chat_client.disconnect()
+                disconnect = getattr(self._chat_client, "disconnect", None)
+                if callable(disconnect):
+                    await disconnect()
             except Exception:
                 pass
             self._chat_client = None
-
-        # Reset SessionManager channel client if specified
-        if channel_id:
-            await self._session_manager.close_client(channel_id)
-        else:
-            await self._session_manager.close_all()
-            self._session_id = None
+        self._session_id = None
 
     async def close(self) -> None:
-        """Graceful shutdown for long-lived SDK clients."""
+        """Graceful shutdown for orchestrator state."""
         await self._reset_chat_client()
-        # Note: SessionManager manages its own client lifecycle
 
     def get_preflight_status(self) -> dict:
         """Return last known model/provider preflight result."""
@@ -1567,13 +1257,13 @@ class JarvisOrchestrator:
         self, *, live_check: bool = False, timeout_seconds: int = 25
     ) -> dict:
         """Validate provider+models before serving requests."""
+        _ = timeout_seconds
         errors: list[str] = []
         warnings: list[str] = []
         provider = {
-            "base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
-            "token_present": bool(
-                os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
-            ),
+            "type": "opencode",
+            "config_path": str(JARVIS_OPENCODE_CONFIG),
+            "config_present": JARVIS_OPENCODE_CONFIG.exists(),
         }
         models = {
             "planner": self.config.models.planner,
@@ -1582,29 +1272,25 @@ class JarvisOrchestrator:
             "quick": self.config.models.quick,
         }
 
-        if not provider["token_present"]:
-            warnings.append("missing_anthropic_token_env_using_cli_auth_if_available")
         for key, value in models.items():
             if not str(value).strip():
                 errors.append(f"missing_model:{key}")
-        if provider["base_url"] and "api.z.ai" in provider["base_url"]:
-            # z.ai Anthropic-compatible proxy typically expects glm model IDs.
-            non_glm = [k for k, v in models.items() if not str(v).strip().lower().startswith("glm")]
-            if non_glm:
-                warnings.append(f"z_ai_non_glm_models:{','.join(non_glm)}")
+        if not provider["config_present"]:
+            errors.append("missing_opencode_config")
+        non_opencode = [k for k, v in models.items() if not str(v).strip().lower().startswith("opencode/")]
+        if non_opencode:
+            warnings.append(f"non_opencode_models:{','.join(non_opencode)}")
+        if str(self.config.models.provider_type or "").strip().lower() != "opencode":
+            warnings.append("provider_type_not_opencode")
 
         live_probe = {"attempted": bool(live_check), "ok": False, "error": ""}
         if live_check and not errors:
             try:
+                from jarvis.opencode_client import get_opencode_client
 
-                async def _probe() -> None:
-                    async with ClaudeSDKClient(options=self._build_options()) as client:
-                        await client.query("Respond with exactly: JARVIS_PREFLIGHT_OK")
-                        async for msg in client.receive_response():
-                            if isinstance(msg, ResultMessage) and msg.is_error:
-                                raise RuntimeError(str(msg.result or "live_probe_failed"))
-
-                await asyncio.wait_for(_probe(), timeout=max(5, timeout_seconds))
+                self._ensure_opencode_config_env()
+                client = get_opencode_client()
+                await asyncio.wait_for(asyncio.to_thread(client.list_models), timeout=10)
                 live_probe["ok"] = True
             except Exception as exc:
                 live_probe["error"] = str(exc)
@@ -1635,18 +1321,6 @@ class JarvisOrchestrator:
         self._ingest_research_urls_from_text(user_message, source=f"chat:{origin}")
         specialist: str | None = None
         route = "autonomous"
-        routed_message = user_message
-
-        result = {
-            "status": "unknown",
-            "reply": "",
-            "cost_usd": 0.0,
-            "turns": 0,
-            "session_id": None,
-            "tools": [],
-            "diagnostics": {},
-        }
-        tools_used: set[str] = set()
 
         ensure_project_jarvis_file(self.project_path)
         self.events.emit(
@@ -1766,116 +1440,9 @@ class JarvisOrchestrator:
                 "decision": {"mode": "chat", "confidence": 0.0, "reason": "mail_digest_failed"},
             }
 
-        # Route local providers directly; only remote providers use Claude Agent SDK.
-        if provider_type == "foundation":
-            return await self._chat_local(user_message, provider_type, model_id)
-        if provider_type == "opencode":
-            return await self._chat_opencode(user_message, model_id)
-
-        async with self._chat_lock:
-            async def _run_chat_turn(client: ClaudeSDKClient) -> None:
-                await client.query(routed_message)
-
-                result["reply"] = ""
-                async for message in client.receive_response():
-                    if isinstance(message, SystemMessage):
-                        if message.subtype == "init":
-                            self._session_id = message.data.get("session_id")
-                            result["session_id"] = self._session_id
-                    elif isinstance(message, AssistantMessage):
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                result["reply"] += block.text + "\n"
-                            elif isinstance(block, ToolUseBlock):
-                                tools_used.add(block.name)
-                    elif isinstance(message, ResultMessage):
-                        result["cost_usd"] = message.total_cost_usd or 0.0
-                        result["turns"] = message.num_turns
-                        result["status"] = "completed" if not message.is_error else "failed"
-                        result["diagnostics"] = (
-                            {
-                                "sdk_result": message.result,
-                                "structured_output": message.structured_output,
-                                "usage": message.usage,
-                            }
-                            if message.is_error
-                            else {}
-                        )
-                        if message.result and not result["reply"].strip():
-                            result["reply"] = str(message.result).strip()
-                        self.budget.record_cost(
-                            result["cost_usd"], result["turns"], f"chat:{user_message[:120]}"
-                        )
-
-            try:
-                client = await self._ensure_chat_client()
-                await _run_chat_turn(client)
-
-                result["reply"] = result["reply"].strip()
-                result["tools"] = sorted(tools_used)
-                if result["status"] != "completed" and not result["reply"]:
-                    try:
-                        diag_text = json.dumps(result["diagnostics"], default=str)[:3000]
-                    except Exception:
-                        diag_text = str(result["diagnostics"])[:3000]
-                    result["reply"] = (
-                        "Chat request failed without a textual error from the model runtime.\n"
-                        f"Diagnostics: {diag_text}"
-                    )
-            except Exception as e:
-                tb = traceback.format_exc()
-                logger.error("chat failed: %s\n%s", e, tb)
-                await self._reset_chat_client()
-                result["status"] = "error"
-                result["reply"] = f"{e}\n\nTraceback:\n{tb}"
-                result["tools"] = sorted(tools_used)
-                result["diagnostics"] = {"exception": str(e)}
-
-        reply = result["reply"]
-        status = "completed" if (result["status"] == "completed" and reply) else "failed"
-
-        if status == "completed" and reply:
-            self.events.emit(
-                "chat_assistant",
-                reply[:200],
-                cost_usd=result["cost_usd"],
-                metadata={"reply": reply[:5000], "tools": result["tools"]},
-            )
-        else:
-            self.events.emit(
-                EVENT_ERROR,
-                (reply or "Chat failed")[:200],
-                metadata={
-                    "error": (reply or "Chat failed")[:5000],
-                    "diagnostics": result.get("diagnostics") or {},
-                },
-            )
-
-        decision = {
-            "mode": "chat",
-            "confidence": 1.0 if status == "completed" else 0.0,
-            "reason": f"specialist:{specialist or 'none'}",
-        }
-        self.events.emit(
-            "chat_route",
-            f"mode=chat route={route} conf={decision['confidence']}",
-            metadata={"decision": decision, "origin": origin},
-        )
-        self.memory.save_channel_turn(origin, self.project_path, user_message, reply)
-
-        append_project_turn(
-            self.project_path,
-            actor=f"chat:{origin}",
-            message=user_message,
-            outcome=(reply or status)[:500],
-        )
-
-        return {
-            "status": status,
-            "route": route,
-            "reply": reply,
-            "decision": decision,
-        }
+        # OpenCode-only execution.
+        _ = (provider_type, route)
+        return await self._chat_opencode(user_message, model_id)
 
     async def handle_message(
         self,
@@ -1940,114 +1507,6 @@ class JarvisOrchestrator:
                 else:
                     lines.append(f"{idx}. {subject}")
         return "\n".join(lines).strip()[:5000]
-
-    def _extract_mail_digest_json(self, text: str) -> dict[str, Any]:
-        """Best-effort extraction of a JSON object from model output."""
-        parsed = _safe_json_parse(text, default=None)
-        if isinstance(parsed, dict):
-            return parsed
-        match = re.search(r"\{[\s\S]*\}", text)
-        if not match:
-            return {}
-        parsed = _safe_json_parse(match.group(0), default={})
-        return parsed if isinstance(parsed, dict) else {}
-
-    def _is_mail_tool_schema_error(self, text: str) -> bool:
-        """Detect Anthropic-compatible endpoint tool-schema incompatibility."""
-        t = (text or "").lower()
-        return "request.tools." in t and "input_schema" in t
-
-    def _build_mail_digest_prompt(
-        self,
-        *,
-        window_hours: int,
-        context_messages: list[dict[str, Any]] | None = None,
-        delegate_to_specialist: bool = True,
-    ) -> str:
-        """Build mail-chief prompt, optionally with pre-fetched message context."""
-        base = (
-            "Generate today's inbox digest.\n"
-            f"Window: last {window_hours} hours.\n"
-            "Return JSON with keys: summary, urgent, reply_today, waiting_on_them, fyi, top_3_now.\n"
-            "For each item, include thread_id (if available), subject, reason, next_action.\n"
-            "Focus on missed replies and explicit asks.\n"
-            "When tools are available, do exactly one retrieval call first, then produce final JSON."
-        )
-        if context_messages is not None:
-            context_json = json.dumps(context_messages, ensure_ascii=True)
-            base += (
-                "\nYou must use only the provided mailbox context below."
-                "\nDo not call tools for retrieval in this turn."
-                f"\nMailbox context JSON:\n{context_json}"
-            )
-        if delegate_to_specialist:
-            return self._augment_prompt_for_specialist(base, MAIL_CHIEF_AGENT, mode="task")
-        return base
-
-    async def _run_mail_digest_sdk_turn(
-        self,
-        *,
-        prompt: str,
-        allowed_tools: list[str],
-        mcp_servers: dict[str, Any] | None = None,
-    ) -> tuple[str, str, float, int]:
-        """Execute one mail-chief turn via Claude Agent SDK."""
-        options = self._build_options()
-        options.tools = []
-        options.allowed_tools = allowed_tools
-        if mcp_servers is not None:
-            options.mcp_servers = mcp_servers
-        # Keep digest turns compact for smaller local context windows.
-        options.resume = None
-        current_max_turns = getattr(options, "max_turns", 10)
-        options.max_turns = max(1, min(int(current_max_turns or 10), 6))
-        options.system_prompt = (
-            "You are mail-chief, an inbox triage specialist. "
-            "Use available mail tools, prioritize action items, and return strict JSON digest output."
-        )
-
-        response_text = ""
-        cost_usd = 0.0
-        turns = 0
-        status = "failed"
-        raw_timeout = os.environ.get("JARVIS_MAIL_SDK_TIMEOUT_SECS", "").strip()
-        try:
-            timeout_secs = float(raw_timeout) if raw_timeout else 90.0
-        except ValueError:
-            timeout_secs = 90.0
-        timeout_secs = max(10.0, min(timeout_secs, 600.0))
-
-        async def _invoke() -> tuple[str, str, float, int]:
-            nonlocal response_text, cost_usd, turns, status
-            async with ClaudeSDKClient(options=options) as client:
-                await client.query(prompt)
-                async for message in client.receive_response():
-                    if isinstance(message, AssistantMessage):
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                response_text += block.text + "\n"
-                    elif isinstance(message, ResultMessage):
-                        cost_usd = message.total_cost_usd or 0.0
-                        turns = message.num_turns
-                        status = "completed" if not message.is_error else "failed"
-                        if message.result and (message.is_error or not response_text.strip()):
-                            response_text += str(message.result).strip() + "\n"
-                self.budget.record_cost(cost_usd, turns, "mail_digest")
-            return status, response_text.strip(), cost_usd, turns
-
-        try:
-            return await asyncio.wait_for(_invoke(), timeout=timeout_secs)
-        except TimeoutError:
-            status = "failed"
-            response_text = (
-                f"{response_text.strip()}\nMail digest execution timed out after {int(timeout_secs)}s."
-            ).strip()
-        except Exception as exc:
-            status = "failed"
-            extra = f"Mail digest execution failed: {exc}"
-            response_text = f"{response_text.strip()}\n{extra}".strip()
-
-        return status, response_text.strip(), cost_usd, turns
 
     def get_mail_digest(
         self,
@@ -2147,71 +1606,24 @@ class JarvisOrchestrator:
         turns = 0
         status = "failed"
         payload: dict[str, Any] = {}
-        if mode == "local":
-            client = ZapierMailClient.from_env()
-            if not client:
-                return {
-                    "status": "failed",
-                    "error": "Zapier MCP URL missing (set ZAPIER_MCP_URL)",
-                    "route": MAIL_ROUTE,
-                }
-
-            # Optional refinement with a local model. Disabled by default for stability.
-            local_model_id: str | None = None
-            refine_enabled = os.environ.get("JARVIS_MAIL_LOCAL_REFINE", "").strip().lower() in {
-                "1",
-                "true",
-                "yes",
-                "on",
+        client = ZapierMailClient.from_env()
+        if not client:
+            return {
+                "status": "failed",
+                "error": "Zapier MCP URL missing (set ZAPIER_MCP_URL)",
+                "route": MAIL_ROUTE,
             }
-            if refine_enabled:
-                local_model_id = os.environ.get("JARVIS_MAIL_LOCAL_MODEL", "").strip()
-                if not local_model_id:
-                    provider = self._effective_provider_type()
-                    local_model_id = (
-                        self.config.models.executor
-                        if provider == "foundation"
-                        else "foundation-models"
-                    )
 
-            pipeline = LocalMailDigestService(client)
-            try:
-                payload, response_text = await pipeline.build_digest(
-                    window_hours=effective_window,
-                    local_model_id=local_model_id,
-                )
-                status = "completed"
-            except Exception as exc:
-                status = "failed"
-                response_text = f"Local mail digest execution failed: {exc}"
-        else:
-            prompt = self._build_mail_digest_prompt(
+        pipeline = LocalMailDigestService(client)
+        try:
+            payload, response_text = await pipeline.build_digest(
                 window_hours=effective_window,
-                delegate_to_specialist=False,
+                local_model_id=None,
             )
-            mail_tools = self._build_mail_tool_allowlist()
-            preferred = [t for t in mail_tools if t.endswith("gmail_find_email")]
-            if preferred:
-                mail_tools = preferred
-            mail_mcp_servers = self._build_mail_mcp_servers()
-            if not mail_mcp_servers:
-                return {
-                    "status": "failed",
-                    "error": "No mail MCP server configured for SDK mail-chief execution",
-                    "route": MAIL_ROUTE,
-                }
-            status, response_text, cost_usd, turns = await self._run_mail_digest_sdk_turn(
-                prompt=prompt,
-                allowed_tools=mail_tools,
-                mcp_servers=mail_mcp_servers,
-            )
-            if status != "completed" and self._is_mail_tool_schema_error(response_text):
-                response_text = (
-                    f"{response_text}\n"
-                    "Mail-chief failed: Anthropic-compatible endpoint rejected tool schema."
-                ).strip()
-
-            payload = self._extract_mail_digest_json(response_text)
+            status = "completed"
+        except Exception as exc:
+            status = "failed"
+            response_text = f"Local mail digest execution failed: {exc}"
 
         digest = self._normalize_mail_digest(payload, response_text.strip())
         counts = {
@@ -2343,60 +1755,13 @@ class JarvisOrchestrator:
         }
 
     def should_use_pipeline(self, task_description: str) -> bool:
-        """Heuristic: use multi-agent pipeline for complex tasks."""
-        trust_status = self.trust.status(self.project_path)
-        if trust_status["tier"] < 2:
-            return False  # Pipeline needs container access (T2+)
-
-        complexity_signals = [
-            "build",
-            "implement",
-            "create",
-            "refactor",
-            "migrate",
-            "add feature",
-            "full stack",
-            "end to end",
-            "e2e",
-            "rewrite",
-            "redesign",
-            "architecture",
-        ]
-        task_lower = task_description.lower()
-        return any(signal in task_lower for signal in complexity_signals)
+        """Pipeline mode is disabled in OpenCode-only runtime."""
+        _ = task_description
+        return False
 
     async def run_pipeline(self, task_description: str, callback=None) -> dict:
-        """Execute a task using the multi-agent pipeline.
-
-        Uses Planner -> Executor -> Tester -> Reviewer flow.
-        Falls back to single-agent mode on error.
-        """
-        pipeline = MultiAgentPipeline(self.project_path)
-        result = await pipeline.run(task_description, callback=callback)
-
-        # Convert PipelineResult to dict for CLI compatibility
-        return {
-            "task_id": result.task_id,
-            "status": result.status,
-            "cost_usd": result.total_cost_usd,
-            "turns": result.total_turns,
-            "session_id": None,
-            "plan": result.plan,
-            "review": result.review,
-            "subtask_count": len(result.subtask_results),
-            "subtasks": [
-                {
-                    "id": s.subtask_id,
-                    "status": s.status,
-                    "output": s.output[:240],
-                    "files_changed": s.files_changed[:20],
-                }
-                for s in result.subtask_results[:100]
-            ],
-            "output": f"Pipeline {result.status}. "
-            f"Subtasks: {len(result.subtask_results)}. "
-            f"Cost: ${result.total_cost_usd:.2f}",
-        }
+        """Compatibility alias: route pipeline requests through run_task()."""
+        return await self.run_task(task_description, callback=callback, origin="pipeline")
 
     async def run_autonomous(self, description: str, callback=None, resume: bool = False) -> dict:
         """Run the autonomous build harness for a project.

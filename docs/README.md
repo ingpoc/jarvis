@@ -22,8 +22,7 @@ docs/
 ├── capabilities/          # Platform capability maps (use-before-build)
 │   ├── checklist.md       # Proposal gate before adding new harness logic
 │   ├── codex.md           # Codex built-ins and limits
-│   ├── claude-code.md     # Claude Code built-ins and enforcement model
-│   └── claude-agent-sdk-python.md # SDK extension points and app boundaries
+│   └── claude-code.md     # Claude Code built-ins and enforcement model
 ├── principles/            # Core philosophy (timeless)
 │   ├── agent-first.md     # Humans steer, agents execute
 │   ├── progressive-disclosure.md  # Map not manual
@@ -58,8 +57,8 @@ docs/
 | Task | Frequency | Owner |
 |------|-----------|-------|
 | Sync docs with non-trivial code/behavior changes | Every implementation session | Required gate before completion |
-| Validate links | Weekly | `scripts/validate-docs.py` |
-| Garbage collect | Daily | `scripts/doc-gardener.py` |
+| Validate docs references | Weekly | `python3 scripts/agent_docs_lint.py` |
+| Garbage collect stale docs | Daily | Manual review |
 | Update research | As needed | Manual |
 
 ## Sources

@@ -223,8 +223,8 @@ Evidence:
 - <https://a2a-protocol.org/latest/definitions/>
 - <https://github.com/a2aproject/A2A>
 - <https://github.com/openclaw/openclaw>
-- <https://platform.claude.com/docs/en/agent-sdk/python>
-- <https://github.com/anthropics/claude-agent-sdk-python>
+- <https://opencode.ai/docs/agents/>
+- <https://github.com/sst/opencode>
 
 ## DeepWiki Validation Snapshot
 
@@ -233,14 +233,13 @@ Validated against DeepWiki repository docs:
 1. `ingpoc/jarvis`:
    - Confirms dual-layer design (Swift macOS app + Python daemon).
    - Confirms orchestration responsibilities currently centered in `JarvisOrchestrator`.
-   - Confirms Claude Agent SDK integration via `ClaudeSDKClient`, hooks, dynamic agents, and MCP servers.
+   - Confirms OpenCode runtime integration via `opencode_client`, hooks, dynamic agents, and MCP servers.
    - Confirms macOS-native stack: menu bar app, launchd lifecycle, notifications, Apple container integration.
 
-2. `anthropics/claude-agent-sdk-python`:
-   - Confirms strong support for long-lived conversation sessions, hooks, custom tools/MCP, resource control, and session continuity.
-   - Confirms `ClaudeSDKClient.interrupt()` method exists for task cancellation.
-   - Confirms session forking, file checkpointing, and additional hooks (SubagentStart/Stop, PreCompact, etc.) that Jarvis should utilize.
-   - Supports the agreed direction to make Jarvis core SDK-first and adapter-thin.
+2. `sst/opencode`:
+   - Confirms support for long-lived conversation sessions, subagents, custom tools/MCP, and session continuity.
+   - Confirms direct model/provider control and agent-level runtime configuration.
+   - Supports the agreed direction to keep Jarvis core OpenCode-first and adapter-thin.
 
 3. `openclaw/openclaw`:
    - Confirms best external-agent integration path is a plugin-provided custom tool capability.
@@ -250,17 +249,17 @@ Validated against DeepWiki repository docs:
 
 ## DeepWiki-Informed Decisions (Newly Agreed)
 
-### SDK Cancellation Strategy
+### Runtime Cancellation Strategy
 
 Both agents agree:
 
-1. Jarvis must implement SDK `ClaudeSDKClient.interrupt()` support for A2A `tasks/cancel` compliance.
-2. Store active `ClaudeSDKClient` instances per task for cancellation capability.
-3. Keep `asyncio.TimeoutError` as fallback for hung SDK/CLI processes.
+1. Jarvis must keep explicit cancel support for A2A `tasks/cancel` compliance.
+2. Store active runtime task/session handles per task for cancellation capability.
+3. Keep `asyncio.TimeoutError` as fallback for hung runtime/CLI processes.
 4. Implementation pattern:
 
 ```python
-self._active_tasks: dict[str, ClaudeSDKClient] = {}
+self._active_tasks: dict[str, Any] = {}
 
 async def cancel_task(self, task_id: str) -> bool:
     client = self._active_tasks.get(task_id)

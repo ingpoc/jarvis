@@ -6,16 +6,25 @@ and persist across daemon restarts.
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-from claude_agent_sdk import AgentDefinition
 
 from jarvis.config import JARVIS_DYNAMIC_CAPABILITIES, JARVIS_RUNTIME_WORKFLOW_DIR
 
 logger = logging.getLogger(__name__)
 
 _DYNAMIC_CAPS_FILE = JARVIS_DYNAMIC_CAPABILITIES
+
+
+@dataclass
+class AgentDefinition:
+    """Lightweight runtime agent definition (OpenCode-only mode)."""
+
+    description: str
+    prompt: str
+    tools: list[str] | None = None
+    model: str | None = "inherit"
 
 
 class DynamicCapabilitiesManager:
@@ -58,7 +67,9 @@ class DynamicCapabilitiesManager:
                 continue
             tools = raw_agent.get("tools")
             model = raw_agent.get("model")
-            safe_model = model if model in ("sonnet", "opus", "haiku", "inherit", None) else "inherit"
+            safe_model = str(model).strip() if model is not None else "inherit"
+            if not safe_model:
+                safe_model = "inherit"
             self._agents[str(name)] = AgentDefinition(
                 description=description,
                 prompt=prompt,
@@ -140,7 +151,9 @@ class DynamicCapabilitiesManager:
             return {"success": False, "error": "Agent name is required"}
         if not description.strip() or not prompt.strip():
             return {"success": False, "error": "Agent description and prompt are required"}
-        safe_model = model if model in ("sonnet", "opus", "haiku", "inherit", None) else "inherit"
+        safe_model = str(model).strip() if model is not None else "inherit"
+        if not safe_model:
+            safe_model = "inherit"
         self._agents[name] = AgentDefinition(
             description=description,
             prompt=prompt,

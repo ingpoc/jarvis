@@ -38,7 +38,6 @@ OPENCODE_FREE_MODELS = [
     "glm-5-free",
     "kimi-k2.5-free",
     "big-pickle",
-    "openai/gpt-5-nano",
 ]
 
 
@@ -338,20 +337,14 @@ class JarvisWSServer:
                     result = {"error": "Orchestrator not connected"}
 
             elif action == "get_model_status":
-                from jarvis.local_model_manager import get_local_model_manager
-                from jarvis.afm_integration import is_afm_available
-
-                local_mgr = get_local_model_manager()
                 config = self._orchestrator.config if self._orchestrator else None
                 current_model = config.models.executor if config else "unknown"
 
                 def _provider_from_model(model_id: str) -> str:
                     model_id = str(model_id or "")
-                    if model_id == "foundation-models":
-                        return "foundation"
                     if model_id.startswith("opencode/") or model_id.startswith("opencode:") or model_id == "opencode":
                         return "opencode"
-                    return "anthropic"
+                    return "opencode"
 
                 derived_provider_type = _provider_from_model(current_model)
                 configured_provider_type = (
@@ -359,8 +352,8 @@ class JarvisWSServer:
                     if config
                     else ""
                 )
-                if configured_provider_type not in {"anthropic", "foundation", "opencode"}:
-                    configured_provider_type = ""
+                if configured_provider_type != "opencode":
+                    configured_provider_type = "opencode"
 
                 provider_type = (
                     configured_provider_type
@@ -368,32 +361,14 @@ class JarvisWSServer:
                     else derived_provider_type
                 )
 
-                provider = provider_type if provider_type in {"foundation", "opencode"} else "anthropic"
-
-                afm_available = is_afm_available()
+                provider = "opencode"
 
                 result = {
                     "current_model": current_model,
                     "provider": provider,
                     "provider_type": provider_type,
-                    "available_models": [
-                        "claude-sonnet-4-5-20250929",
-                        "claude-opus-4-6",
-                        "claude-haiku-4-5-20251001",
-                    ],
-                    "foundation_available": afm_available,
                     "opencode_available_models": OPENCODE_FREE_MODELS,
-                    "local_models": {
-                        "foundation": {
-                            "available": afm_available,
-                            "model": "apple-foundation-models",
-                        },
-                    },
-                    "runtime_provider": (
-                        local_mgr.provider.value
-                        if local_mgr.provider and provider_type in {"foundation"}
-                        else None
-                    ),
+                    "runtime_provider": "opencode",
                 }
 
             elif action == "switch_model":
@@ -401,36 +376,17 @@ class JarvisWSServer:
                 if not model:
                     result = {"error": "Missing 'model'"}
                 elif self._orchestrator:
-                    from jarvis.local_model_manager import get_local_model_manager
-
-                    local_mgr = get_local_model_manager()
-
-                    # Determine provider based on model ID
-                    provider = "anthropic"
-                    if model == "foundation-models":
-                        provider = "foundation"
-                    elif model.startswith("opencode/") or model.startswith("opencode:") or model == "opencode":
-                        provider = "opencode"
-
-                    if provider == "foundation":
-                        switch_result = await local_mgr.switch_model(model)
-                        if "error" in switch_result:
-                            result = switch_result
-                        else:
-                            self._orchestrator.config.models.executor = model
-                            self._orchestrator.config.models.provider_type = provider
-                            self._orchestrator.config.save()
-                            await self._orchestrator._reset_chat_client()
-                            result = {
-                                "success": True,
-                                "current_model": model,
-                                "provider": provider,
-                                "provider_type": provider,
-                                "info": switch_result.get("info", ""),
-                            }
-                    elif provider == "opencode":
-                        # OpenCode is an external execution backend; free local model resources.
-                        await local_mgr.shutdown()
+                    if not (
+                        model.startswith("opencode/")
+                        or model.startswith("opencode:")
+                        or model == "opencode"
+                    ):
+                        result = {
+                            "error": "Only opencode/* models are allowed in this runtime",
+                            "provider": "opencode",
+                            "provider_type": "opencode",
+                        }
+                    else:
                         self._orchestrator.config.models.executor = model
                         self._orchestrator.config.models.provider_type = "opencode"
                         self._orchestrator.config.save()
@@ -440,20 +396,6 @@ class JarvisWSServer:
                             "current_model": model,
                             "provider": "opencode",
                             "provider_type": "opencode",
-                        }
-                    else:
-                        # RAM-efficient default: free any local model resources when
-                        # switching back to remote Anthropic models.
-                        await local_mgr.shutdown()
-                        self._orchestrator.config.models.executor = model
-                        self._orchestrator.config.models.provider_type = "anthropic"
-                        self._orchestrator.config.save()
-                        await self._orchestrator._reset_chat_client()
-                        result = {
-                            "success": True,
-                            "current_model": model,
-                            "provider": "anthropic",
-                            "provider_type": "anthropic",
                         }
                 else:
                     result = {"error": "Orchestrator not connected"}

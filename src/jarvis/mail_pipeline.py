@@ -1,13 +1,11 @@
 """Modular local mail digest pipeline.
 
-Uses Zapier MCP directly for mailbox retrieval and produces a deterministic digest,
-with optional refinement from local models (Foundation).
+Uses Zapier MCP directly for mailbox retrieval and deterministic digesting.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 import math
 import os
 import re
@@ -18,9 +16,6 @@ from typing import Any
 import httpx
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-
-logger = logging.getLogger(__name__)
-
 
 def _safe_json_parse(text: str, default: Any = None) -> Any:
     try:
@@ -170,7 +165,7 @@ class ZapierMailClient:
 
 
 class LocalMailDigestService:
-    """Build digest using deterministic heuristics; optionally refine with local models."""
+    """Build digest using deterministic heuristics."""
 
     URGENT_KEYWORDS = (
         "urgent",
@@ -224,13 +219,9 @@ class LocalMailDigestService:
         local_model_id: str | None = None,
     ) -> tuple[dict[str, Any], str]:
         """Return digest dict and raw notes."""
+        _ = local_model_id  # Compatibility-only; OpenCode runtime uses deterministic digest.
         records = await self.source.fetch_recent_messages(window_hours=window_hours)
         digest = self._heuristic_digest(records)
-
-        if local_model_id:
-            refined = await self._refine_with_local_model(records, local_model_id)
-            if refined:
-                digest = self._merge_refined(digest, refined)
 
         raw = f"Local pipeline processed {len(records)} messages via Zapier MCP."
         return digest, raw
@@ -301,64 +292,3 @@ class LocalMailDigestService:
                 f"Waiting={len(buckets['waiting_on_them'])}, FYI={len(buckets['fyi'])}."
             ),
         }
-
-    async def _refine_with_local_model(
-        self,
-        records: list[MailRecord],
-        local_model_id: str,
-    ) -> dict[str, Any] | None:
-        """Optional local-model refinement on top of heuristic result."""
-        if not records:
-            return None
-
-        from jarvis.local_model_manager import get_local_model_manager
-
-        local_mgr = get_local_model_manager()
-        setup = await local_mgr.switch_model(local_model_id)
-        if setup.get("error"):
-            logger.warning("Local model refinement skipped: %s", setup["error"])
-            return None
-
-        samples = [
-            {
-                "sender": r.sender,
-                "subject": r.subject,
-                "received_at": r.received_at,
-                "snippet": r.snippet[:220],
-                "thread_id": r.thread_id,
-                "message_id": r.message_id,
-            }
-            for r in records[:25]
-        ]
-        prompt = (
-            "You are an inbox triage assistant.\n"
-            "Classify the provided messages into JSON keys: urgent, reply_today, waiting_on_them, fyi, top_3_now, summary.\n"
-            "Each item should include thread_id, subject, reason, next_action.\n"
-            "Return strict JSON only.\n\n"
-            f"Messages:\n{json.dumps(samples, ensure_ascii=True)}"
-        )
-        try:
-            resp = await local_mgr.generate(prompt)
-            raw = str(resp.get("content") or "")
-            parsed = _safe_json_parse(raw, default=None)
-            if isinstance(parsed, dict):
-                return parsed
-            match = re.search(r"\{[\s\S]*\}", raw)
-            if match:
-                parsed = _safe_json_parse(match.group(0), default=None)
-                if isinstance(parsed, dict):
-                    return parsed
-        except Exception as exc:
-            logger.warning("Local model refinement failed: %s", exc)
-        return None
-
-    @staticmethod
-    def _merge_refined(base: dict[str, Any], refined: dict[str, Any]) -> dict[str, Any]:
-        """Keep pipeline stable by only replacing recognized fields."""
-        out = dict(base)
-        for key in ("urgent", "reply_today", "waiting_on_them", "fyi", "top_3_now"):
-            if isinstance(refined.get(key), list):
-                out[key] = refined[key]
-        if isinstance(refined.get("summary"), str) and refined["summary"].strip():
-            out["summary"] = refined["summary"].strip()
-        return out

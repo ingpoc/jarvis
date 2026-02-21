@@ -7,7 +7,7 @@ When a pattern is detected 3+ times:
 4. Save to ~/.claude/skills/
 5. Mark candidate as promoted
 
-Skill format (following Claude Agent SDK spec):
+Skill format:
 ---
 name: skill-name
 description: Brief description
@@ -204,64 +204,8 @@ async def _generate_prompt_via_glm(
     example_tasks: list[str],
     execution_context: str,
 ) -> str | None:
-    """Generate a skill prompt using GLM 4.7 via the model router.
-
-    Returns the generated prompt text, or None if GLM is unavailable.
-    """
-    try:
-        from jarvis.model_router import get_model_router
-
-        router = get_model_router()
-
-        # Only attempt if cloud API is available
-        if not router.qwen3_available and not router.foundation_available:
-            # Use the GLM prompt template
-            prompt_input = GLM_SKILL_GENERATION_PROMPT.format(
-                pattern_description=pattern_description,
-                occurrence_count=occurrence_count,
-                example_tasks="\n".join(f"- {t}" for t in example_tasks[:5]),
-                execution_context=execution_context,
-            )
-
-            # Route via the model router for GLM cloud
-            try:
-                import httpx
-
-                # Use the Claude/GLM API directly for skill generation
-                api_key = None
-                import os
-                api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-                if not api_key:
-                    return None
-
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(
-                        "https://api.anthropic.com/v1/messages",
-                        headers={
-                            "x-api-key": api_key,
-                            "anthropic-version": "2023-06-01",
-                            "content-type": "application/json",
-                        },
-                        json={
-                            "model": "claude-haiku-4-5-20251001",
-                            "max_tokens": 1024,
-                            "messages": [{"role": "user", "content": prompt_input}],
-                        },
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        content = data.get("content", [])
-                        if content and content[0].get("type") == "text":
-                            generated = content[0]["text"].strip()
-                            logger.info(f"GLM generated skill prompt ({len(generated)} chars)")
-                            return generated
-            except Exception as e:
-                logger.debug(f"GLM API call failed: {e}")
-                return None
-
-    except Exception as e:
-        logger.debug(f"GLM skill generation unavailable: {e}")
-
+    """Prompt-generation via model API is disabled in OpenCode-only mode."""
+    _ = (pattern_description, occurrence_count, example_tasks, execution_context)
     return None
 
 

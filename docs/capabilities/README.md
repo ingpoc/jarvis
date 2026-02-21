@@ -8,7 +8,6 @@ Use this folder before adding new harness logic. Goal: use built-in capabilities
 |------|----------|
 | Optimize Codex behavior/policy | `codex.md` |
 | Optimize Claude Code harness | `claude-code.md` |
-| Optimize Jarvis runtime on SDK | `claude-agent-sdk-python.md` |
 | Evaluate a new optimization idea | `checklist.md` |
 
 ## Decision Rule
@@ -25,4 +24,3 @@ Derived from DeepWiki repository docs:
 
 - `openai/codex`
 - `anthropics/claude-code`
-- `anthropics/claude-agent-sdk-python`

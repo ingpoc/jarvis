@@ -1,6 +1,6 @@
 # Jarvis
 
-Autonomous Mac-native development partner powered by Claude Agent SDK and Apple Containers.
+Autonomous Mac-native development partner powered by OpenCode runtime and Apple Containers.
 
 ## Overview
 
@@ -24,7 +24,7 @@ Jarvis is an AI-powered development assistant that runs locally on your Mac. It 
 │         └────────────────────┬────────────────────┘        │
 │                              │                             │
 │         ┌────────────────────▼────────────────────┐        │
-│         │        Claude Agent SDK                  │        │
+│         │        OpenCode Runtime                  │        │
 │         └────────────────────┬────────────────────┘        │
 │                              │                             │
 │         ┌────────────────────▼────────────────────┐        │
@@ -36,7 +36,7 @@ Jarvis is an AI-powered development assistant that runs locally on your Mac. It 
 ## Features
 
 - **Autonomous Task Execution**: Describe what you want, Jarvis figures out how to do it
-- **Smart Code Generation**: Uses Claude Agent SDK for intelligent code synthesis
+- **Smart Code Generation**: Uses OpenCode Runtime for intelligent code synthesis
 - **Automated Testing**: Runs tests and reports results automatically
 - **Git Integration**: Handles commits, branches, and status checks
 - **Approval Workflow**: Requires approval for destructive operations

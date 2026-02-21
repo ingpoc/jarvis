@@ -160,7 +160,7 @@ src/jarvis/
 ├── daemon.py                  # Background service
 ├── ws_server.py               # WebSocket server (port 9847)
 ├── orchestrator/              # Message handling + routing
-├── local_model_manager.py     # AFM local provider switching
+├── opencode_client.py         # OpenCode runtime bridge
 └── a2a/server.py              # A2A server (port 9848)
 ```
 

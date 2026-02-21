@@ -16,7 +16,7 @@ Container workflow:
 import asyncio
 import json
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
+from jarvis.sdk_compat import create_sdk_mcp_server, tool
 
 from jarvis.container_tools import _get_container_status, _run_container_cmd
 

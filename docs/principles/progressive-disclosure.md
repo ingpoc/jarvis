@@ -71,9 +71,9 @@ Entry Point (CLAUDE.md ~100 lines)
 
 | Check | Tool |
 |-------|------|
-| Links valid | `scripts/validate-docs.py` |
-| Structure correct | `scripts/check-structure.py` |
-| Freshness | `scripts/doc-gardener.py` |
+| Links and path references | `python3 scripts/agent_docs_lint.py` |
+| Structure correctness | `python3 scripts/agent_docs_lint.py` |
+| Freshness | Manual review in implementation sessions |
 
 ---
 

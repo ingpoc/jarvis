@@ -202,8 +202,9 @@ def status():
     provider = preflight.get("provider", {}) or {}
     preflight_table = Table(show_header=False, box=None)
     preflight_table.add_row("Ready", "[green]yes[/]" if ready else "[red]no[/]")
-    preflight_table.add_row("Token present", "yes" if provider.get("token_present") else "no")
-    preflight_table.add_row("Base URL", provider.get("base_url") or "(default)")
+    preflight_table.add_row("Provider", provider.get("type") or "opencode")
+    preflight_table.add_row("Config", provider.get("config_path") or "(unset)")
+    preflight_table.add_row("Config present", "yes" if provider.get("config_present") else "no")
     preflight_table.add_row("Errors", ", ".join(errors) if errors else "-")
     preflight_table.add_row("Warnings", ", ".join(warnings) if warnings else "-")
     console.print(Panel(preflight_table, title="Preflight", border_style=("green" if ready else "red")))
@@ -396,7 +397,7 @@ def config(key_value):
     Examples:
         jarvis config                          # show all
         jarvis config budget.session=100       # set session budget to $100
-        jarvis config models.executor=glm-4.7  # use GLM 4.7
+        jarvis config models.executor=opencode/glm-5-free  # pin OpenCode free model
     """
     cfg = JarvisConfig.load()
     if not key_value:

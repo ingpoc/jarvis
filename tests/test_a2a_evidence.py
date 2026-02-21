@@ -223,8 +223,8 @@ class TestConcurrency:
 
         print("\n=== A6 CONCURRENCY EVIDENCE ===")
         print("1. JarvisAgentExecutor.submit_task accepts context_id parameter")
-        print("2. SessionManager._clients is dict[str, ClaudeSDKClient]")
-        print("3. Each channel gets isolated ClaudeSDKClient instance")
+        print("2. SessionManager keeps compatibility map for per-channel placeholders")
+        print("3. OpenCode runtime removes Claude SDK client allocation")
         print("4. No shared mutable channel field on orchestrator")
         print("=== END CONCURRENCY EVIDENCE ===\n")
 
@@ -689,37 +689,17 @@ class TestJSONRPCExamples:
 
 
 class TestSessionManagerLifecycle:
-    """A5: SessionManager SDK lifecycle (connect/disconnect) tests."""
+    """A5: SessionManager compatibility behavior in OpenCode-only runtime."""
 
     @pytest.mark.asyncio
-    async def test_session_manager_connect_disconnect_called(self, monkeypatch):
-        """A5-B2: New channel client is connected once; disconnect invoked on close."""
-        import jarvis.session_manager as sm
+    async def test_session_manager_get_client_is_disabled(self):
+        """A5-B2: SDK client creation is intentionally disabled."""
         from jarvis.config import JarvisConfig
+        from jarvis.session_manager import SessionManager
 
-        class DummyClient:
-            def __init__(self, options=None):
-                self.options = options
-                self.connect_calls = 0
-                self.disconnect_calls = 0
-
-            async def connect(self):
-                self.connect_calls += 1
-
-            async def disconnect(self):
-                self.disconnect_calls += 1
-
-        monkeypatch.setattr(sm, "ClaudeSDKClient", DummyClient)
-
-        mgr = sm.SessionManager(JarvisConfig.load())
-
-        c1 = await mgr.get_client("chan-1", options=None)
-        c2 = await mgr.get_client("chan-1", options=None)
-        assert c1 is c2
-        assert c1.connect_calls == 1
-
-        await mgr.close_client("chan-1")
-        assert c1.disconnect_calls == 1
+        mgr = SessionManager(JarvisConfig.load())
+        with pytest.raises(RuntimeError, match="unavailable"):
+            await mgr.get_client("chan-1", options=None)
 
 
 if __name__ == "__main__":
