@@ -1,0 +1,228 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.19-2",
+    "lastTouchedAt": "2026-02-21T14:45:26.670Z"
+  },
+  "wizard": {
+    "lastRunAt": "2026-01-27T08:38:50.426Z",
+    "lastRunVersion": "2026.1.24-3",
+    "lastRunCommand": "onboard",
+    "lastRunMode": "local"
+  },
+  "browser": {
+    "enabled": false,
+    "headless": true,
+    "noSandbox": true,
+    "attachOnly": false
+  },
+  "auth": {
+    "profiles": {}
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openrouter/openrouter/free",
+        "fallbacks": [
+          "openrouter/stepfun/step-3.5-flash:free",
+          "openrouter/arcee-ai/trinity-mini:free"
+        ]
+      },
+      "models": {
+        "openrouter/openrouter/free": {},
+        "openrouter/stepfun/step-3.5-flash:free": {},
+        "openrouter/arcee-ai/trinity-mini:free": {}
+      },
+      "workspace": "/Users/gurusharan/Documents/remote-claude/Research/clawdbot/workspace",
+      "compaction": {
+        "mode": "safeguard",
+        "memoryFlush": {
+          "enabled": true,
+          "softThresholdTokens": "***REDACTED***",
+          "prompt": "Write durable notes to memory/YYYY-MM-DD.md and update references/research-ledger.md if relevant. Reply NO_REPLY if nothing to store.",
+          "systemPrompt": "Session nearing compaction. Store durable memory now."
+        }
+      },
+      "heartbeat": {
+        "every": "15m"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      },
+      "sandbox": {
+        "mode": "off",
+        "workspaceAccess": "***REDACTED***",
+        "scope": "agent",
+        "docker": {
+          "readOnlyRoot": true,
+          "network": "none",
+          "user": "1000:1000",
+          "capDrop": [
+            "ALL"
+          ]
+        }
+      }
+    }
+  },
+  "tools": {
+    "allow": [
+      "group:plugins",
+      "group:sessions",
+      "group:messaging",
+      "group:automation",
+      "lobster",
+      "llm-task",
+      "cron"
+    ],
+    "deny": [
+      "browser",
+      "canvas",
+      "gateway",
+      "group:fs",
+      "group:runtime",
+      "group:ui",
+      "group:web",
+      "nodes"
+    ],
+    "elevated": {
+      "enabled": false,
+      "allowFrom": {
+        "slack": [
+          "#all-clawdbot",
+          "#aadharchain"
+        ],
+        "webchat": [
+          "session:*"
+        ]
+      }
+    },
+    "exec": {
+      "host": "gateway",
+      "security": "full",
+      "backgroundMs": 10000,
+      "timeoutSec": 1800,
+      "cleanupMs": 1800000
+    }
+  },
+  "messages": {
+    "ackReaction": "eyes",
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true
+  },
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "boot-md": {
+          "enabled": true
+        },
+        "command-logger": {
+          "enabled": true
+        },
+        "session-memory": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "channels": {
+    "slack": {
+      "mode": "socket",
+      "webhookPath": "***REDACTED***",
+      "enabled": true,
+      "botToken": "***REDACTED***",
+      "appToken": "***REDACTED***",
+      "userTokenReadOnly": "***REDACTED***",
+      "groupPolicy": "allowlist",
+      "channels": {
+        "#all-clawdbot": {
+          "allow": true
+        },
+        "#aadharchain": {
+          "allow": true
+        }
+      }
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "controlUi": {
+      "enabled": false
+    },
+    "auth": {
+      "mode": "token",
+      "token": "***REDACTED***"
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "skills": {
+    "load": {
+      "extraDirs": [
+        "~/.openclaw/skills"
+      ],
+      "watch": true,
+      "watchDebounceMs": 250
+    },
+    "install": {
+      "preferBrew": true,
+      "nodeManager": "npm"
+    }
+  },
+  "plugins": {
+    "allow": [
+      "mcp-bridge",
+      "slack",
+      "lobster",
+      "llm-task",
+      "thread-ownership",
+      "jarvis-bridge"
+    ],
+    "load": {
+      "paths": []
+    },
+    "entries": {
+      "slack": {
+        "enabled": true
+      },
+      "mcp-bridge": {
+        "enabled": true
+      },
+      "lobster": {
+        "enabled": true
+      },
+      "llm-task": {
+        "enabled": true
+      },
+      "thread-ownership": {
+        "enabled": false
+      },
+      "jarvis-bridge": {
+        "enabled": true,
+        "config": {
+          "baseUrl": "http://127.0.0.1:9848",
+          "tokenPath": "***REDACTED***",
+          "defaultWait": false,
+          "defaultTimeoutSec": 300,
+          "defaultScopeKey": "global",
+          "pollMs": 1000
+        }
+      }
+    }
+  }
+}
