@@ -48,3 +48,33 @@ Optional auth overrides:
   - Delegate in small atomic steps with explicit completion tokens (`DONE_STEP1`, `DONE_STEP2`, ...).
   - Default to non-blocking (`wait=false`) and only use `wait=true` for bounded checks.
   - For coding tasks, explicitly state `OPENCODE ONLY` in the delegated task text.
+
+## Validation Quickstart
+
+Use Jarvis A2A/task-store evidence as the source of truth.
+
+```bash
+# 1) Health
+openclaw gateway health
+python3 -m jarvis.cli a2a health -j
+
+# 2) Delegate from OpenClaw (non-blocking)
+openclaw gateway call jarvis.delegateTask \
+  --params '{"task":"OPENCODE ONLY. Reply with exactly: OPENCLAW_A2A_CHECK_OK","wait":false,"jobId":"validation-a2a"}' \
+  --timeout 60000 --json
+
+# 3) Get latest A2A task created for that job/context
+sqlite3 ~/.jarvis/jarvis.db \
+  "select id,status,context_id,result from a2a_tasks where context_id='ctx-validation-a2a' order by created_at desc limit 1;"
+
+# 4) Verify via A2A tasks/get
+python3 -m jarvis.cli a2a get <a2a-task-id> -j
+```
+
+Expected:
+- A2A task status is `completed`
+- result is `OPENCLAW_A2A_CHECK_OK`
+
+Note:
+- Gateway `wait` calls can timeout while Jarvis still completes the task.
+- Prefer A2A task status + timeline over gateway wait response for final validation.

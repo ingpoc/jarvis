@@ -197,9 +197,36 @@ Verification after updates:
 4. In OpenClaw chat: `/jarvis-coder refactor auth middleware` delegates to Jarvis.
 5. In OpenClaw chat: `/jarvis-chief audit this repo and propose refactor plan` delegates to Jarvis.
 6. Optional explicit command path: `/jarvis add retries to HTTP client`.
-6. Direct RPC check:
+7. Direct RPC check:
    - `openclaw gateway call jarvis.delegateTask --params '{"task":"Reply with exactly: OPENCLAW_JARVIS_OK","wait":true}' --timeout 180000 --json`
    - Expect `final.status: completed` and `final.result: OPENCLAW_JARVIS_OK`.
+
+## Validation Runbook (Authoritative)
+
+Use this flow for deterministic end-to-end validation of OpenClaw -> Jarvis delegation.
+
+1. Pre-flight gateway/A2A:
+   - `openclaw gateway health`
+   - `python3 -m jarvis.cli a2a health -j`
+2. Submit non-blocking delegated task from OpenClaw:
+   - `openclaw gateway call jarvis.delegateTask --params '{"task":"OPENCODE ONLY. Reply with exactly: OPENCLAW_A2A_CHECK_OK","wait":false,"jobId":"validation-a2a"}' --timeout 60000 --json`
+3. Query Jarvis A2A store by context/job correlation:
+   - `sqlite3 ~/.jarvis/jarvis.db "select id,status,context_id,result,created_at,updated_at from a2a_tasks where context_id='ctx-validation-a2a' order by created_at desc limit 1;"`
+4. Verify canonical A2A task status directly:
+   - `python3 -m jarvis.cli a2a get <a2a-task-id> -j`
+5. Optional timeline evidence:
+   - `sqlite3 ~/.jarvis/jarvis.db "select datetime(timestamp,'unixepoch','localtime'),event_type,summary,task_id from timeline_events where task_id='<task-id>' order by timestamp asc;"`
+
+Expected pass criteria:
+- `a2a_tasks.status = completed`
+- A2A `tasks/get` returns `status: completed`
+- `result` matches expected token exactly
+- timeline includes `task_start`, `task_execution_config provider=opencode`, and `task_complete`
+
+Important:
+- Gateway call can timeout (`1006`/`gateway timeout`) while Jarvis still completes the task.
+- Treat OpenClaw gateway wait-response as secondary signal.
+- Treat Jarvis A2A task store + timeline as primary truth.
 
 ## Delegation Reliability Notes (2026-02-20)
 
