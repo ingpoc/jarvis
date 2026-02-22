@@ -73,6 +73,19 @@ const JarvisTaskSchema = {
       maximum: 10000,
       description: "Polling interval when wait=true.",
     },
+    researchHandoff: {
+      type: "object",
+      additionalProperties: false,
+      description: "Optional structured research verdict handoff for Jarvis gating.",
+      properties: {
+        researchId: { type: "string" },
+        proposedVerdict: { type: "string", enum: ["adopt", "adapt", "skip"] },
+        confidence: { type: "number", minimum: 0, maximum: 1 },
+        mustUseInWorkflow: { type: "boolean" },
+        notes: { type: "string" },
+      },
+      required: ["researchId", "proposedVerdict"],
+    },
   },
 } as const;
 
@@ -270,6 +283,42 @@ function normalizeGatewayPayload(payload: unknown): Record<string, unknown> {
   return root;
 }
 
+type ResearchHandoff = {
+  researchId: string;
+  proposedVerdict: "adopt" | "adapt" | "skip";
+  confidence?: number;
+  mustUseInWorkflow?: boolean;
+  notes?: string;
+};
+
+function normalizeResearchHandoff(params: Record<string, unknown>): ResearchHandoff | null {
+  const raw = asRecord(params.researchHandoff) ?? asRecord(params.research_handoff);
+  if (!raw) {
+    return null;
+  }
+  const researchId = String(raw.researchId || "").trim();
+  const proposedVerdict = String(raw.proposedVerdict || "").trim().toLowerCase();
+  if (!researchId || !["adopt", "adapt", "skip"].includes(proposedVerdict)) {
+    return null;
+  }
+
+  const handoff: ResearchHandoff = {
+    researchId,
+    proposedVerdict: proposedVerdict as ResearchHandoff["proposedVerdict"],
+  };
+
+  if (typeof raw.confidence === "number" && Number.isFinite(raw.confidence)) {
+    handoff.confidence = Math.max(0, Math.min(1, raw.confidence));
+  }
+  if (typeof raw.mustUseInWorkflow === "boolean") {
+    handoff.mustUseInWorkflow = raw.mustUseInWorkflow;
+  }
+  if (typeof raw.notes === "string" && raw.notes.trim()) {
+    handoff.notes = raw.notes.trim();
+  }
+  return handoff;
+}
+
 async function executeJarvisCodeTask(
   api: OpenClawPluginApi,
   _toolCallId: string,
@@ -281,6 +330,7 @@ async function executeJarvisCodeTask(
   if (!task) {
     return toResult({ error: "Missing task. Provide `task` or command args." });
   }
+  const researchHandoff = normalizeResearchHandoff(params);
 
   const wait = Boolean(params.wait ?? cfg.defaultWait ?? false);
   const timeoutSec = Number(params.timeoutSec ?? cfg.defaultTimeoutSec ?? 300);
@@ -325,8 +375,11 @@ async function executeJarvisCodeTask(
   const baseUrl = resolveBaseUrl(cfg);
   const token = await resolveToken(cfg);
 
+  const delegatedMessage = researchHandoff
+    ? `${task}\n\n[RESEARCH_HANDOFF_JSON]\n${JSON.stringify(researchHandoff)}\n[/RESEARCH_HANDOFF_JSON]`
+    : task;
   const sendParams: JsonObject = {
-    message: task,
+    message: delegatedMessage,
     blocking: false,
     contextId,
   };
@@ -370,6 +423,7 @@ async function executeJarvisCodeTask(
             resumeSessionId: resumeSessionId || undefined,
             resumeSource,
             getTask: "Use jobId/contextId for follow-ups to keep the same Jarvis/OpenCode context.",
+            researchHandoff: researchHandoff || undefined,
           },
       },
       "Delegated to Jarvis (non-blocking).",
@@ -409,6 +463,7 @@ async function executeJarvisCodeTask(
             resumeSessionId: resumeSessionId || undefined,
             resumeSource,
             opencodeSessionId,
+            researchHandoff: researchHandoff || undefined,
           },
         },
         `Delegated to Jarvis and completed with status: ${status}.`,

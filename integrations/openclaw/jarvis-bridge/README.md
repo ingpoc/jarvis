@@ -48,6 +48,34 @@ Optional auth overrides:
   - Delegate in small atomic steps with explicit completion tokens (`DONE_STEP1`, `DONE_STEP2`, ...).
   - Default to non-blocking (`wait=false`) and only use `wait=true` for bounded checks.
   - For coding tasks, explicitly state `OPENCODE ONLY` in the delegated task text.
+- Research-to-execution quality gate (recommended):
+  - Pass `researchHandoff` for research-driven implementation tasks.
+  - Jarvis will gate execution by verdict (`adopt`/`adapt`/`skip`) and require a machine-readable quality outcome.
+  - `tasks/get` artifacts will include `research_gate` and `quality_assessment` for deterministic validation.
+
+## Structured research handoff
+
+Optional delegation field:
+
+```json
+{
+  "task": "OPENCODE ONLY. Implement queued execution item.",
+  "wait": false,
+  "jobId": "research-eval-impl",
+  "researchHandoff": {
+    "researchId": "evaluation-2026-02-21",
+    "proposedVerdict": "adopt",
+    "confidence": 0.9,
+    "mustUseInWorkflow": true,
+    "notes": "Use reliability checklist before completion."
+  }
+}
+```
+
+Behavior:
+- `proposedVerdict=skip` blocks execution and returns failed with a research gate reason.
+- `adopt`/`adapt` proceed but must emit a `QUALITY_RESULT_JSON` block.
+- Missing/invalid quality block or non-`passed` quality outcome is treated as failed for that delegated run.
 
 ## Validation Quickstart
 
@@ -75,6 +103,11 @@ Expected:
 - A2A task status is `completed`
 - result is `OPENCLAW_A2A_CHECK_OK`
 
+For research handoff tasks, also verify:
+- artifacts include `research_gate` and `quality_assessment`
+- `quality_assessment.quality_outcome` is `passed`
+
 Note:
 - Gateway `wait` calls can timeout while Jarvis still completes the task.
 - Prefer A2A task status + timeline over gateway wait response for final validation.
+- After editing bridge source, run `openclaw gateway restart` before re-testing.

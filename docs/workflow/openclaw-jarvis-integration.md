@@ -228,6 +228,59 @@ Important:
 - Treat OpenClaw gateway wait-response as secondary signal.
 - Treat Jarvis A2A task store + timeline as primary truth.
 
+## Most Efficient Workflow By Use Case
+
+Use this matrix as the default operating playbook.
+
+| Use case | Fastest reliable path | Accept/Done criteria |
+|---|---|---|
+| Quick delegation smoke test | `openclaw gateway call jarvis.delegateTask` with `wait:false` + simple token response | Matching token appears in `a2a_tasks.result` and `tasks/get` status is terminal |
+| Long coding/refactor execution | non-blocking delegate (`wait:false`) + stable `jobId` + follow-up on same `jobId` | task reaches terminal state and verification evidence exists in result/artifacts |
+| Research-driven implementation | include `researchHandoff` in payload (`researchId`, `proposedVerdict`, confidence) | artifacts include `research_gate` + `quality_assessment`; accept only when `quality_outcome=passed` |
+| Gateway unstable (`1006`, timeout) | keep delegation non-blocking, then validate from Jarvis A2A store directly (`python3 -m jarvis.cli a2a get`, `sqlite3 ~/.jarvis/jarvis.db ...`) | A2A/timeline evidence is consistent even if gateway call timed out |
+| Launchctl daemon bootstrap fails | run direct daemon for validation window: `python3 -m jarvis.daemon` | `python3 -m jarvis.cli a2a health -j` returns `status: ok` |
+
+Operational note:
+- After editing bridge runtime files under `integrations/openclaw/jarvis-bridge/`, always run `openclaw gateway restart` before any smoke call.
+- Verify loaded bridge source before validating new behavior:
+  - `openclaw plugins list --json | rg 'jarvis-bridge|source'`
+  - If source points to `~/.openclaw/extensions/jarvis-bridge/src/index.js`, repo edits in `integrations/openclaw/jarvis-bridge/` are not active until plugin sync/reinstall.
+
+## Research Verdict Gate (New)
+
+For research-driven execution, send structured handoff in the delegated payload:
+
+```bash
+openclaw gateway call jarvis.delegateTask --params '{
+  "task":"OPENCODE ONLY. Implement reliability checklist in Jarvis task launcher.",
+  "wait":false,
+  "jobId":"eval-reliability-impl",
+  "researchHandoff":{
+    "researchId":"evaluation-2026-02-21",
+    "proposedVerdict":"adopt",
+    "confidence":0.9,
+    "mustUseInWorkflow":true,
+    "notes":"Use validation+monitoring+post-check checklist."
+  }
+}' --timeout 60000 --json
+```
+
+Behavior contract:
+
+- `proposedVerdict=skip` blocks execution before runtime spend.
+- `adopt`/`adapt` proceed, but delegated output must include `QUALITY_RESULT_JSON`.
+- Missing/invalid quality block, verdict mismatch, or non-`passed` quality outcome returns failed.
+
+Validation contract (A2A truth):
+
+1. `python3 -m jarvis.cli a2a get <task-id> -j`
+2. Confirm artifacts include:
+   - `research_gate` (decision + reason)
+   - `quality_assessment` (`quality_outcome`, verification evidence)
+3. Accept only when:
+   - task status is `completed`
+   - `quality_assessment.quality_outcome = passed`
+
 ## Delegation Reliability Notes (2026-02-20)
 
 - Prefer non-blocking bridge default (`defaultWait: false`) and explicitly set `wait: true` only for bounded tasks.

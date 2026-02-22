@@ -138,6 +138,11 @@ A2A_STEPWISE_KEYWORDS = (
     "verify",
 )
 
+RESEARCH_HANDOFF_START = "[RESEARCH_HANDOFF_JSON]"
+RESEARCH_HANDOFF_END = "[/RESEARCH_HANDOFF_JSON]"
+QUALITY_RESULT_START = "[QUALITY_RESULT_JSON]"
+QUALITY_RESULT_END = "[/QUALITY_RESULT_JSON]"
+
 
 class JarvisOrchestrator:
     """Main Jarvis orchestration engine."""
@@ -437,6 +442,146 @@ class JarvisOrchestrator:
                 metadata={"source": source, "count": added, "urls": urls[:20]},
             )
         return added
+
+    @staticmethod
+    def _extract_tagged_block(
+        text: str,
+        *,
+        start_tag: str,
+        end_tag: str,
+    ) -> tuple[str, str | None]:
+        """Extract tagged block body and return (clean_text, body)."""
+        if not text:
+            return "", None
+        pattern = re.compile(
+            rf"{re.escape(start_tag)}\s*(.*?)\s*{re.escape(end_tag)}",
+            flags=re.DOTALL,
+        )
+        matches = list(pattern.finditer(text))
+        if not matches:
+            return text, None
+        body = matches[-1].group(1).strip()
+        clean_text = pattern.sub("", text).strip()
+        return clean_text, body
+
+    def _extract_research_handoff(self, text: str) -> tuple[str, dict[str, Any] | None]:
+        """Parse optional research handoff payload from delegated task text."""
+        clean_text, body = self._extract_tagged_block(
+            text,
+            start_tag=RESEARCH_HANDOFF_START,
+            end_tag=RESEARCH_HANDOFF_END,
+        )
+        if not body:
+            return clean_text, None
+        try:
+            raw = json.loads(body)
+        except Exception:
+            return clean_text, None
+        if not isinstance(raw, dict):
+            return clean_text, None
+
+        research_id = str(raw.get("researchId") or "").strip()
+        verdict = str(raw.get("proposedVerdict") or "").strip().lower()
+        if not research_id or verdict not in {"adopt", "adapt", "skip"}:
+            return clean_text, None
+
+        handoff: dict[str, Any] = {
+            "research_id": research_id,
+            "proposed_verdict": verdict,
+            "must_use_in_workflow": bool(raw.get("mustUseInWorkflow", False)),
+            "notes": str(raw.get("notes") or "").strip(),
+        }
+        if isinstance(raw.get("confidence"), (int, float)):
+            handoff["confidence"] = max(0.0, min(1.0, float(raw["confidence"])))
+        return clean_text, handoff
+
+    def _evaluate_research_handoff(self, handoff: dict[str, Any]) -> dict[str, Any]:
+        """Gate execution using structured research verdict."""
+        verdict = str(handoff.get("proposed_verdict") or "").strip().lower()
+        confidence = float(handoff.get("confidence", 0.0) or 0.0)
+        must_use = bool(handoff.get("must_use_in_workflow", False))
+        research_id = str(handoff.get("research_id") or "").strip()
+
+        if verdict == "skip":
+            allow_execution = False
+            reason = "Research verdict is skip; execution blocked to avoid low-value implementation."
+        elif verdict == "adapt":
+            allow_execution = True
+            reason = (
+                "Research verdict is adapt; execute with explicit constraints and verification."
+            )
+        else:
+            allow_execution = True
+            reason = "Research verdict is adopt; proceed with implementation."
+
+        return {
+            "research_id": research_id,
+            "decision": verdict,
+            "confidence": confidence,
+            "must_use_in_workflow": must_use,
+            "allow_execution": allow_execution,
+            "reason": reason,
+        }
+
+    def _augment_task_with_quality_contract(self, task_description: str, gate: dict[str, Any]) -> str:
+        """Append deterministic completion contract for research-driven execution."""
+        verdict = str(gate.get("decision") or "").strip().lower() or "adapt"
+        research_id = str(gate.get("research_id") or "").strip()
+        return (
+            f"{task_description}\n\n"
+            "Research handoff policy (mandatory):\n"
+            f"- research_id: {research_id}\n"
+            f"- verdict_to_use: {verdict}\n"
+            "- Ensure implementation follows this verdict before closing.\n"
+            "- Run concrete verification (tests/lint/build/check or equivalent).\n"
+            "- Final output must include this exact JSON block:\n"
+            f"{QUALITY_RESULT_START}\n"
+            '{\n'
+            '  "research_id": "<id>",\n'
+            '  "verdict_used": "adopt|adapt|skip",\n'
+            '  "quality_outcome": "passed|partial|failed",\n'
+            '  "verification_evidence": ["<command/evidence>", "..."],\n'
+            '  "reason": "<why this outcome>",\n'
+            '  "next_action": "<optional next step>"\n'
+            '}\n'
+            f"{QUALITY_RESULT_END}\n"
+        )
+
+    def _extract_quality_result(self, output_text: str) -> dict[str, Any] | None:
+        """Parse and validate mandatory quality contract block."""
+        _, body = self._extract_tagged_block(
+            output_text or "",
+            start_tag=QUALITY_RESULT_START,
+            end_tag=QUALITY_RESULT_END,
+        )
+        if not body:
+            return None
+        try:
+            raw = json.loads(body)
+        except Exception:
+            return None
+        if not isinstance(raw, dict):
+            return None
+
+        quality_outcome = str(raw.get("quality_outcome") or "").strip().lower()
+        verdict_used = str(raw.get("verdict_used") or "").strip().lower()
+        if quality_outcome not in {"passed", "partial", "failed"}:
+            return None
+        if verdict_used not in {"adopt", "adapt", "skip"}:
+            return None
+        evidence = raw.get("verification_evidence")
+        if not isinstance(evidence, list):
+            evidence = []
+        normalized_evidence = [str(item).strip() for item in evidence if str(item).strip()]
+
+        return {
+            "research_id": str(raw.get("research_id") or "").strip(),
+            "verdict_used": verdict_used,
+            "quality_outcome": quality_outcome,
+            "verification_evidence": normalized_evidence,
+            "reason": str(raw.get("reason") or "").strip(),
+            "next_action": str(raw.get("next_action") or "").strip(),
+        }
 
     def _build_system_prompt(self) -> str:
         """Build system prompt with project context and trust level."""
@@ -954,6 +1099,27 @@ class JarvisOrchestrator:
         # Store decision trace
         try:
             trace_outcome = "success" if result["status"] == "completed" else "failure"
+            trace_context: dict[str, Any] = {
+                "turns": result["turns"],
+                "cost": result["cost_usd"],
+                "route": route,
+            }
+            quality_assessment = result.get("quality_assessment")
+            if isinstance(quality_assessment, dict):
+                trace_context["quality_outcome"] = str(
+                    quality_assessment.get("quality_outcome") or ""
+                ).strip()
+                trace_context["verification_evidence_count"] = len(
+                    quality_assessment.get("verification_evidence")
+                    if isinstance(quality_assessment.get("verification_evidence"), list)
+                    else []
+                )
+            research_gate = result.get("research_gate")
+            if isinstance(research_gate, dict):
+                trace_context["research_id"] = str(research_gate.get("research_id") or "").strip()
+                trace_context["research_decision"] = str(
+                    research_gate.get("decision") or ""
+                ).strip()
             await self.tracer.store_trace(
                 category=TraceCategory.TASK_EXECUTION,
                 description=task_description[:500],
@@ -961,11 +1127,7 @@ class JarvisOrchestrator:
                     "Executed task "
                     f"(route={route}, specialist={specialist or 'none'})"
                 ),
-                context={
-                    "turns": result["turns"],
-                    "cost": result["cost_usd"],
-                    "route": route,
-                },
+                context=trace_context,
                 outcome=trace_outcome,
                 project_path=self.project_path,
             )
@@ -1158,6 +1320,7 @@ class JarvisOrchestrator:
         """
         # Note: we do NOT call set_channel() here to avoid mutating shared
         # _channel_id state and introducing race conditions with concurrent A2A tasks.
+        task_description, research_handoff = self._extract_research_handoff(task_description)
         if origin != "idle_research":
             self._ingest_research_urls_from_text(task_description, source=f"task:{origin}")
 
@@ -1166,6 +1329,8 @@ class JarvisOrchestrator:
         routed_description = task_description
         workflow_mode = ""
         workflow_reason = "autonomous_runtime"
+        _ = workflow_reason
+        research_gate: dict[str, Any] | None = None
 
         # Create task record
         task_id = f"task-{uuid.uuid4().hex[:8]}"
@@ -1206,6 +1371,56 @@ class JarvisOrchestrator:
             },
         )
 
+        if research_handoff:
+            research_gate = self._evaluate_research_handoff(research_handoff)
+            self.events.emit(
+                "research_gate_decision",
+                f"research={research_gate['research_id']} decision={research_gate['decision']}",
+                task_id=task_id,
+                metadata=research_gate,
+            )
+            if not research_gate["allow_execution"]:
+                blocked_result = {
+                    "task_id": task_id,
+                    "status": "failed",
+                    "cost_usd": 0.0,
+                    "turns": 0,
+                    "session_id": None,
+                    "output": (
+                        "Research gate blocked execution.\n"
+                        f"research_id={research_gate['research_id']} "
+                        f"decision={research_gate['decision']} "
+                        f"reason={research_gate['reason']}"
+                    ),
+                    "research_gate": research_gate,
+                    "quality_assessment": {
+                        "research_id": research_gate["research_id"],
+                        "verdict_used": research_gate["decision"],
+                        "quality_outcome": "failed",
+                        "verification_evidence": [],
+                        "reason": research_gate["reason"],
+                        "next_action": "Revise research verdict before delegation.",
+                    },
+                }
+                return await self._finalize_task_result(
+                    result=blocked_result,
+                    provider_type=provider_type,
+                    specialist=specialist,
+                    task_description=task_description,
+                    tool_calls=[],
+                    task_id=task_id,
+                    route=route,
+                    workflow_mode=workflow_mode,
+                    origin=origin,
+                    emit_notifications=emit_notifications,
+                    callback=callback,
+                )
+
+            routed_description = self._augment_task_with_quality_contract(
+                routed_description,
+                research_gate,
+            )
+
         opencode_result = await self._run_task_opencode(
             task_id,
             routed_description,
@@ -1214,6 +1429,50 @@ class JarvisOrchestrator:
             channel_id=channel_id,
             resume_session_id=resume_session_id,
         )
+        if research_gate:
+            quality = self._extract_quality_result(str(opencode_result.get("output") or ""))
+            if quality is None:
+                quality = {
+                    "research_id": research_gate["research_id"],
+                    "verdict_used": research_gate["decision"],
+                    "quality_outcome": "failed",
+                    "verification_evidence": [],
+                    "reason": (
+                        "Missing or invalid quality result block. "
+                        f"Expected tags {QUALITY_RESULT_START}...{QUALITY_RESULT_END}."
+                    ),
+                    "next_action": "Re-run delegated task with mandatory quality block.",
+                }
+                opencode_result["status"] = "failed"
+                opencode_result["output"] = (
+                    (str(opencode_result.get("output") or "")).strip()
+                    + "\n\nQuality contract failed: missing/invalid QUALITY_RESULT_JSON block."
+                ).strip()
+            else:
+                if quality["verdict_used"] != research_gate["decision"]:
+                    opencode_result["status"] = "failed"
+                    opencode_result["output"] = (
+                        (str(opencode_result.get("output") or "")).strip()
+                        + "\n\nQuality contract failed: verdict_used does not match research gate decision."
+                    ).strip()
+                if quality["quality_outcome"] != "passed":
+                    opencode_result["status"] = "failed"
+                    opencode_result["output"] = (
+                        (str(opencode_result.get("output") or "")).strip()
+                        + f"\n\nQuality outcome not passed: {quality['quality_outcome']}."
+                    ).strip()
+            opencode_result["research_gate"] = research_gate
+            opencode_result["quality_assessment"] = quality
+            self.events.emit(
+                "research_quality_outcome",
+                f"research={research_gate['research_id']} outcome={quality['quality_outcome']}",
+                task_id=task_id,
+                metadata={
+                    "research_gate": research_gate,
+                    "quality_assessment": quality,
+                },
+            )
+
         return await self._finalize_task_result(
             result=opencode_result,
             provider_type=provider_type,

@@ -61,3 +61,4 @@ config/.openclaw
 
 # Local task scratch/worktree artifacts
 tmp/
+nanoclaw/

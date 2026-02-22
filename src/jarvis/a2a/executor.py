@@ -1,6 +1,7 @@
 """A2A Executor: bridges A2A protocol to Jarvis Orchestrator."""
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any
@@ -149,6 +150,23 @@ class JarvisAgentExecutor:
                         content=result_text,
                         mime_type="text/plain",
                     )
+                if isinstance(orchestrator_result, dict):
+                    research_gate = orchestrator_result.get("research_gate")
+                    if isinstance(research_gate, dict):
+                        self.task_store.add_artifact(
+                            task.id,
+                            name="research_gate",
+                            content=json.dumps(research_gate, ensure_ascii=True),
+                            mime_type="application/json",
+                        )
+                    quality_assessment = orchestrator_result.get("quality_assessment")
+                    if isinstance(quality_assessment, dict):
+                        self.task_store.add_artifact(
+                            task.id,
+                            name="quality_assessment",
+                            content=json.dumps(quality_assessment, ensure_ascii=True),
+                            mime_type="application/json",
+                        )
                 if opencode_session_id:
                     self.task_store.add_artifact(
                         task.id,

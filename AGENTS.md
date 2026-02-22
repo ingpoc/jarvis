@@ -94,6 +94,7 @@ If grep returns empty → wrong account. Repeat the export steps. See `docs/work
 | Fail loud | On tool/data failures: fallback or report blocker. Never continue with missing evidence. |
 | Learn every fix | After non-trivial failure→fix, store a project-scoped context trace. |
 | Memory-first continuity | Promote repeated durable learnings to `memory/` with typed notes and priorities. |
+| Survival-of-the-fittest workflow | If a workflow uncovered during build/debug is more reliable, faster, or more efficient, adopt it and update both `AGENTS.md` and `docs/` immediately. |
 
 ---
 
@@ -117,6 +118,9 @@ For tasks delegated from OpenClaw to Jarvis over A2A:
 3. Frontend/UI tasks are incomplete unless browser-based validation is included.
 4. Large parallel work should follow `docs/workflow/opencode-parallel-worktrees.md`.
 5. Keep OpenClaw as router/research layer; keep Jarvis as execution layer.
+6. For research-driven implementation, pass `researchHandoff`; accept completion only when A2A artifacts include `quality_assessment` with `quality_outcome=passed`.
+7. Prefer non-blocking delegation + A2A truth (`tasks/get` / `a2a_tasks`) over gateway wait responses for validation.
+8. After editing `integrations/openclaw/jarvis-bridge/*`, run `openclaw gateway restart` before smoke tests.
 
 ---
 
