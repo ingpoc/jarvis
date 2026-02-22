@@ -32,6 +32,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import click
 from rich.console import Console
@@ -500,7 +501,7 @@ def _emit_json_or_table(payload: dict, json_output: bool, title: str = "A2A") ->
 @cli.group("a2a", invoke_without_command=True)
 @click.pass_context
 def a2a(ctx):
-    """Jarvis A2A bridge helpers for external agents (for example OpenClaw)."""
+    """Jarvis A2A bridge helpers for external agents (for example NanoClaw)."""
     if ctx.invoked_subcommand is None:
         console.print("[dim]Use: jarvis a2a health|card|send|get|wait|cancel[/]")
 
@@ -536,7 +537,6 @@ def a2a_card(base_url, json_output):
 @click.option("--token-path", default=None, help="Path to token file (default: ~/.jarvis/system/jarvis_config/a2a_token)")
 @click.option("--context-id", default=None, help="Optional context id for session isolation")
 @click.option("--resume-session-id", default=None, help="Optional OpenCode session id to resume explicitly")
-@click.option("--blocking/--non-blocking", default=False, help="Use A2A blocking execution mode")
 @click.option("--wait", "wait_for_completion", is_flag=True, help="Poll task until terminal state")
 @click.option("--timeout", default=120.0, type=float, show_default=True, help="Wait timeout in seconds")
 @click.option("--poll-interval", default=1.0, type=float, show_default=True, help="Wait poll interval in seconds")
@@ -548,7 +548,6 @@ def a2a_send(
     token_path,
     context_id,
     resume_session_id,
-    blocking,
     wait_for_completion,
     timeout,
     poll_interval,
@@ -557,9 +556,10 @@ def a2a_send(
     """Send a message to Jarvis over A2A JSON-RPC."""
     try:
         client = _a2a_client(base_url, token=token, token_path=token_path)
+        run_id = f"cli-{uuid4().hex[:16]}"
         submitted = client.send_message(
-            message,
-            blocking=blocking,
+            run_id=run_id,
+            message=message,
             context_id=context_id,
             resume_session_id=resume_session_id,
         )

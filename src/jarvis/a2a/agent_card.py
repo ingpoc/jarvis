@@ -39,7 +39,7 @@ def build_agent_card(
         port: Port number, used to construct base_url if not provided
     """
     if capabilities is None:
-        capabilities = ["text", "streaming", "artifacts"]
+        capabilities = ["text", "artifacts"]
 
     # Use base_url if provided, otherwise construct from port
     if not base_url:
@@ -66,11 +66,6 @@ def build_agent_card(
                 "url": f"{base_url}/",
                 "method": "POST",
                 "description": "Cancel a running task (JSON-RPC 2.0)",
-            },
-            "stream": {
-                "url": f"{base_url}/stream/{{task_id}}",
-                "method": "GET",
-                "description": "SSE stream for task updates",
             },
         },
         "authentication": {

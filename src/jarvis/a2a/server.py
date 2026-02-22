@@ -6,13 +6,10 @@ from typing import Any
 
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from sse_starlette.sse import EventSourceResponse
 
 from jarvis.a2a.auth import validate_bearer_token
 from jarvis.a2a.agent_card import build_agent_card
 from jarvis.a2a.executor import JarvisAgentExecutor
-from jarvis.a2a.models import A2ATaskState
-from jarvis.a2a.streaming import stream_task_updates
 from jarvis.config import JarvisConfig
 
 logger = logging.getLogger(__name__)
@@ -146,8 +143,6 @@ def create_a2a_app(config: JarvisConfig, orchestrator: Any = None, project_path:
 
         if method == "message/send":
             return await handle_message_send(params, request_id)
-        elif method == "message/stream":
-            return await handle_message_stream(params, request_id, request)
         elif method == "tasks/get":
             return await handle_tasks_get(params, request_id)
         elif method == "tasks/cancel":
@@ -157,69 +152,43 @@ def create_a2a_app(config: JarvisConfig, orchestrator: Any = None, project_path:
 
     async def handle_message_send(params: dict, request_id: Any) -> JSONResponse:
         """Handle message/send method."""
+        run_id = str(params.get("runId") or params.get("run_id") or "").strip()
         message = params.get("message") or params.get("content", {}).get("message")
+        if not run_id:
+            return jsonrpc_error(-32602, "Missing 'runId' parameter", request_id)
         if not message:
             return jsonrpc_error(-32602, "Missing 'message' parameter", request_id)
 
         blocking = params.get("blocking", False)
+        if bool(blocking):
+            return jsonrpc_error(-32602, "blocking=true is not supported; use non-blocking submit + tasks/get", request_id)
         context_id = params.get("contextId") or params.get("context_id")
         resume_session_id = params.get("resumeSessionId") or params.get("resume_session_id")
+        task_type = params.get("taskType") or params.get("task_type")
+        priority = params.get("priority")
+        retry_policy = params.get("retryPolicy") or params.get("retry_policy")
+        timeouts = params.get("timeouts")
 
         task = await executor.submit_task(
+            run_id=run_id,
             message=message,
             blocking=blocking,
             context_id=context_id,
             resume_session_id=resume_session_id,
+            task_type=task_type,
+            priority=priority,
+            retry_policy=retry_policy,
+            timeouts=timeouts,
         )
 
         return JSONResponse(content={
             "jsonrpc": "2.0",
             "result": {
                 "taskId": task.id,
+                "runId": task.run_id,
                 "status": task.status.value,
                 "createdAt": task.created_at,
-            },
-            "id": request_id,
-        })
-
-    async def handle_message_stream(params: dict, request_id: Any, request: Request) -> JSONResponse:
-        """Handle message/stream JSON-RPC method.
-
-        Returns SSE stream URL for the client to connect to.
-        Actual streaming happens via GET /stream/{task_id} endpoint.
-        """
-        task_id = params.get("taskId") or params.get("task_id")
-
-        if task_id:
-            # Return stream URL for existing task
-            task = await executor.get_task(task_id)
-            if not task:
-                return jsonrpc_error(-32602, f"Task not found: {task_id}", request_id, 404)
-        else:
-            # Create new task for streaming
-            message = params.get("message") or params.get("content", {}).get("message")
-            if not message:
-                return jsonrpc_error(-32602, "Missing 'message' or 'taskId' parameter", request_id)
-
-            context_id = params.get("contextId") or params.get("context_id")
-            resume_session_id = params.get("resumeSessionId") or params.get("resume_session_id")
-            task = await executor.submit_task(
-                message=message,
-                blocking=False,  # Non-blocking for streaming
-                context_id=context_id,
-                resume_session_id=resume_session_id,
-            )
-            task_id = task.id
-
-        # Construct stream URL from request base URL
-        base_url = _get_base_url(request)
-        stream_url = f"{base_url}/stream/{task_id}"
-        return JSONResponse(content={
-            "jsonrpc": "2.0",
-            "result": {
-                "taskId": task_id,
-                "streamUrl": stream_url,
-                "status": task.status.value if task else "submitted",
+                "updatedAt": task.updated_at,
             },
             "id": request_id,
         })
@@ -236,6 +205,7 @@ def create_a2a_app(config: JarvisConfig, orchestrator: Any = None, project_path:
 
         result = {
             "taskId": task.id,
+            "runId": task.run_id,
             "status": task.status.value,
             "createdAt": task.created_at,
             "updatedAt": task.updated_at,
@@ -284,15 +254,11 @@ def create_a2a_app(config: JarvisConfig, orchestrator: Any = None, project_path:
             "jsonrpc": "2.0",
             "result": {
                 "taskId": task.id,
+                "runId": task.run_id,
                 "status": task.status.value,
             },
             "id": request_id,
         })
-
-    @app.get("/stream/{task_id}")
-    async def stream_endpoint(task_id: str, _: bool = Depends(verify_auth)):
-        """SSE streaming for task updates."""
-        return EventSourceResponse(stream_task_updates(task_id))
 
     @app.get("/health")
     async def health_check():

@@ -32,6 +32,15 @@ class _FastOrchestrator:
         return {"output": "ok"}
 
 
+class _CountingOrchestrator:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def run_task(self, **kwargs):  # noqa: ANN003
+        self.calls += 1
+        return {"output": "ok", "usage": {"input_tokens": 10, "output_tokens": 20}}
+
+
 @pytest.mark.asyncio
 async def test_non_blocking_task_enforces_timeout_watchdog() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -45,7 +54,7 @@ async def test_non_blocking_task_enforces_timeout_watchdog() -> None:
             orchestrator=_SlowOrchestrator(),
         )
 
-        task = await executor.submit_task("timeout me", blocking=False)
+        task = await executor.submit_task(run_id="run-timeout-1", message="timeout me", blocking=False)
         assert task.status in {A2ATaskState.SUBMITTED, A2ATaskState.WORKING}
 
         deadline = asyncio.get_event_loop().time() + 3
@@ -58,7 +67,7 @@ async def test_non_blocking_task_enforces_timeout_watchdog() -> None:
 
         assert latest is not None
         assert latest.status == A2ATaskState.FAILED
-        assert latest.error and "timed out after 1 seconds" in latest.error
+        assert latest.error and "TASK_TIMEOUT" in latest.error
         assert task.id not in executor.get_active_tasks()
 
 
@@ -75,6 +84,28 @@ async def test_orchestrator_path_skips_sdk_client_initialization() -> None:
             orchestrator=_FastOrchestrator(),
         )
 
-        task = await executor.submit_task("fast task", blocking=True)
+        task = await executor.submit_task(run_id="run-fast-1", message="fast task", blocking=True)
         assert task.status == A2ATaskState.COMPLETED
         assert task.result == "ok"
+
+
+@pytest.mark.asyncio
+async def test_submit_task_is_idempotent_by_run_id() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "a2a-idempotent.db"
+        store = A2ATaskStore(memory=MemoryStore(db_path=db_path))
+        config = SimpleNamespace(a2a=SimpleNamespace(task_timeout_seconds=5))
+        orchestrator = _CountingOrchestrator()
+        executor = JarvisAgentExecutor(
+            config=config,
+            task_store=store,
+            session_manager=_FailingSessionManager(),
+            orchestrator=orchestrator,
+        )
+
+        first = await executor.submit_task(run_id="run-dedupe-1", message="dedupe me", blocking=True)
+        second = await executor.submit_task(run_id="run-dedupe-1", message="dedupe me", blocking=True)
+
+        assert first.id == second.id
+        assert first.run_id == second.run_id == "run-dedupe-1"
+        assert orchestrator.calls == 1

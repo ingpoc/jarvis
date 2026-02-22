@@ -88,7 +88,7 @@ tests/
 
 ### Workspace Auto-Discovery
 
-When OpenClaw spawns OpenCode in `~/.jarvis/workspaces/`:
+When NanoClaw spawns OpenCode in `~/.jarvis/workspaces/`:
 
 1. Finds `opencode.json` → loads MCP servers + agents
 2. Finds `AGENTS.md` → loads workspace rules

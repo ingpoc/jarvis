@@ -41,12 +41,13 @@ def test_send_message_adds_auth_header_and_payload(tmp_path, monkeypatch):
 
     monkeypatch.setattr("jarvis.a2a.client.urllib.request.urlopen", _fake_urlopen)
     client = JarvisA2AClient(base_url="http://localhost:9848", token_path=token_path)
-    result = client.send_message("ping", blocking=False, context_id="ctx-1")
+    result = client.send_message(run_id="run-1", message="ping", context_id="ctx-1")
 
     assert result["taskId"] == "a2a-1"
     assert captured["url"] == "http://localhost:9848/"
     assert captured["auth"] == "Bearer abc123"
     assert captured["body"]["method"] == "message/send"
+    assert captured["body"]["params"]["runId"] == "run-1"
     assert captured["body"]["params"]["message"] == "ping"
     assert captured["body"]["params"]["contextId"] == "ctx-1"
 
@@ -68,7 +69,7 @@ def test_jsonrpc_error_payload_raises_client_error(tmp_path, monkeypatch):
     client = JarvisA2AClient(base_url="http://localhost:9848", token_path=token_path)
 
     with pytest.raises(A2AClientError, match="message/send failed"):
-        client.send_message("ping")
+        client.send_message(run_id="run-2", message="ping")
 
 
 def test_wait_for_task_returns_terminal_result(monkeypatch):
@@ -105,7 +106,7 @@ def test_http_error_raises_with_response_body(tmp_path, monkeypatch):
     client = JarvisA2AClient(base_url="http://localhost:9848", token_path=token_path)
 
     with pytest.raises(A2AClientError, match="HTTP 401"):
-        client.send_message("ping")
+        client.send_message(run_id="run-3", message="ping")
 
 
 def test_send_message_requires_token_when_missing(tmp_path):
@@ -117,4 +118,4 @@ def test_send_message_requires_token_when_missing(tmp_path):
         token_path=missing,
     )
     with pytest.raises(A2AClientError, match="Missing A2A token"):
-        client.send_message("ping")
+        client.send_message(run_id="run-4", message="ping")

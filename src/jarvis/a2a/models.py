@@ -62,6 +62,7 @@ class A2ATask:
     """A2A task representation."""
 
     id: str
+    run_id: str
     status: A2ATaskState
     message: str
     context_id: str | None = None

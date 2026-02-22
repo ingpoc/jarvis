@@ -8,7 +8,6 @@ import time
 import uuid
 
 from jarvis.a2a.models import A2AArtifact, A2ATask, A2ATaskState, map_internal_to_a2a
-from jarvis.config import JARVIS_HOME
 from jarvis.memory import MemoryStore
 
 logger = logging.getLogger(__name__)
@@ -18,6 +17,7 @@ logger = logging.getLogger(__name__)
 A2A_TASKS_TABLE = """
 CREATE TABLE IF NOT EXISTS a2a_tasks (
     id TEXT PRIMARY KEY,
+    run_id TEXT UNIQUE,
     status TEXT,
     message TEXT,
     context_id TEXT,
@@ -79,6 +79,15 @@ class A2ATaskStore:
                 conn = self._get_connection()
                 logger.info("_init_a2a_table: connection obtained")
                 conn.executescript(A2A_TASKS_TABLE)
+                columns = {
+                    row[1]
+                    for row in conn.execute("PRAGMA table_info(a2a_tasks)").fetchall()
+                }
+                if "run_id" not in columns:
+                    conn.execute("ALTER TABLE a2a_tasks ADD COLUMN run_id TEXT")
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_a2a_tasks_run_id ON a2a_tasks(run_id)"
+                )
                 logger.info("_init_a2a_table: script executed")
                 conn.commit()
                 logger.info("_init_a2a_table: commit successful")
@@ -91,7 +100,7 @@ class A2ATaskStore:
         try:
             with self._lock:
                 rows = self._get_connection().execute(
-                    "SELECT id, status, message, context_id, result, error, artifacts_json, created_at, updated_at "
+                    "SELECT id, run_id, status, message, context_id, result, error, artifacts_json, created_at, updated_at "
                     "FROM a2a_tasks WHERE status NOT IN (?, ?, ?, ?) ORDER BY updated_at DESC LIMIT 100",
                     list(terminal_states),
                 ).fetchall()
@@ -99,14 +108,15 @@ class A2ATaskStore:
             for row in rows:
                 task = A2ATask(
                     id=row[0],
-                    status=A2ATaskState(row[1]),
-                    message=row[2],
-                    context_id=row[3],
-                    result=row[4],
-                    error=row[5],
-                    artifacts=self._parse_artifacts(row[6]),
-                    created_at=row[7],
-                    updated_at=row[8],
+                    run_id=row[1],
+                    status=A2ATaskState(row[2]),
+                    message=row[3],
+                    context_id=row[4],
+                    result=row[5],
+                    error=row[6],
+                    artifacts=self._parse_artifacts(row[7]),
+                    created_at=row[8],
+                    updated_at=row[9],
                 )
                 self._a2a_tasks[task.id] = task
         except Exception as e:
@@ -132,15 +142,16 @@ class A2ATaskStore:
         with self._lock:
             self._get_connection().execute(
                 "INSERT OR REPLACE INTO a2a_tasks "
-                "(id, status, message, context_id, result, error, artifacts_json, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (task.id, task.status.value, task.message, task.context_id,
+                "(id, run_id, status, message, context_id, result, error, artifacts_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (task.id, task.run_id, task.status.value, task.message, task.context_id,
                  task.result, task.error, artifacts_json, task.created_at, task.updated_at),
             )
             self._get_connection().commit()
 
     def create_task(
         self,
+        run_id: str,
         message: str,
         context_id: str | None = None,
     ) -> A2ATask:
@@ -148,6 +159,7 @@ class A2ATaskStore:
         task_id = f"a2a-{uuid.uuid4().hex[:12]}"
         task = A2ATask(
             id=task_id,
+            run_id=run_id,
             status=A2ATaskState.SUBMITTED,
             message=message,
             context_id=context_id,
@@ -168,7 +180,7 @@ class A2ATaskStore:
         try:
             with self._lock:
                 row = self._get_connection().execute(
-                    "SELECT id, status, message, context_id, result, error, artifacts_json, created_at, updated_at "
+                    "SELECT id, run_id, status, message, context_id, result, error, artifacts_json, created_at, updated_at "
                     "FROM a2a_tasks WHERE id = ?",
                     (task_id,),
                 ).fetchone()
@@ -176,14 +188,15 @@ class A2ATaskStore:
             if row:
                 task = A2ATask(
                     id=row[0],
-                    status=A2ATaskState(row[1]),
-                    message=row[2],
-                    context_id=row[3],
-                    result=row[4],
-                    error=row[5],
-                    artifacts=self._parse_artifacts(row[6]),
-                    created_at=row[7],
-                    updated_at=row[8],
+                    run_id=row[1],
+                    status=A2ATaskState(row[2]),
+                    message=row[3],
+                    context_id=row[4],
+                    result=row[5],
+                    error=row[6],
+                    artifacts=self._parse_artifacts(row[7]),
+                    created_at=row[8],
+                    updated_at=row[9],
                 )
                 self._a2a_tasks[task_id] = task  # Cache it
                 return task
@@ -244,7 +257,7 @@ class A2ATaskStore:
         """List tasks with optional filters."""
         # Query from database for complete list
         try:
-            query = "SELECT id, status, message, context_id, result, error, artifacts_json, created_at, updated_at FROM a2a_tasks WHERE 1=1"
+            query = "SELECT id, run_id, status, message, context_id, result, error, artifacts_json, created_at, updated_at FROM a2a_tasks WHERE 1=1"
             params: list = []
 
             if context_id:
@@ -264,14 +277,15 @@ class A2ATaskStore:
             for row in rows:
                 task = A2ATask(
                     id=row[0],
-                    status=A2ATaskState(row[1]),
-                    message=row[2],
-                    context_id=row[3],
-                    result=row[4],
-                    error=row[5],
-                    artifacts=self._parse_artifacts(row[6]),
-                    created_at=row[7],
-                    updated_at=row[8],
+                    run_id=row[1],
+                    status=A2ATaskState(row[2]),
+                    message=row[3],
+                    context_id=row[4],
+                    result=row[5],
+                    error=row[6],
+                    artifacts=self._parse_artifacts(row[7]),
+                    created_at=row[8],
+                    updated_at=row[9],
                 )
                 tasks.append(task)
             return tasks
@@ -285,6 +299,40 @@ class A2ATaskStore:
                 tasks = [t for t in tasks if t.status == status]
             tasks.sort(key=lambda t: t.created_at, reverse=True)
             return tasks[:limit]
+
+    def get_task_by_run_id(self, run_id: str) -> A2ATask | None:
+        """Get task by run_id for idempotent dispatch deduplication."""
+        if not run_id:
+            return None
+
+        try:
+            with self._lock:
+                row = self._get_connection().execute(
+                    "SELECT id, run_id, status, message, context_id, result, error, artifacts_json, created_at, updated_at "
+                    "FROM a2a_tasks WHERE run_id = ?",
+                    (run_id,),
+                ).fetchone()
+
+            if not row:
+                return None
+
+            task = A2ATask(
+                id=row[0],
+                run_id=row[1],
+                status=A2ATaskState(row[2]),
+                message=row[3],
+                context_id=row[4],
+                result=row[5],
+                error=row[6],
+                artifacts=self._parse_artifacts(row[7]),
+                created_at=row[8],
+                updated_at=row[9],
+            )
+            self._a2a_tasks[task.id] = task
+            return task
+        except Exception as e:
+            logger.debug("Failed to get task by run_id %s: %s", run_id, e)
+            return None
 
     def close(self) -> None:
         """Close the database connection."""

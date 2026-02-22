@@ -49,11 +49,9 @@ class TestAgentCard:
         assert "message_send" in card["endpoints"]
         assert "tasks_get" in card["endpoints"]
         assert "tasks_cancel" in card["endpoints"]
-        assert "stream" in card["endpoints"]
 
         # Verify endpoint URLs match runtime port
         assert card["endpoints"]["message_send"]["url"] == "http://localhost:9848/"
-        assert card["endpoints"]["stream"]["url"] == "http://localhost:9848/stream/{task_id}"
 
         # Print exact JSON for Codex review evidence
         json_output = json.dumps(card, indent=2)
@@ -143,6 +141,7 @@ class TestTaskStore:
             # Create first store instance with the custom memory
             store1 = A2ATaskStore(memory=memory1)
             task = store1.create_task(
+                run_id="run-persist-1",
                 message="Test persistence task",
                 context_id="test-ctx-123",
             )
@@ -278,95 +277,6 @@ class TestAuthToken:
             assert not validate_bearer_token(None, str(token_path))
 
 
-class TestSSEStreaming:
-    """A7: SSE streaming end-to-end tests."""
-
-    @pytest.mark.asyncio
-    async def test_sse_task_lifecycle_events(self):
-        """A7-B1: Create task and observe task_started + terminal event through SSE stream."""
-        import asyncio
-        from jarvis.a2a.streaming import get_emitter, stream_task_updates
-        from jarvis.a2a.task_store import A2ATaskStore
-        from jarvis.a2a.models import A2ATaskState
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "test_sse.db"
-            from jarvis.memory import MemoryStore
-            memory = MemoryStore(db_path=db_path)
-            store = A2ATaskStore(memory=memory)
-            emitter = get_emitter()
-
-            # Create a task
-            task = store.create_task(message="SSE test task")
-            task_id = task.id
-
-            # Collected events
-            events_collected = []
-            stream_complete = asyncio.Event()
-
-            async def collect_events():
-                """Collect events from the SSE stream."""
-                async for event in stream_task_updates(task_id, timeout=5.0):
-                    events_collected.append(event)
-                    # Check if terminal state reached
-                    if "task_completed" in event or "task_failed" in event or "task_canceled" in event:
-                        stream_complete.set()
-                        break
-
-            async def emit_events():
-                """Simulate task lifecycle events."""
-                await asyncio.sleep(0.1)  # Let stream start
-
-                # Simulate task started
-                await emitter.emit(task_id, "task_started", {
-                    "taskId": task_id,
-                    "status": A2ATaskState.WORKING.value,
-                })
-
-                await asyncio.sleep(0.1)
-
-                # Simulate task completed
-                store.update_task_status(task_id, A2ATaskState.COMPLETED, result="Done")
-                await emitter.emit(task_id, "task_completed", {
-                    "taskId": task_id,
-                    "status": A2ATaskState.COMPLETED.value,
-                })
-
-            # Run stream collector and event emitter concurrently
-            collector_task = asyncio.create_task(collect_events())
-            await emit_events()
-
-            # Wait for collector to finish (with timeout)
-            try:
-                await asyncio.wait_for(stream_complete.wait(), timeout=3.0)
-            except asyncio.TimeoutError:
-                pass
-
-            collector_task.cancel()
-            try:
-                await collector_task
-            except asyncio.CancelledError:
-                pass
-
-            # Verify we got at least task_started and task_completed
-            event_types = []
-            for event in events_collected:
-                if "task_started" in event:
-                    event_types.append("task_started")
-                if "task_completed" in event:
-                    event_types.append("task_completed")
-
-            print(f"\n=== A7 SSE STREAMING EVIDENCE ===")
-            print(f"Task ID: {task_id}")
-            print(f"Events collected: {len(events_collected)}")
-            print(f"Event types: {event_types}")
-            print("=== END SSE EVIDENCE ===\n")
-
-            # We should have at least started and completed
-            assert "task_started" in event_types, "Should see task_started event"
-            assert "task_completed" in event_types, "Should see task_completed event"
-
-
 class TestA2AServerLifecycle:
     """A11: A2A server lifecycle tests."""
 
@@ -475,8 +385,9 @@ class TestJSONRPCExamples:
             "jsonrpc": "2.0",
             "method": "message/send",
             "params": {
+                "runId": "run-abc123",
                 "message": "Write a hello world function",
-                "blocking": True,
+                "blocking": False,
                 "contextId": "ctx-123"
             },
             "id": "req-001"
@@ -486,8 +397,10 @@ class TestJSONRPCExamples:
             "jsonrpc": "2.0",
             "result": {
                 "taskId": "a2a-abc123def456",
+                "runId": "run-abc123",
                 "status": "submitted",
-                "createdAt": 1700000000.0
+                "createdAt": 1700000000.0,
+                "updatedAt": 1700000000.0
             },
             "id": "req-001"
         }
@@ -499,35 +412,6 @@ class TestJSONRPCExamples:
         print(json.dumps(expected_response, indent=2))
         print("=== END JSON-RPC EXAMPLE ===\n")
 
-    def test_message_stream_request_response_example(self):
-        """A8-B1: Provide JSON-RPC request/response example for message/stream."""
-        request = {
-            "jsonrpc": "2.0",
-            "method": "message/stream",
-            "params": {
-                "message": "Write a hello world function",
-                "contextId": "ctx-123"
-            },
-            "id": "req-002"
-        }
-
-        expected_response = {
-            "jsonrpc": "2.0",
-            "result": {
-                "taskId": "a2a-abc123def456",
-                "streamUrl": "http://localhost:9848/stream/a2a-abc123def456",
-                "status": "submitted"
-            },
-            "id": "req-002"
-        }
-
-        print("\n=== A8 JSON-RPC EXAMPLE: message/stream ===")
-        print("REQUEST:")
-        print(json.dumps(request, indent=2))
-        print("\nRESPONSE:")
-        print(json.dumps(expected_response, indent=2))
-        print("=== END JSON-RPC EXAMPLE ===\n")
-
     def test_auth_failure_401_response(self):
         """A8-B1: Confirm auth failure returns 401 with structured error."""
         expected_401_response = {
@@ -536,7 +420,7 @@ class TestJSONRPCExamples:
                 "code": "invalid_token",
                 "message": "Invalid or missing Bearer token",
                 "remediation": "Provide valid token in Authorization header. "
-                               "Token file should be at ~/.jarvis/a2a_token"
+                               "Token file should be at ~/.jarvis/system/jarvis_config/a2a_token"
             }
         }
 
@@ -608,8 +492,8 @@ class TestJSONRPCExamples:
                 server_task.cancel()
 
     @pytest.mark.asyncio
-    async def test_runtime_stream_url_uses_request_host(self):
-        """A8-B2: streamUrl is derived from request base URL, not hard-coded."""
+    async def test_runtime_message_send_requires_run_id(self):
+        """A8-B2: message/send rejects missing runId with JSON-RPC error."""
         import asyncio
         import socket
         import httpx
@@ -648,37 +532,22 @@ class TestJSONRPCExamples:
 
             try:
                 async with httpx.AsyncClient() as client:
-                    # POST message/stream with valid auth
+                    # POST message/send without runId
                     resp = await client.post(
                         f"http://localhost:{test_port}/",
                         headers={"Authorization": f"Bearer {token}"},
                         json={
                             "jsonrpc": "2.0",
-                            "method": "message/stream",
+                            "method": "message/send",
                             "params": {"message": "test"},
                             "id": "1",
                         },
                         timeout=5.0,
                     )
-
-                    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-
+                    assert resp.status_code == 400, f"Expected 400, got {resp.status_code}"
                     body = resp.json()
-                    assert "result" in body
-                    assert "streamUrl" in body["result"]
-
-                    stream_url = body["result"]["streamUrl"]
-                    # Verify URL uses localhost and the correct port (not hard-coded)
-                    assert f":{test_port}" in stream_url, \
-                        f"streamUrl should include port {test_port}, got {stream_url}"
-                    assert "localhost" in stream_url or "127.0.0.1" in stream_url, \
-                        f"streamUrl should use localhost, got {stream_url}"
-
-                    print(f"\n=== A8-B2 STREAM URL TEST ===")
-                    print(f"Request port: {test_port}")
-                    print(f"Returned streamUrl: {stream_url}")
-                    print(f"URL contains correct port: {f':{test_port}' in stream_url}")
-                    print("=== END STREAM URL TEST ===\n")
+                    assert "error" in body
+                    assert "runId" in str(body["error"].get("message", ""))
 
             finally:
                 server._server.should_exit = True

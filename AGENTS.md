@@ -16,8 +16,8 @@ Agent-first development. Humans steer, agents execute.
 |large data → principles/token-efficiency.md
 |need a diagram / architecture diagram → workflow/draw-io-diagram-generation.md
 |OpenCode runtime / model routing → workflow/local-models-integration.md
-|openclaw gateway / slack / model auth / sandbox / pairing issues → workflow/openclaw-integration.md
-|openclaw delegation / openclaw workspace docs / openclaw rule sync → workflow/openclaw-jarvis-integration.md
+|nanoclaw gateway / model auth / sandbox / pairing issues → workflow/openclaw-integration.md
+|nanoclaw delegation / workspace docs / rule sync → workflow/openclaw-jarvis-integration.md
 |parallel subagents / git worktrees / containerized execution → workflow/opencode-parallel-worktrees.md
 |autonomous workflow choice / self-evolving execution loop → workflow/jarvis-autonomous-evolution.md
 |control plane / workspace-mcp-skills visibility → jarvis/api-reference.md
@@ -55,7 +55,7 @@ Agent-first development. Humans steer, agents execute.
 
 ### GitHub Account (MANDATORY — check before any gh command)
 
-**Always openclaw-gurusharan. Never ingpoc.**
+**Always use openclaw-gurusharan for NanoClaw/Jarvis work. Never ingpoc.**
 
 Inherited `GH_TOKEN` from the launch shell overrides `GH_CONFIG_DIR`. Always extract explicitly:
 
@@ -111,16 +111,16 @@ If grep returns empty → wrong account. Repeat the export steps. See `docs/work
 
 ## Delegated Coding Workflow (Global)
 
-For tasks delegated from OpenClaw to Jarvis over A2A:
+For tasks delegated from NanoClaw to Jarvis over A2A:
 
 1. Provider is OpenCode only (`provider_type=opencode`).
 2. Jarvis decides subagents, skills, workflow, worktrees, and containers autonomously at runtime from task context + docs.
 3. Frontend/UI tasks are incomplete unless browser-based validation is included.
 4. Large parallel work should follow `docs/workflow/opencode-parallel-worktrees.md`.
-5. Keep OpenClaw as router/research layer; keep Jarvis as execution layer.
+5. Keep NanoClaw as router/review layer; keep Jarvis as execution layer.
 6. For research-driven implementation, pass `researchHandoff`; accept completion only when A2A artifacts include `quality_assessment` with `quality_outcome=passed`.
 7. Prefer non-blocking delegation + A2A truth (`tasks/get` / `a2a_tasks`) over gateway wait responses for validation.
-8. After editing `integrations/openclaw/jarvis-bridge/*`, run `openclaw gateway restart` before smoke tests.
+8. After editing integration bridge runtime files, restart the active gateway/service before smoke tests.
 
 ---
 

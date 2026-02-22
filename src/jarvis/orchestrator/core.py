@@ -798,7 +798,10 @@ class JarvisOrchestrator:
             "turns": 1,
             "session_id": None,
             "output": "",
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "duration_ms": 0,
         }
+        started_at = time.monotonic()
 
         try:
             self._ensure_opencode_config_env()
@@ -851,6 +854,8 @@ class JarvisOrchestrator:
                 self._opencode_session_by_channel[channel_id] = run.session_id
             result["output"] = run.text
             result["status"] = "completed"
+            result["usage"] = dict(run.usage)
+            result["duration_ms"] = int(max(0.0, (time.monotonic() - started_at) * 1000.0))
 
             self.events.emit(
                 EVENT_TASK_COMPLETE,
@@ -869,6 +874,7 @@ class JarvisOrchestrator:
         except Exception as e:
             result["status"] = "failed"
             result["output"] = f"OpenCode error: {e}"
+            result["duration_ms"] = int(max(0.0, (time.monotonic() - started_at) * 1000.0))
             self.events.emit(EVENT_ERROR, str(e), task_id=task_id, metadata={"provider": "opencode"})
 
         return result

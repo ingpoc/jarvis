@@ -9,8 +9,9 @@ Project-specific conventions and references.
 | [api-reference.md](api-reference.md) | WebSocket API | Integrating |
 | [scripts.md](scripts.md) | Validation/build scripts | Verifying changes |
 | [HOW_JARVIS_OPERATES.md](HOW_JARVIS_OPERATES.md) | End-to-end execution model | Architecture deep dive |
-| [../workflow/openclaw-integration.md](../workflow/openclaw-integration.md) | OpenClaw gateway/channels/model/sandbox operations | OpenClaw runtime integration |
-| [../workflow/openclaw-jarvis-integration.md](../workflow/openclaw-jarvis-integration.md) | OpenClaw plugin + routing setup for Jarvis delegation | OpenClaw ↔ Jarvis integration |
+| [nanoclaw-worker-acceptance-checklist.md](nanoclaw-worker-acceptance-checklist.md) | Single-path NanoClaw worker requirements | Before implementing NanoClaw worker integration |
+| [../workflow/openclaw-integration.md](../workflow/openclaw-integration.md) | Legacy OpenClaw operational reference | Historical only |
+| [../workflow/openclaw-jarvis-integration.md](../workflow/openclaw-jarvis-integration.md) | Legacy OpenClaw delegation reference | Historical only |
 | [../workflow/local-models-integration.md](../workflow/local-models-integration.md) | Provider routing + OpenCode runtime behavior | Model/delegation runtime |
 
 ## Quick Start
@@ -25,9 +26,9 @@ Project-specific conventions and references.
 # Full validation (recommended before commit)
 python3 scripts/validate_jarvis.py
 
-# A2A bridge helpers (for OpenClaw integration)
+# A2A bridge helpers (for NanoClaw integration)
 .venv/bin/python -m jarvis.cli a2a health -j
-.venv/bin/python -m jarvis.cli a2a send "hello" --non-blocking -j
+.venv/bin/python -m jarvis.cli a2a send "hello" -j
 ```
 
 ## Key Files

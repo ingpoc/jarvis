@@ -103,7 +103,7 @@ Practical recovery:
 ```bash
 .venv/bin/python -m jarvis.cli a2a get <task-id> -j
 .venv/bin/python -m jarvis.cli a2a cancel <task-id> -j
-.venv/bin/python -m jarvis.cli a2a send "<smaller step task>" --non-blocking -j
+.venv/bin/python -m jarvis.cli a2a send "<smaller step task>" -j
 ```
 
 Recommended pattern:

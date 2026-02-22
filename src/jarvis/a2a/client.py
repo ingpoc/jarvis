@@ -1,4 +1,4 @@
-"""A2A client helpers for external agent integrations (for example OpenClaw)."""
+"""A2A client helpers for external agent integrations (for example NanoClaw)."""
 
 from __future__ import annotations
 
@@ -50,44 +50,38 @@ class JarvisA2AClient:
 
     def send_message(
         self,
+        run_id: str,
         message: str,
         *,
-        blocking: bool = False,
         context_id: str | None = None,
         resume_session_id: str | None = None,
+        task_type: str | None = None,
+        priority: str | None = None,
+        retry_policy: dict[str, Any] | None = None,
+        timeouts: dict[str, Any] | None = None,
         request_id: str | None = None,
     ) -> dict[str, Any]:
+        run_id = (run_id or "").strip()
+        if not run_id:
+            raise A2AClientError("send_message requires run_id")
         params: dict[str, Any] = {
+            "runId": run_id,
             "message": message,
-            "blocking": blocking,
+            "blocking": False,
         }
         if context_id:
             params["contextId"] = context_id
         if resume_session_id:
             params["resumeSessionId"] = resume_session_id
+        if task_type:
+            params["taskType"] = task_type
+        if priority:
+            params["priority"] = priority
+        if retry_policy:
+            params["retryPolicy"] = retry_policy
+        if timeouts:
+            params["timeouts"] = timeouts
         return self._jsonrpc("message/send", params, request_id=request_id)
-
-    def stream_message(
-        self,
-        *,
-        task_id: str | None = None,
-        message: str | None = None,
-        context_id: str | None = None,
-        resume_session_id: str | None = None,
-        request_id: str | None = None,
-    ) -> dict[str, Any]:
-        if not task_id and not message:
-            raise A2AClientError("stream_message requires either task_id or message")
-        params: dict[str, Any] = {}
-        if task_id:
-            params["taskId"] = task_id
-        if message:
-            params["message"] = message
-        if context_id:
-            params["contextId"] = context_id
-        if resume_session_id:
-            params["resumeSessionId"] = resume_session_id
-        return self._jsonrpc("message/stream", params, request_id=request_id)
 
     def get_task(self, task_id: str, *, request_id: str | None = None) -> dict[str, Any]:
         return self._jsonrpc("tasks/get", {"taskId": task_id}, request_id=request_id)

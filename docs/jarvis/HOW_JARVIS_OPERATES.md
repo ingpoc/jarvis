@@ -15,8 +15,8 @@ Jarvis runs in **OpenCode-only mode**.
 |---|---|---|
 | CLI | `jarvis run ...` | OpenCode |
 | WebSocket | `run_task`, `chat`, `send_voice` actions | OpenCode |
-| A2A | `POST /` (`message/send`, `message/stream`) | OpenCode |
-| OpenClaw bridge | A2A delegation | OpenCode |
+| A2A | `POST /` (`message/send`, `tasks/get`, `tasks/cancel`) | OpenCode |
+| NanoClaw bridge | A2A delegation | OpenCode |
 
 ## A2A Bridge
 
@@ -25,7 +25,7 @@ Jarvis A2A default endpoint is `http://127.0.0.1:9848`.
 ```bash
 jarvis a2a health -j
 jarvis a2a card -j
-jarvis a2a send "review this repo" --non-blocking -j
+jarvis a2a send "review this repo" -j
 jarvis a2a get <task-id> -j
 jarvis a2a wait <task-id> --timeout 300 -j
 jarvis a2a cancel <task-id> -j

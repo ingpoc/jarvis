@@ -23,6 +23,7 @@ class OpenCodeRunResult:
     session_id: str
     text: str
     raw: dict[str, Any]
+    usage: dict[str, int]
 
 
 class OpenCodeClientError(RuntimeError):
@@ -148,6 +149,31 @@ class OpenCodeClient:
             if isinstance(message, str) and message.strip():
                 return message.strip()
         return ""
+
+    def _extract_usage_from_payload(self, payload: dict[str, Any]) -> dict[str, int]:
+        """Extract token usage from OpenCode payload with safe defaults."""
+        usage = {"input_tokens": 0, "output_tokens": 0}
+        if not isinstance(payload, dict):
+            return usage
+
+        top_usage = payload.get("usage")
+        if isinstance(top_usage, dict):
+            usage["input_tokens"] = int(top_usage.get("input_tokens", 0) or 0)
+            usage["output_tokens"] = int(top_usage.get("output_tokens", 0) or 0)
+            return usage
+
+        parts = payload.get("parts")
+        if isinstance(parts, list):
+            for part in reversed(parts):
+                if not isinstance(part, dict):
+                    continue
+                part_usage = part.get("usage")
+                if isinstance(part_usage, dict):
+                    usage["input_tokens"] = int(part_usage.get("input_tokens", 0) or 0)
+                    usage["output_tokens"] = int(part_usage.get("output_tokens", 0) or 0)
+                    return usage
+
+        return usage
 
     def _normalize_model(self, model_id: str | None) -> dict[str, str] | None:
         if not model_id:
@@ -311,7 +337,8 @@ class OpenCodeClient:
             # Fallback for unexpected payload shape.
             text = json.dumps(response, default=str)[:5000]
 
-        return OpenCodeRunResult(session_id=session_id, text=text, raw=response)
+        usage = self._extract_usage_from_payload(response)
+        return OpenCodeRunResult(session_id=session_id, text=text, raw=response, usage=usage)
 
 
 _opencode_client: OpenCodeClient | None = None
